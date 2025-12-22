@@ -32,7 +32,7 @@ public class EncodingUtils {
      * @throws IOException Если файл недоступен или является бинарным.
      */
     public static TextFileContent readTextFile(Path path) throws IOException {
-        byte[] allBytes = Files.readAllBytes(path);
+        byte[] allBytes = FileUtils.safeReadAllBytes(path);
 
         UniversalDetector detector = new UniversalDetector(null);
         detector.handleData(allBytes, 0, allBytes.length);
@@ -103,11 +103,16 @@ public class EncodingUtils {
      * @return Определенный Charset или UTF-8 по умолчанию.
      */
     public static Charset detectEncoding(Path path) {
-        try (var inputStream = Files.newInputStream(path)) {
+        try {
             byte[] buffer = new byte[4096];
             UniversalDetector detector = new UniversalDetector(null);
 
-            int bytesRead = inputStream.read(buffer);
+            int bytesRead = FileUtils.executeWithRetry(() -> {
+                try (var inputStream = Files.newInputStream(path)) {
+                    return inputStream.read(buffer);
+                }
+            });
+
             if (bytesRead > 0) {
                 detector.handleData(buffer, 0, bytesRead);
                 detector.dataEnd();

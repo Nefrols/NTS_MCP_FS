@@ -57,13 +57,15 @@ public class PathSanitizer {
      */
     public static Path sanitize(String requestedPath, boolean allowProtected) {
         Path target;
-        Path requested = Paths.get(requestedPath);
+        // Предварительная нормализация разделителей для Windows
+        String normalizedRequest = requestedPath.replace('\\', '/');
+        Path requested = Paths.get(normalizedRequest);
 
         // Преобразование в абсолютный путь относительно текущего корня
         if (requested.isAbsolute()) {
-            target = requested.normalize();
+            target = requested.toAbsolutePath().normalize();
         } else {
-            target = root.resolve(requestedPath).toAbsolutePath().normalize();
+            target = root.resolve(normalizedRequest).toAbsolutePath().normalize();
         }
 
         // Проверка Path Traversal: итоговый путь обязан начинаться с префикса корня

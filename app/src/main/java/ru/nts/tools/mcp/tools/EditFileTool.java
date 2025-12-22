@@ -121,7 +121,12 @@ public class EditFileTool implements McpTool {
 
                 statusMsg.append(String.format("- %s [Git: %s]\n", stats.path.getFileName(), gitStatus.isEmpty() ? "Unchanged" : gitStatus));
                 statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
-                statusMsg.append(String.format("  New CRC32: %X\n\n", stats.crc32));
+                statusMsg.append(String.format("  New CRC32: %X\n", stats.crc32));
+
+                if (stats.diff != null && !stats.diff.isEmpty()) {
+                    statusMsg.append("\n```diff\n").append(stats.diff).append("\n```\n");
+                }
+                statusMsg.append("\n");
             }
             TransactionManager.commit();
             return createResponse(statusMsg.toString().trim());
@@ -154,6 +159,10 @@ public class EditFileTool implements McpTool {
             }
             sb.append("\nOperations: ").append(stats.total());
             sb.append("\nNew CRC32: ").append(Long.toHexString(stats.crc32).toUpperCase());
+
+            if (stats.diff != null && !stats.diff.isEmpty()) {
+                sb.append("\n\n```diff\n").append(stats.diff).append("\n```");
+            }
 
             return createResponse(sb.toString());
         } catch (Exception e) {
@@ -198,6 +207,7 @@ public class EditFileTool implements McpTool {
         TransactionManager.backup(path);
 
         FileEditStats stats = new FileEditStats(path);
+        String newContent;
 
         if (fileParams.has("operations")) {
             // Обработка списка типизированных операций
@@ -215,22 +225,27 @@ public class EditFileTool implements McpTool {
             for (JsonNode opNode : sortedOps) {
                 applyTypedOperation(currentLines, opNode, 0, stats);
             }
+            
+            newContent = String.join("\n", currentLines);
+            // Сохранение итогового состояния на диск
+            FileUtils.safeWrite(path, newContent, charset);
         } else if (fileParams.has("oldText") && fileParams.has("newText")) {
             // Режим нечеткой (fuzzy) замены текста по содержимому
-            String newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
-            Files.writeString(path, newContent, charset);
+            newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
+            FileUtils.safeWrite(path, newContent, charset);
             stats.replaces++;
         } else if (fileParams.has("startLine") && (fileParams.has("newText") || fileParams.has("content"))) {
             // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
+            newContent = String.join("\n", currentLines);
+            // Сохранение итогового состояния на диск
+            FileUtils.safeWrite(path, newContent, charset);
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
 
-        // Сохранение итогового состояния на диск (только для строковых операций)
-        if (!fileParams.has("oldText")) {
-            Files.writeString(path, String.join("\n", currentLines), charset);
-        }
+        // Генерация diff
+        stats.diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), content, newContent);
 
         // Вычисление итоговой контрольной суммы для подтверждения целостности
         stats.crc32 = calculateCRC32(path);
@@ -434,6 +449,7 @@ public class EditFileTool implements McpTool {
         int inserts = 0;
         int deletes = 0;
         long crc32 = 0;
+        String diff = "";
 
         FileEditStats(Path path) {
             this.path = path;

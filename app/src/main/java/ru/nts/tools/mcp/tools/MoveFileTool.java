@@ -96,7 +96,7 @@ public class MoveFileTool implements McpTool {
             }
 
             // Физическое перемещение на уровне ОС (атомарное, если поддерживается системой)
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            FileUtils.safeMove(source, target, StandardCopyOption.ATOMIC_MOVE);
 
             // Синхронизация трекера доступа
             AccessTracker.moveRecord(source, target);

@@ -79,7 +79,7 @@ public class CreateFileTool implements McpTool {
             }
 
             // Физическая запись контента (в UTF-8)
-            Files.writeString(path, content, StandardCharsets.UTF_8);
+            FileUtils.safeWrite(path, content, StandardCharsets.UTF_8);
 
             // Фиксация транзакции
             TransactionManager.commit();
@@ -94,11 +94,19 @@ public class CreateFileTool implements McpTool {
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
+
+            // Генерация diff (сравнение с пустым файлом)
+            String diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), "", content);
+            if (!diff.isEmpty()) {
+                sb.append("\n\n```diff\n").append(diff).append("\n```");
+            }
+
             sb.append("\n\n");
             sb.append("Directory content ").append(path.getParent()).append(":\n");
             sb.append(getDirectoryListing(path.getParent()));
 
             contentArray.addObject().put("type", "text").put("text", sb.toString());
+
             return result;
         } catch (Exception e) {
             // При любом сбое записи — восстанавливаем ФС в состояние "ДО"

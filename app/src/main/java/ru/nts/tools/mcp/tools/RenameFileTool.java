@@ -85,7 +85,7 @@ public class RenameFileTool implements McpTool {
             TransactionManager.backup(target);
 
             // Физическое переименование (атомарная операция ФС)
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            FileUtils.safeMove(source, target, StandardCopyOption.ATOMIC_MOVE);
 
             // Обновление реестра прочитанных файлов
             AccessTracker.moveRecord(source, target);

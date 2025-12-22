@@ -3,10 +3,7 @@ package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import ru.nts.tools.mcp.core.GitUtils;
-import ru.nts.tools.mcp.core.McpTool;
-import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.TransactionManager;
+import ru.nts.tools.mcp.core.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -82,7 +79,7 @@ public class DeleteFileTool implements McpTool {
 
                     // Удаляем объекты в обратном порядке (от листьев к корню), чтобы не оставить пустых папок
                     for (int i = allPaths.size() - 1; i >= 0; i--) {
-                        Files.delete(allPaths.get(i));
+                        FileUtils.safeDelete(allPaths.get(i));
                     }
                 }
             } else {
@@ -90,7 +87,7 @@ public class DeleteFileTool implements McpTool {
                 if (Files.isRegularFile(path)) {
                     TransactionManager.backup(path);
                 }
-                Files.delete(path);
+                FileUtils.safeDelete(path);
             }
             // Подтверждение успеха транзакции
             TransactionManager.commit();

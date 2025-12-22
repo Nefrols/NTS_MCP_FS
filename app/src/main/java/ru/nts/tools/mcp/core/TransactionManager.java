@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
+import java.util.concurrent.CopyOnWriteArrayList;
+
 /**
  * Менеджер транзакций (Transaction Manager).
  * Обеспечивает атомарность операций над файловой системой и функции UNDO/REDO.
@@ -16,18 +18,29 @@ import java.util.*;
  * 2. Система снимков (Snapshots): Сохраняет состояние файлов перед изменением в директории .mcp/snapshots.
  * 3. Глобальный откат (Rollback): Гарантирует возврат всех файлов к исходному состоянию при любой ошибке.
  * 4. Управление историей: Хранит ограниченное количество транзакций для отмены с автоматической очисткой диска.
+ * 5. Отказоустойчивость: Поддержка статуса STUCK для заблокированных транзакций и Retry Pattern.
  */
 public class TransactionManager {
 
     /**
+     * Статус транзакции.
+     */
+    public enum Status {
+        /** Успешно зафиксирована. */
+        COMMITTED,
+        /** Ошибка IO при попытке отмены/повтора, требуется вмешательство или повтор. */
+        STUCK
+    }
+
+    /**
      * Стек для хранения совершенных транзакций (доступны для UNDO).
      */
-    private static final List<Transaction> undoStack = new ArrayList<>();
+    private static final List<Transaction> undoStack = new CopyOnWriteArrayList<>();
 
     /**
      * Стек для хранения отмененных транзакций (доступны для REDO).
      */
-    private static final List<Transaction> redoStack = new ArrayList<>();
+    private static final List<Transaction> redoStack = new CopyOnWriteArrayList<>();
 
     /**
      * Форматтер времени для вывода в журнал транзакций.
@@ -41,15 +54,14 @@ public class TransactionManager {
     private static final int MAX_HISTORY_SIZE = 50;
 
     /**
-     * Текущая активная транзакция.
+     * Текущая активная транзакция (изолирована для каждого потока).
      */
-    private static Transaction currentTransaction = null;
+    private static final ThreadLocal<Transaction> currentTransaction = new ThreadLocal<>();
 
     /**
-     * Текущий уровень вложенности транзакций.
-     * Фиксация (commit) на диск происходит только при достижении уровня 0.
+     * Текущий уровень вложенности транзакций (изолирован для каждого потока).
      */
-    private static int nestingLevel = 0;
+    private static final ThreadLocal<Integer> nestingLevel = ThreadLocal.withInitial(() -> 0);
 
     /**
      * Возвращает путь к директории снимков, создавая её при необходимости.
@@ -74,10 +86,10 @@ public class TransactionManager {
      * @param description Описание транзакции для отображения в журнале.
      */
     public static void startTransaction(String description) {
-        if (currentTransaction == null) {
-            currentTransaction = new Transaction(description, LocalDateTime.now());
+        if (currentTransaction.get() == null) {
+            currentTransaction.set(new Transaction(description, LocalDateTime.now()));
         }
-        nestingLevel++;
+        nestingLevel.set(nestingLevel.get() + 1);
     }
 
     /**
@@ -89,10 +101,11 @@ public class TransactionManager {
      * @throws IOException Если не удалось создать снимок файла.
      */
     public static void backup(Path path) throws IOException {
-        if (currentTransaction == null) {
+        Transaction tx = currentTransaction.get();
+        if (tx == null) {
             return;
         }
-        currentTransaction.addFile(path);
+        tx.addFile(path);
     }
 
     /**
@@ -101,14 +114,17 @@ public class TransactionManager {
      * а стек REDO очищается.
      */
     public static void commit() {
-        if (currentTransaction == null) {
+        Transaction tx = currentTransaction.get();
+        if (tx == null) {
             return;
         }
 
-        nestingLevel--;
-        if (nestingLevel <= 0) {
-            if (!currentTransaction.isEmpty()) {
-                undoStack.add(currentTransaction);
+        int level = nestingLevel.get() - 1;
+        nestingLevel.set(level);
+
+        if (level <= 0) {
+            if (!tx.isEmpty()) {
+                undoStack.add(tx);
                 // Новая зафиксированная правка делает невозможным REDO старых отмененных правок (стандарт истории)
                 redoStack.clear();
 
@@ -118,8 +134,8 @@ public class TransactionManager {
                     old.deleteSnapshots();
                 }
             }
-            currentTransaction = null;
-            nestingLevel = 0;
+            currentTransaction.remove();
+            nestingLevel.set(0);
         }
     }
 
@@ -130,19 +146,20 @@ public class TransactionManager {
      * @throws RuntimeException Если критический откат не удался (риск повреждения данных).
      */
     public static void rollback() {
-        if (currentTransaction == null) {
+        Transaction tx = currentTransaction.get();
+        if (tx == null) {
             return;
         }
         try {
-            currentTransaction.restore();
+            tx.restore();
             // Снимки проваленной транзакции удаляются, так как состояние возвращено в исходное
-            currentTransaction.deleteSnapshots();
+            tx.deleteSnapshots();
         } catch (IOException e) {
             // Критическая системная ошибка: ФС может находиться в частично измененном состоянии
             throw new RuntimeException("CRITICAL: Transaction rollback failed! File system might be corrupted. " + e.getMessage(), e);
         } finally {
-            currentTransaction = null;
-            nestingLevel = 0;
+            currentTransaction.remove();
+            nestingLevel.set(0);
         }
     }
 
@@ -159,16 +176,28 @@ public class TransactionManager {
             return "No operations to undo.";
         }
 
-        Transaction tx = undoStack.remove(undoStack.size() - 1);
-        // Перед тем как восстановить старое состояние, бэкапим текущее (новое) для возможности REDO
-        Transaction redoTx = new Transaction("REDO: " + tx.description, LocalDateTime.now());
-        for (Path path : tx.getAffectedPaths()) {
-            redoTx.addFile(path);
-        }
+        Transaction tx = undoStack.get(undoStack.size() - 1);
+        
+        try {
+            // Pre-flight check
+            tx.checkFiles();
+            
+            // Если проверка прошла, удаляем из стека
+            undoStack.remove(undoStack.size() - 1);
 
-        tx.restore();
-        redoStack.add(redoTx);
-        return "Undone: " + tx.description;
+            // Перед тем как восстановить старое состояние, бэкапим текущее (новое) для возможности REDO
+            Transaction redoTx = new Transaction("REDO: " + tx.description, LocalDateTime.now());
+            for (Path path : tx.getAffectedPaths()) {
+                redoTx.addFile(path);
+            }
+
+            tx.restore();
+            redoStack.add(redoTx);
+            return "Undone: " + tx.description;
+        } catch (IOException e) {
+            tx.setStatus(Status.STUCK);
+            throw new IOException("Undo failed: " + tx.description + ". Transaction marked as STUCK. Error: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -183,16 +212,28 @@ public class TransactionManager {
             return "No operations to redo.";
         }
 
-        Transaction tx = redoStack.remove(redoStack.size() - 1);
-        // Возможность повторного UNDO после REDO
-        Transaction undoTx = new Transaction("UNDO REDO: " + tx.description, LocalDateTime.now());
-        for (Path path : tx.getAffectedPaths()) {
-            undoTx.addFile(path);
-        }
+        Transaction tx = redoStack.get(redoStack.size() - 1);
+        
+        try {
+            // Pre-flight check
+            tx.checkFiles();
 
-        tx.restore();
-        undoStack.add(undoTx);
-        return "Redone: " + tx.description;
+            // Если проверка прошла, удаляем из стека
+            redoStack.remove(redoStack.size() - 1);
+
+            // Возможность повторного UNDO после REDO
+            Transaction undoTx = new Transaction("UNDO REDO: " + tx.description, LocalDateTime.now());
+            for (Path path : tx.getAffectedPaths()) {
+                undoTx.addFile(path);
+            }
+
+            tx.restore();
+            undoStack.add(undoTx);
+            return "Redone: " + tx.description;
+        } catch (IOException e) {
+            tx.setStatus(Status.STUCK);
+            throw new IOException("Redo failed: " + tx.description + ". Transaction marked as STUCK. Error: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -211,7 +252,8 @@ public class TransactionManager {
         }
         for (int i = undoStack.size() - 1; i >= 0; i--) {
             Transaction tx = undoStack.get(i);
-            sb.append(String.format("  [%s] %s (%d files)\n", tx.timestamp.format(formatter), tx.description, tx.snapshots.size()));
+            String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
+            sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
         }
 
         sb.append("\nAvailable for REDO:\n");
@@ -220,7 +262,8 @@ public class TransactionManager {
         }
         for (int i = redoStack.size() - 1; i >= 0; i--) {
             Transaction tx = redoStack.get(i);
-            sb.append(String.format("  [%s] %s (%d files)\n", tx.timestamp.format(formatter), tx.description, tx.snapshots.size()));
+            String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
+            sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
         }
 
         return sb.toString();
@@ -239,11 +282,12 @@ public class TransactionManager {
         }
         undoStack.clear();
         redoStack.clear();
-        if (currentTransaction != null) {
-            currentTransaction.deleteSnapshots();
+        Transaction tx = currentTransaction.get();
+        if (tx != null) {
+            tx.deleteSnapshots();
         }
-        currentTransaction = null;
-        nestingLevel = 0;
+        currentTransaction.remove();
+        nestingLevel.set(0);
     }
 
     /**
@@ -252,6 +296,7 @@ public class TransactionManager {
     private static class Transaction {
         private final String description;
         private final LocalDateTime timestamp;
+        private Status status = Status.COMMITTED;
         /**
          * Карта: Абсолютный путь файла -> Путь к его временному снимку.
          */
@@ -278,11 +323,22 @@ public class TransactionManager {
             if (Files.exists(absPath)) {
                 // Если файл существует — создаем уникальный временный бэкап
                 Path backup = getSnapshotDir().resolve(UUID.randomUUID().toString() + ".bak");
-                Files.copy(absPath, backup);
+                FileUtils.safeCopy(absPath, backup);
                 snapshots.put(absPath, backup);
             } else {
                 // Файл еще не существует (будет создан) — запоминаем это как null
                 snapshots.put(absPath, null);
+            }
+        }
+
+        /**
+         * Проверяет доступность всех файлов транзакции для записи.
+         *
+         * @throws IOException Если хотя бы один файл заблокирован.
+         */
+        public void checkFiles() throws IOException {
+            for (Path path : snapshots.keySet()) {
+                FileUtils.checkFileAvailability(path);
             }
         }
 
@@ -299,10 +355,10 @@ public class TransactionManager {
                 if (backup != null) {
                     // Файл был изменен — восстанавливаем из копии
                     Files.createDirectories(original.getParent());
-                    Files.copy(backup, original, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    FileUtils.safeCopy(backup, original);
                 } else {
                     // Файл был создан — удаляем его при откате
-                    Files.deleteIfExists(original);
+                    FileUtils.safeDelete(original);
                 }
             }
         }
@@ -314,7 +370,7 @@ public class TransactionManager {
             for (Path backup : snapshots.values()) {
                 if (backup != null) {
                     try {
-                        Files.deleteIfExists(backup);
+                        FileUtils.safeDelete(backup);
                     } catch (IOException ignored) {
                     }
                 }
@@ -327,6 +383,14 @@ public class TransactionManager {
 
         public Set<Path> getAffectedPaths() {
             return snapshots.keySet();
+        }
+
+        public Status getStatus() {
+            return status;
+        }
+
+        public void setStatus(Status status) {
+            this.status = status;
         }
     }
 }
