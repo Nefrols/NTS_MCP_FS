@@ -36,7 +36,7 @@ public class MoveFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Перемещает файл или директорию. Поддерживает отмену и возвращает обновленный листинг.";
+        return "Moves a file or directory. Supports undo and returns the updated listing of the destination folder.";
     }
 
     @Override
@@ -44,8 +44,8 @@ public class MoveFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("sourcePath").put("type", "string").put("description", "Текущий путь к объекту.");
-        props.putObject("targetPath").put("type", "string").put("description", "Новый путь к объекту.");
+        props.putObject("sourcePath").put("type", "string").put("description", "Current path to the object.");
+        props.putObject("targetPath").put("type", "string").put("description", "New path for the object.");
         
         schema.putArray("required").add("sourcePath").add("targetPath");
         return schema;
@@ -60,11 +60,11 @@ public class MoveFileTool implements McpTool {
         Path target = PathSanitizer.sanitize(targetStr, false);
 
         if (!Files.exists(source)) {
-            throw new IllegalArgumentException("Исходный объект не найден: " + sourceStr);
+            throw new IllegalArgumentException("Source object not found: " + sourceStr);
         }
         
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Объект по пути назначения уже существует: " + targetStr);
+            throw new IllegalArgumentException("Target object already exists: " + targetStr);
         }
 
         TransactionManager.startTransaction("Move: " + sourceStr + " -> " + targetStr);
@@ -97,8 +97,8 @@ public class MoveFileTool implements McpTool {
             var contentArray = result.putArray("content");
             
             StringBuilder sb = new StringBuilder();
-            sb.append("Успешно перемещено из ").append(sourceStr).append(" в ").append(targetStr).append("\n\n");
-            sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
+            sb.append("Successfully moved from ").append(sourceStr).append(" to ").append(targetStr).append("\n\n");
+            sb.append("Directory content ").append(target.getParent()).append(":\n");
             sb.append(getDirectoryListing(target.getParent()));
             
             contentArray.addObject().put("type", "text").put("text", sb.toString());
@@ -110,7 +110,7 @@ public class MoveFileTool implements McpTool {
     }
 
     private String getDirectoryListing(Path dir) throws IOException {
-        if (dir == null || !Files.exists(dir)) return "(пусто)";
+        if (dir == null || !Files.exists(dir)) return "(empty)";
         List<String> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
@@ -119,6 +119,6 @@ public class MoveFileTool implements McpTool {
             }
         }
         Collections.sort(entries);
-        return entries.isEmpty() ? "(пусто)" : String.join("\n", entries);
+        return entries.isEmpty() ? "(empty)" : String.join("\n", entries);
     }
 }

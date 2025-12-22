@@ -54,7 +54,7 @@ class SearchFilesToolTest {
         String text = result.get("content").get(0).get("text").asText();
         
         // Должно быть 10 совпадений (0, 10, 20... 90)
-        assertTrue(text.contains("(10)"), "Должно быть найдено 10 совпадений");
+        assertTrue(text.contains("(10)"), "Should find 10 matches");
         for (int i = 0; i < 100; i += 10) {
             assertTrue(text.contains("file" + i + ".txt"));
         }

@@ -20,7 +20,7 @@ public class TransactionJournalTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Возвращает список выполненных и отмененных транзакций в текущей сессии.";
+        return "Returns a list of completed and undone transactions in the current session.";
     }
 
     @Override

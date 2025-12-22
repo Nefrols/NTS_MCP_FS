@@ -52,13 +52,13 @@ public class PathSanitizer {
 
         // Проверка: путь должен начинаться с корня
         if (!target.startsWith(root)) {
-            throw new SecurityException("Доступ запрещен: путь находится за пределами рабочей директории: " + requestedPath + " (Корень: " + root + ")");
+            throw new SecurityException("Access denied: path is outside of working directory: " + requestedPath + " (Root: " + root + ")");
         }
 
         // Проверка на защищенные файлы (только для записи/удаления)
         if (!allowProtected) {
             if (isProtected(target)) {
-                throw new SecurityException("Доступ запрещен: файл или директория защищены системой безопасности проекта.");
+                throw new SecurityException("Access denied: file or directory is protected by project security policy.");
             }
         }
 

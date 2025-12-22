@@ -31,7 +31,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Возвращает информацию о файле: размер, количество строк, кодировку, дату изменения и CRC32.";
+        return "Returns detailed information about a file: size, line count, encoding, modification date, and CRC32.";
     }
 
     @Override
@@ -39,7 +39,7 @@ public class FileInfoTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к файлу");
+        props.putObject("path").put("type", "string").put("description", "Path to the file.");
         schema.putArray("required").add("path");
         return schema;
     }
@@ -50,7 +50,7 @@ public class FileInfoTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, true); // Разрешаем чтение защищенных файлов
         
         if (!Files.exists(path) || !Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Файл не найден или не является обычным файлом: " + pathStr);
+            throw new IllegalArgumentException("File not found or is not a regular file: " + pathStr);
         }
 
         BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
@@ -73,13 +73,13 @@ public class FileInfoTool implements McpTool {
         text.put("type", "text");
         
         StringBuilder sb = new StringBuilder();
-        sb.append("Файл: ").append(path.toAbsolutePath()).append("\n");
-        sb.append("Размер: ").append(size).append(" байт\n");
-        sb.append("Кодировка: ").append(charset.name()).append("\n");
+        sb.append("File: ").append(path.toAbsolutePath()).append("\n");
+        sb.append("Size: ").append(size).append(" bytes\n");
+        sb.append("Encoding: ").append(charset.name()).append("\n");
         if (lineCount >= 0) {
-            sb.append("Строк: ").append(lineCount).append("\n");
+            sb.append("Lines: ").append(lineCount).append("\n");
         }
-        sb.append("Дата изменения: ").append(attrs.lastModifiedTime()).append("\n");
+        sb.append("Last modified: ").append(attrs.lastModifiedTime()).append("\n");
         sb.append("CRC32: ").append(Long.toHexString(crc32).toUpperCase());
         
         text.put("text", sb.toString());

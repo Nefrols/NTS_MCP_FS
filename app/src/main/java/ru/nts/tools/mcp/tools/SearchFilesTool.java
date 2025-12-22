@@ -41,7 +41,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Рекурсивный поиск текста или регулярных выражений в файлах проекта. Возвращает фрагменты кода.";
+        return "Parallel recursive search for text or regex in project files. Returns matching lines with numbers.";
     }
 
     @Override
@@ -49,9 +49,9 @@ public class SearchFilesTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Базовая директория для поиска.");
-        props.putObject("query").put("type", "string").put("description", "Строка или регулярное выражение.");
-        props.putObject("isRegex").put("type", "boolean").put("description", "Трактовать запрос как регулярное выражение.");
+        props.putObject("path").put("type", "string").put("description", "Base directory for search.");
+        props.putObject("query").put("type", "string").put("description", "Search query (string or regex).");
+        props.putObject("isRegex").put("type", "boolean").put("description", "Whether to treat the query as a regular expression.");
         
         schema.putArray("required").add("path").add("query");
         return schema;
@@ -66,7 +66,7 @@ public class SearchFilesTool implements McpTool {
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
         
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
-            throw new IllegalArgumentException("Директория не найдена: " + pathStr);
+            throw new IllegalArgumentException("Directory not found: " + pathStr);
         }
 
         // Подготовка паттерна (MULTILINE позволяет искать по строкам, DOTALL - захватывать переводы строк если нужно)
@@ -111,6 +111,7 @@ public class SearchFilesTool implements McpTool {
             }
         }
 
+        // Сортировка результатов для стабильного вывода
         var sortedResults = new ArrayList<>(results);
         Collections.sort(sortedResults, (a, b) -> a.path().compareTo(b.path()));
 
@@ -119,10 +120,10 @@ public class SearchFilesTool implements McpTool {
         textNode.put("type", "text");
         
         if (sortedResults.isEmpty()) {
-            textNode.put("text", "Совпадений не найдено.");
+            textNode.put("text", "No matches found.");
         } else {
             StringBuilder sb = new StringBuilder();
-            sb.append("Найдены совпадения в файлах (").append(sortedResults.size()).append("):\n\n");
+            sb.append("Matches found in files (").append(sortedResults.size()).append("):\n\n");
             for (var res : sortedResults) {
                 String readMarker = res.wasRead() ? " [READ]" : "";
                 sb.append(res.path()).append(readMarker).append(":\n");

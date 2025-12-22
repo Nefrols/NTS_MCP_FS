@@ -43,7 +43,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Умное редактирование одного или нескольких файлов. Поддерживает пакетные операции, автоматические отступы и глобальную атомарность.";
+        return "Smart editing of one or multiple files. Supports batch operations, automatic indentation, and global atomicity.";
     }
 
     @Override
@@ -53,7 +53,7 @@ public class EditFileTool implements McpTool {
         var props = schema.putObject("properties");
         
         // Target path (для одиночного файла)
-        props.putObject("path").put("type", "string").put("description", "Путь к файлу для редактирования.");
+        props.putObject("path").put("type", "string").put("description", "Path to the file (if editing a single file).");
         
         // Список правок для нескольких файлов (Multi-file batching)
         var edits = props.putObject("edits");
@@ -61,28 +61,29 @@ public class EditFileTool implements McpTool {
         var editItem = edits.putObject("items");
         editItem.put("type", "object");
         var editProps = editItem.putObject("properties");
-        editProps.putObject("path").put("type", "string");
-        editProps.set("operations", mapper.createObjectNode().put("type", "array"));
+        editProps.putObject("path").put("type", "string").put("description", "Path to the file.");
+        editProps.set("operations", mapper.createObjectNode().put("type", "array").put("description", "Array of operations for this file."));
         
         // Поля для одиночной операции (для обратной совместимости)
-        editProps.putObject("oldText").put("type", "string");
-        editProps.putObject("newText").put("type", "string");
-        editProps.putObject("startLine").put("type", "integer");
-        editProps.putObject("endLine").put("type", "integer");
-        editProps.putObject("expectedContent").put("type", "string");
+        editProps.putObject("oldText").put("type", "string").put("description", "Text to replace literally.");
+        editProps.putObject("newText").put("type", "string").put("description", "New text.");
+        editProps.putObject("startLine").put("type", "integer").put("description", "Start line (from 1).");
+        editProps.putObject("endLine").put("type", "integer").put("description", "End line (inclusive).");
+        editProps.putObject("expectedContent").put("type", "string").put("description", "Expected text for validation.");
 
         // Поля для обратной совместимости корневого уровня
-        props.putObject("oldText").put("type", "string");
-        props.putObject("newText").put("type", "string");
-        props.putObject("startLine").put("type", "integer");
-        props.putObject("endLine").put("type", "integer");
-        props.putObject("expectedContent").put("type", "string");
-        props.putObject("contextStartPattern").put("type", "string");
+        props.putObject("oldText").put("type", "string").put("description", "Text to replace literally.");
+        props.putObject("newText").put("type", "string").put("description", "New text.");
+        props.putObject("startLine").put("type", "integer").put("description", "Start line (from 1).");
+        props.putObject("endLine").put("type", "integer").put("description", "End line (inclusive).");
+        props.putObject("expectedContent").put("type", "string").put("description", "Expected text for validation.");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor pattern.");
 
         // Поддержка массива операций для одиночного файла
         var ops = props.putObject("operations");
-        ops.put("type", "array");
+        ops.put("type", "array").put("description", "Array of operations for the file.");
         
+        schema.putArray("required").add("path");
         return schema;
     }
 
@@ -94,7 +95,7 @@ public class EditFileTool implements McpTool {
         } else if (params.has("path")) {
             return executeSingleFileEdit(params);
         } else {
-            throw new IllegalArgumentException("Необходимо указать 'path' или 'edits'.");
+            throw new IllegalArgumentException("Must specify 'path' or 'edits'.");
         }
     }
 
@@ -112,7 +113,7 @@ public class EditFileTool implements McpTool {
                 applyFileEdits(editNode);
             }
             TransactionManager.commit();
-            return createResponse("Успешно обновлено файлов: " + editsArray.size());
+            return createResponse("Successfully updated files: " + editsArray.size());
         } catch (Exception e) {
             // При ошибке в ЛЮБОМ файле откатываем изменения во ВСЕХ файлах транзакции
             TransactionManager.rollback();
@@ -133,7 +134,7 @@ public class EditFileTool implements McpTool {
         try {
             applyFileEdits(params);
             TransactionManager.commit();
-            return createResponse("Правки успешно применены к файлу: " + pathStr);
+            return createResponse("Edits successfully applied to file: " + pathStr);
         } catch (Exception e) {
             TransactionManager.rollback();
             throw e;
@@ -151,12 +152,12 @@ public class EditFileTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("Файл не найден: " + pathStr);
+            throw new IllegalArgumentException("File not found: " + pathStr);
         }
 
         // Проверка предохранителя: файл должен быть прочитан перед модификацией
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Доступ запрещен: файл " + pathStr + " не был прочитан в текущей сессии.");
+            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
@@ -192,7 +193,7 @@ public class EditFileTool implements McpTool {
             // Одиночная правка диапазона (для совместимости)
             applyTypedOperation(currentLines, fileParams, 0);
         } else {
-            throw new IllegalArgumentException("Недостаточно параметров для файла: " + pathStr);
+            throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
 
         // Физическая запись промежуточного результата (транзакция защищает файл)
@@ -222,7 +223,7 @@ public class EditFileTool implements McpTool {
         if (contextPattern != null) {
             anchorLine = findAnchorLine(lines, contextPattern);
             if (anchorLine == -1) {
-                throw new IllegalArgumentException("Контекстный паттерн не найден: " + contextPattern);
+                throw new IllegalArgumentException("Context pattern not found: " + contextPattern);
             }
         }
 
@@ -242,7 +243,7 @@ public class EditFileTool implements McpTool {
 
         // 4. Валидация границ в текущем состоянии списка строк
         if (start < 1 || (start > lines.size() + 1) || (end < start - 1) || (end > lines.size())) {
-            throw new IllegalArgumentException("Ошибка адресации: " + start + "-" + end + " (размер файла: " + lines.size() + ")");
+            throw new IllegalArgumentException("Addressing error: " + start + "-" + end + " (file size: " + lines.size() + ")");
         }
 
         // 5. Контроль содержимого с проактивной диагностикой
@@ -255,10 +256,10 @@ public class EditFileTool implements McpTool {
             String normExpected = expected.replace("\r", "");
             
             if (!normActual.equals(normExpected)) {
-                throw new IllegalStateException("Контроль содержимого не пройден!\n" +
-                        "ОЖИДАЛОСЬ:\n[" + normExpected + "]\n" +
-                        "АКТУАЛЬНОЕ СОДЕРЖИМОЕ В ДИАПАЗОНЕ " + start + "-" + end + ":\n[" + normActual + "]\n" +
-                        "Пожалуйста, скорректируйте запрос, используя актуальный текст.");
+                throw new IllegalStateException("Content validation failed!\n" +
+                        "EXPECTED:\n[" + normExpected + "]\n" +
+                        "ACTUAL CONTENT IN RANGE " + start + "-" + end + ":\n[" + normActual + "]\n" +
+                        "Please adjust your request using the actual text.");
             }
         }
 
@@ -345,11 +346,11 @@ public class EditFileTool implements McpTool {
             int start = matcher.start();
             int end = matcher.end();
             if (matcher.find()) {
-                throw new IllegalArgumentException("Найдено более одного совпадения при нечетком поиске. Укажите более точный контекст.");
+                throw new IllegalArgumentException("Multiple ambiguous matches found during fuzzy search. Provide more context.");
             }
             return normContent.substring(0, start) + newText + normContent.substring(end);
         }
-        throw new IllegalArgumentException("Текст не найден. Используйте редактирование по строкам с expectedContent.");
+        throw new IllegalArgumentException("Text not found. Use line-based editing with expectedContent.");
     }
 
     /**

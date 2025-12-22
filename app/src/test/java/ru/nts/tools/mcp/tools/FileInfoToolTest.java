@@ -28,8 +28,8 @@ class FileInfoToolTest {
         JsonNode result = tool.execute(params);
 
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.contains("Размер: " + expectedSize + " байт"));
-        assertTrue(text.contains("Строк: 2"));
+        assertTrue(text.contains("Size: " + expectedSize + " bytes"));
+        assertTrue(text.contains("Lines: 2"));
         assertTrue(text.contains("CRC32:"));
     }
 

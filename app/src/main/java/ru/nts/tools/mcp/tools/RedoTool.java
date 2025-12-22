@@ -21,7 +21,7 @@ public class RedoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Повторяет ранее отмененное изменение файлов.";
+        return "Redoes a previously undone file change. Restores the state and returns the updated transaction journal.";
     }
 
     @Override

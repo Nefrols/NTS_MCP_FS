@@ -35,7 +35,7 @@ public class RenameFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Переименовывает объект внутри текущей папки. Поддерживает отмену.";
+        return "Renames an object within the current folder. Supports undo and returns the updated directory listing.";
     }
 
     @Override
@@ -43,8 +43,8 @@ public class RenameFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Текущий путь к объекту.");
-        props.putObject("newName").put("type", "string").put("description", "Новое имя (только имя, не путь).");
+        props.putObject("path").put("type", "string").put("description", "Current path to the object.");
+        props.putObject("newName").put("type", "string").put("description", "New name (name only, not a path).");
         
         schema.putArray("required").add("path").add("newName");
         return schema;
@@ -58,18 +58,18 @@ public class RenameFileTool implements McpTool {
         Path source = PathSanitizer.sanitize(pathStr, false);
         
         if (!Files.exists(source)) {
-            throw new IllegalArgumentException("Файл не найден: " + pathStr);
+            throw new IllegalArgumentException("Object not found: " + pathStr);
         }
 
         // Запрещаем пути в новом имени
         if (newName.contains("/") || newName.contains("\\")) {
-            throw new IllegalArgumentException("Новое имя не должно содержать путь. Используйте move_file.");
+            throw new IllegalArgumentException("New name must not contain path components. Use move_file for moving objects.");
         }
 
         Path target = source.resolveSibling(newName);
         
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Объект с именем " + newName + " уже существует.");
+            throw new IllegalArgumentException("Object with name " + newName + " already exists.");
         }
 
         TransactionManager.startTransaction("Rename: " + pathStr + " -> " + newName);
@@ -86,8 +86,8 @@ public class RenameFileTool implements McpTool {
             var contentArray = result.putArray("content");
             
             StringBuilder sb = new StringBuilder();
-            sb.append("Успешно переименовано в ").append(newName).append("\n\n");
-            sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
+            sb.append("Successfully renamed to ").append(newName).append("\n\n");
+            sb.append("Directory content ").append(target.getParent()).append(":\n");
             sb.append(getDirectoryListing(target.getParent()));
             
             contentArray.addObject().put("type", "text").put("text", sb.toString());
@@ -99,7 +99,7 @@ public class RenameFileTool implements McpTool {
     }
 
     private String getDirectoryListing(Path dir) throws IOException {
-        if (dir == null || !Files.exists(dir)) return "(пусто)";
+        if (dir == null || !Files.exists(dir)) return "(empty)";
         List<String> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
@@ -108,6 +108,6 @@ public class RenameFileTool implements McpTool {
             }
         }
         Collections.sort(entries);
-        return entries.isEmpty() ? "(пусто)" : String.join("\n", entries);
+        return entries.isEmpty() ? "(empty)" : String.join("\n", entries);
     }
 }

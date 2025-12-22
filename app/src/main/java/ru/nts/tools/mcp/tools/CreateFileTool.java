@@ -37,7 +37,7 @@ public class CreateFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Создает новый файл. Поддерживает авто-создание папок и возвращает обновленный листинг директории.";
+        return "Creates a new file. Supports auto-creation of directories and returns the updated directory listing.";
     }
 
     @Override
@@ -45,8 +45,8 @@ public class CreateFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к новому файлу.");
-        props.putObject("content").put("type", "string").put("description", "Текстовое содержимое файла.");
+        props.putObject("path").put("type", "string").put("description", "Path to the new file.");
+        props.putObject("content").put("type", "string").put("description", "Text content of the file.");
         
         schema.putArray("required").add("path").add("content");
         return schema;
@@ -62,7 +62,7 @@ public class CreateFileTool implements McpTool {
         
         // Предохранитель: если файл существует, его нужно прочитать перед перезаписью
         if (Files.exists(path) && !AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Доступ запрещен: файл уже существует и не был прочитан. Используйте read_file перед перезаписью.");
+            throw new SecurityException("Access denied: file already exists and has not been read. Use read_file before overwriting.");
         }
 
         // Запуск транзакции
@@ -83,8 +83,8 @@ public class CreateFileTool implements McpTool {
             var contentArray = result.putArray("content");
             
             StringBuilder sb = new StringBuilder();
-            sb.append("Файл успешно создан: ").append(pathStr).append("\n\n");
-            sb.append("Содержимое директории ").append(path.getParent()).append(":\n");
+            sb.append("File created successfully: ").append(pathStr).append("\n\n");
+            sb.append("Directory content ").append(path.getParent()).append(":\n");
             sb.append(getDirectoryListing(path.getParent()));
             
             contentArray.addObject().put("type", "text").put("text", sb.toString());
@@ -100,7 +100,7 @@ public class CreateFileTool implements McpTool {
      * Формирует простой список файлов в директории для обратной связи LLM.
      */
     private String getDirectoryListing(Path dir) throws IOException {
-        if (dir == null || !Files.exists(dir)) return "(пусто)";
+        if (dir == null || !Files.exists(dir)) return "(empty)";
         List<String> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
@@ -109,6 +109,6 @@ public class CreateFileTool implements McpTool {
             }
         }
         Collections.sort(entries);
-        return entries.isEmpty() ? "(пусто)" : String.join("\n", entries);
+        return entries.isEmpty() ? "(empty)" : String.join("\n", entries);
     }
 }

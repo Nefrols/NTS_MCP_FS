@@ -32,7 +32,7 @@ public class DeleteFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Удаляет файл или директорию. Для директорий поддерживается рекурсивное удаление.";
+        return "Deletes a file or directory. Supports recursive deletion for folders.";
     }
 
     @Override
@@ -40,8 +40,8 @@ public class DeleteFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к удаляемому объекту.");
-        props.putObject("recursive").put("type", "boolean").put("description", "Флаг рекурсивного удаления папок.");
+        props.putObject("path").put("type", "string").put("description", "Path to the object to delete.");
+        props.putObject("recursive").put("type", "boolean").put("description", "Flag for recursive folder deletion.");
         
         schema.putArray("required").add("path");
         return schema;
@@ -55,7 +55,7 @@ public class DeleteFileTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("Объект не найден: " + pathStr);
+            throw new IllegalArgumentException("Object not found: " + pathStr);
         }
 
         TransactionManager.startTransaction("Delete: " + pathStr);
@@ -89,7 +89,8 @@ public class DeleteFileTool implements McpTool {
         }
 
         var result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text").put("text", "Успешно удалено: " + pathStr);
+        var contentArray = result.putArray("content");
+        contentArray.addObject().put("type", "text").put("text", "Deleted successfully: " + pathStr);
         return result;
     }
 }

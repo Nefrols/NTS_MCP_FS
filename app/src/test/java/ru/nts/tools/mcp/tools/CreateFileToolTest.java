@@ -29,8 +29,8 @@ class CreateFileToolTest {
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
         
-        assertTrue(text.contains("Файл успешно создан: new.txt"));
-        assertTrue(text.contains("Содержимое директории"));
+        assertTrue(text.contains("File created successfully: new.txt"));
+        assertTrue(text.contains("Directory content"));
         assertTrue(text.contains("[FILE] existing.txt"));
         assertTrue(text.contains("[FILE] new.txt"));
     }

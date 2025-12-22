@@ -34,7 +34,7 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Возвращает список файлов и папок в указанной директории. Поддерживает параметр depth для рекурсии.";
+        return "Returns a list of files and folders in the specified directory. Supports depth for recursion.";
     }
 
     @Override
@@ -42,8 +42,8 @@ public class ListDirectoryTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к директории для листинга.");
-        props.putObject("depth").put("type", "integer").put("description", "Глубина рекурсивного обхода (по умолчанию 1).");
+        props.putObject("path").put("type", "string").put("description", "Path to the directory for listing.");
+        props.putObject("depth").put("type", "integer").put("description", "Recursion depth (default is 1).");
         
         schema.putArray("required").add("path");
         return schema;
@@ -58,7 +58,7 @@ public class ListDirectoryTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path) || !Files.isDirectory(path)) {
-            throw new IllegalArgumentException("Директория не найдена или не является папкой: " + pathStr);
+            throw new IllegalArgumentException("Directory not found or is not a folder: " + pathStr);
         }
 
         List<String> entries = new ArrayList<>();
@@ -69,7 +69,7 @@ public class ListDirectoryTool implements McpTool {
         ArrayNode content = result.putArray("content");
         ObjectNode text = content.addObject();
         text.put("type", "text");
-        text.put("text", entries.isEmpty() ? "(директория пуста)" : String.join("\n", entries));
+        text.put("text", entries.isEmpty() ? "(directory is empty)" : String.join("\n", entries));
         
         return result;
     }

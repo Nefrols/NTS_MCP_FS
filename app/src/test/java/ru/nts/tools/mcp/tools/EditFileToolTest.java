@@ -119,7 +119,7 @@ class EditFileToolTest {
         params.put("newText", "XXX");
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
-        assertTrue(ex.getMessage().contains("АКТУАЛЬНОЕ СОДЕРЖИМОЕ В ДИАПАЗОНЕ 2-2:"));
+        assertTrue(ex.getMessage().contains("ACTUAL CONTENT IN RANGE 2-2:"));
         assertTrue(ex.getMessage().contains("[BBB]"));
     }
 

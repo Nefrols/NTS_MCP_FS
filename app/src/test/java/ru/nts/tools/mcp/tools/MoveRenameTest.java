@@ -11,10 +11,12 @@ import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Тесты для инструментов перемещения и переименования файлов.
+ */
 class MoveRenameTest {
     private final MoveFileTool moveTool = new MoveFileTool();
     private final RenameFileTool renameTool = new RenameFileTool();
@@ -25,7 +27,7 @@ class MoveRenameTest {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("old.txt");
         Files.writeString(file, "content");
-        AccessTracker.reset(); // Очищаем историю
+        AccessTracker.reset();
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", "old.txt");
@@ -36,7 +38,7 @@ class MoveRenameTest {
 
         assertFalse(Files.exists(file));
         assertTrue(Files.exists(tempDir.resolve("new.txt")));
-        assertTrue(text.contains("Содержимое директории"));
+        assertTrue(text.contains("Directory content"));
         assertTrue(text.contains("[FILE] new.txt"));
     }
 
@@ -47,7 +49,7 @@ class MoveRenameTest {
         Files.writeString(source, "content");
         AccessTracker.reset();
         
-        // Сначала читаем
+        // Сначала регистрируем чтение
         AccessTracker.registerRead(source);
         assertTrue(AccessTracker.hasBeenRead(source));
 
@@ -60,9 +62,9 @@ class MoveRenameTest {
 
         Path target = tempDir.resolve("dest/moved.txt");
         assertTrue(Files.exists(target));
-        // Проверяем, что статус прочтения переехал
-        assertTrue(AccessTracker.hasBeenRead(target), "Статус прочтения должен сохраниться после перемещения");
-        assertTrue(text.contains("Содержимое директории"));
+        // Статус прочтения должен переехать вместе с файлом
+        assertTrue(AccessTracker.hasBeenRead(target), "Read status must be preserved after move");
+        assertTrue(text.contains("Directory content"));
         assertTrue(text.contains("[FILE] moved.txt"));
     }
 
@@ -74,6 +76,7 @@ class MoveRenameTest {
         params.put("sourcePath", "file.txt");
         params.put("targetPath", "../outside.txt");
 
+        // Проверка безопасности через PathSanitizer
         assertThrows(SecurityException.class, () -> moveTool.execute(params));
     }
 }
