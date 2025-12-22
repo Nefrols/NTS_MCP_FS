@@ -10,9 +10,11 @@ import ru.nts.tools.mcp.tools.*;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * Основной класс MCP сервера.
+ * Основной класс MCP сервера, оптимизированный для работы с виртуальными потоками.
  */
 public class McpServer {
 
@@ -30,13 +32,17 @@ public class McpServer {
 
     public static void main(String[] args) {
         if (DEBUG) {
-            System.err.println("MCP Server starting...");
+            System.err.println("MCP Server starting with Virtual Threads support...");
         }
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+        // Используем ExecutorService с виртуальными потоками для обработки каждого запроса
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+             BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+            
             String line;
             while ((line = reader.readLine()) != null) {
-                processMessage(line);
+                final String message = line;
+                executor.submit(() -> processMessage(message));
             }
         } catch (Exception e) {
             if (DEBUG) {
@@ -53,7 +59,7 @@ public class McpServer {
             JsonNode id = request.get("id");
 
             if (DEBUG) {
-                System.err.println("Received method: " + method);
+                System.err.println("[" + Thread.currentThread() + "] Received method: " + method);
             }
 
             ObjectNode response = mapper.createObjectNode();
@@ -65,29 +71,24 @@ public class McpServer {
             try {
                 switch (method) {
                     case "initialize" -> {
-                        ObjectNode result = mapper.createObjectNode();
+                        var result = mapper.createObjectNode();
                         result.put("protocolVersion", "2024-11-05");
-                        result.set("capabilities", mapper.createObjectNode()); // Добавить capabilities если нужно
-                        ObjectNode serverInfo = result.putObject("serverInfo");
+                        result.set("capabilities", mapper.createObjectNode());
+                        var serverInfo = result.putObject("serverInfo");
                         serverInfo.put("name", "L2NTS-FileSystem-MCP");
                         serverInfo.put("version", "1.0.0");
                         response.set("result", result);
                     }
-                    case "tools/list" -> {
-                        response.set("result", router.listTools());
-                    }
+                    case "tools/list" -> response.set("result", router.listTools());
                     case "tools/call" -> {
                         String toolName = request.path("params").path("name").asText();
                         JsonNode params = request.path("params").path("arguments");
                         response.set("result", router.callTool(toolName, params));
                     }
-                    case "notifications/initialized" -> {
-                        // Игнорируем или логгируем
-                        return;
-                    }
+                    case "notifications/initialized" -> { return; }
                     default -> {
                         if (id != null) {
-                            ObjectNode error = mapper.createObjectNode();
+                            var error = mapper.createObjectNode();
                             error.put("code", -32601);
                             error.put("message", "Method not found: " + method);
                             response.set("error", error);
@@ -96,7 +97,7 @@ public class McpServer {
                 }
             } catch (Exception e) {
                 if (id != null) {
-                    ObjectNode error = mapper.createObjectNode();
+                    var error = mapper.createObjectNode();
                     error.put("code", -32000);
                     error.put("message", "Internal error: " + e.getMessage());
                     response.set("error", error);
@@ -104,13 +105,26 @@ public class McpServer {
             }
 
             if (id != null || response.has("result") || response.has("error")) {
-                System.out.println(mapper.writeValueAsString(response));
-                System.out.flush();
+                sendResponse(response);
             }
 
         } catch (Exception e) {
             if (DEBUG) {
                 System.err.println("Failed to process message: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Синхронизированная отправка ответа, чтобы избежать перемешивания вывода от разных потоков.
+     */
+    private static synchronized void sendResponse(ObjectNode response) {
+        try {
+            System.out.println(mapper.writeValueAsString(response));
+            System.out.flush();
+        } catch (Exception e) {
+            if (DEBUG) {
+                System.err.println("Failed to send response: " + e.getMessage());
             }
         }
     }

@@ -34,4 +34,26 @@ class SearchFilesToolTest {
         assertTrue(text.contains("file2.txt"));
         assertFalse(text.contains("file3.txt"));
     }
+
+    @Test
+    void testParallelSearchStress(@TempDir Path tempDir) throws Exception {
+        int fileCount = 100;
+        for (int i = 0; i < fileCount; i++) {
+            Files.writeString(tempDir.resolve("file" + i + ".txt"), 
+                (i % 10 == 0) ? "matching string" : "random content");
+        }
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", tempDir.toString());
+        params.put("query", "matching");
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+        
+        // Должно быть 10 совпадений (0, 10, 20... 90)
+        assertTrue(text.contains("(10)"), "Должно быть найдено 10 совпадений");
+        for (int i = 0; i < 100; i += 10) {
+            assertTrue(text.contains("file" + i + ".txt"));
+        }
+    }
 }

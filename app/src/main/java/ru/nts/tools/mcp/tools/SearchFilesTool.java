@@ -12,12 +12,14 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 
 /**
- * Инструмент для рекурсивного поиска текста в файлах директории.
- * Оптимизирован для работы с файлами любого размера и кодировки.
+ * Инструмент для рекурсивного поиска текста, оптимизированный с помощью виртуальных потоков.
  */
 public class SearchFilesTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -29,14 +31,14 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Рекурсивно ищет строку в содержимом файлов в указанной директории с автоматическим определением кодировки.";
+        return "Параллельный рекурсивный поиск строки в файлах с использованием виртуальных потоков.";
     }
 
     @Override
     public JsonNode getInputSchema() {
-        ObjectNode schema = mapper.createObjectNode();
+        var schema = mapper.createObjectNode();
         schema.put("type", "object");
-        ObjectNode props = schema.putObject("properties");
+        var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к базовой директории");
         props.putObject("query").put("type", "string").put("description", "Строка для поиска");
         
@@ -53,26 +55,38 @@ public class SearchFilesTool implements McpTool {
             throw new IllegalArgumentException("Директория не найдена: " + rootPath);
         }
 
-        List<String> matches = new ArrayList<>();
-        try (Stream<Path> walk = Files.walk(rootPath)) {
-            walk.filter(Files::isRegularFile).forEach(path -> {
-                try {
-                    Charset charset = EncodingUtils.detectEncoding(path);
-                    try (Stream<String> lines = Files.lines(path, charset)) {
-                        if (lines.anyMatch(line -> line.contains(query))) {
-                            matches.add(path.toAbsolutePath().toString());
+        var matches = new ConcurrentLinkedQueue<String>();
+        
+        // Используем виртуальные потоки для параллельного сканирования файлов
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            try (Stream<Path> walk = Files.walk(rootPath)) {
+                walk.filter(Files::isRegularFile).forEach(path -> {
+                    executor.submit(() -> {
+                        try {
+                            Charset charset = EncodingUtils.detectEncoding(path);
+                            try (Stream<String> lines = Files.lines(path, charset)) {
+                                if (lines.anyMatch(line -> line.contains(query))) {
+                                    matches.add(path.toAbsolutePath().toString());
+                                }
+                            }
+                        } catch (Exception ignored) {
+                            // Ошибки доступа или кодировки игнорируем при массовом поиске
                         }
-                    }
-                } catch (Exception ignored) {
-                }
-            });
+                    });
+                });
+            }
+            // Executor автоматически дождется завершения всех задач при закрытии (try-with-resources)
         }
 
-        ObjectNode result = mapper.createObjectNode();
-        ArrayNode content = result.putArray("content");
-        ObjectNode text = content.addObject();
-        text.put("type", "text");
-        text.put("text", matches.isEmpty() ? "Совпадений не найдено." : "Найдены совпадения в файлах:\n" + String.join("\n", matches));
+        var sortedMatches = new ArrayList<>(matches);
+        Collections.sort(sortedMatches);
+
+        var result = mapper.createObjectNode();
+        var content = result.putArray("content");
+        var textNode = content.addObject();
+        textNode.put("type", "text");
+        textNode.put("text", sortedMatches.isEmpty() ? "Совпадений не найдено." : 
+                "Найдены совпадения в файлах (" + sortedMatches.size() + "):\n" + String.join("\n", sortedMatches));
         
         return result;
     }
