@@ -28,6 +28,17 @@ public class AccessTracker {
     }
     
     /**
+     * Переносит запись о доступе при перемещении или переименовании файла.
+     */
+    public static void moveRecord(Path source, Path target) {
+        Path sourceAbs = source.toAbsolutePath().normalize();
+        Path targetAbs = target.toAbsolutePath().normalize();
+        if (readFiles.remove(sourceAbs)) {
+            readFiles.add(targetAbs);
+        }
+    }
+
+    /**
      * Очистка (при необходимости).
      */
     public static void reset() {
