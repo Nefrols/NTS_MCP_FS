@@ -21,7 +21,7 @@ public class TaskKillTool implements McpTool {
 
     @Override
     public String getName() {
-        return "task_kill";
+        return "nts_task_kill";
     }
 
     @Override

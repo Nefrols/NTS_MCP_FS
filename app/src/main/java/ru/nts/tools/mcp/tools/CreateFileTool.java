@@ -32,7 +32,7 @@ public class CreateFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "create_file";
+        return "nts_create_file";
     }
 
     @Override

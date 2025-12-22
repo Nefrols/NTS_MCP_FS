@@ -21,7 +21,7 @@ public class TaskLogTool implements McpTool {
 
     @Override
     public String getName() {
-        return "task_log";
+        return "nts_task_log";
     }
 
     @Override

@@ -31,7 +31,7 @@ public class MoveFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "move_file";
+        return "nts_move_file";
     }
 
     @Override

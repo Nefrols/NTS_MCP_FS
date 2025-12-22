@@ -39,7 +39,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "edit_file";
+        return "nts_edit_file";
     }
 
     @Override

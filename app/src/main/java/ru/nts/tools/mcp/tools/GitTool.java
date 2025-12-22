@@ -34,7 +34,7 @@ public class GitTool implements McpTool {
 
     @Override
     public String getName() {
-        return "git_cmd";
+        return "nts_git_cmd";
     }
 
     @Override

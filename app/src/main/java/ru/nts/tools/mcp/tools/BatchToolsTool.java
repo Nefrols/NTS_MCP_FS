@@ -37,7 +37,7 @@ public class BatchToolsTool implements McpTool {
 
     @Override
     public String getName() {
-        return "batch_tools";
+        return "nts_batch_tools";
     }
 
     @Override

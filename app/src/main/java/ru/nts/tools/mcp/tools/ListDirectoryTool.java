@@ -34,7 +34,7 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public String getName() {
-        return "list_directory";
+        return "nts_list_directory";
     }
 
     @Override

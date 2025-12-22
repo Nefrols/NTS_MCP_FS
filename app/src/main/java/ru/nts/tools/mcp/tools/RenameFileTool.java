@@ -31,7 +31,7 @@ public class RenameFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "rename_file";
+        return "nts_rename_file";
     }
 
     @Override

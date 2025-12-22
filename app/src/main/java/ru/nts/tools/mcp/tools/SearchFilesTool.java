@@ -38,7 +38,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getName() {
-        return "search_files";
+        return "nts_search_files";
     }
 
     @Override

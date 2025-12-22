@@ -30,7 +30,7 @@ public class ProjectStructureTool implements McpTool {
 
     @Override
     public String getName() {
-        return "project_structure";
+        return "nts_project_structure";
     }
 
     @Override

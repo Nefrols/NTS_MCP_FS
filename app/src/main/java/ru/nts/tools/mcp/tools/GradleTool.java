@@ -32,7 +32,7 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getName() {
-        return "gradle_task";
+        return "nts_gradle_task";
     }
 
     @Override

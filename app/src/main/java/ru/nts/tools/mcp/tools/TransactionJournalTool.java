@@ -29,7 +29,7 @@ public class TransactionJournalTool implements McpTool {
 
     @Override
     public String getName() {
-        return "transaction_journal";
+        return "nts_transaction_journal";
     }
 
     @Override

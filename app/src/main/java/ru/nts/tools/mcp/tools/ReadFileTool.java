@@ -38,7 +38,7 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "read_file";
+        return "nts_read_file";
     }
 
     @Override

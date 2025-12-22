@@ -115,7 +115,8 @@ public class McpServer {
                     case "initialize" -> {
                         var result = mapper.createObjectNode();
                         result.put("protocolVersion", "2024-11-05");
-                        result.set("capabilities", mapper.createObjectNode());
+                        var capabilities = result.putObject("capabilities");
+                        capabilities.putObject("tools"); // Объявляем поддержку инструментов
                         var serverInfo = result.putObject("serverInfo");
                         serverInfo.put("name", "L2NTS-FileSystem-MCP");
                         serverInfo.put("version", "1.0.0");

@@ -32,7 +32,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getName() {
-        return "file_info";
+        return "nts_file_info";
     }
 
     @Override

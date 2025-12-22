@@ -22,7 +22,7 @@ public class UndoTool implements McpTool {
 
     @Override
     public String getName() {
-        return "undo";
+        return "nts_undo";
     }
 
     @Override

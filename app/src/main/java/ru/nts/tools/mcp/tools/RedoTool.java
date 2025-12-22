@@ -21,7 +21,7 @@ public class RedoTool implements McpTool {
 
     @Override
     public String getName() {
-        return "redo";
+        return "nts_redo";
     }
 
     @Override

@@ -31,7 +31,7 @@ public class DeleteFileTool implements McpTool {
 
     @Override
     public String getName() {
-        return "delete_file";
+        return "nts_delete_file";
     }
 
     @Override
