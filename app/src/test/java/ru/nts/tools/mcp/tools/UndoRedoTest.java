@@ -198,24 +198,54 @@ class UndoRedoTest {
 
         
 
-                        assertTrue(text.contains("=== TRANSACTION JOURNAL ==="));
+                                assertTrue(text.contains("=== TRANSACTION JOURNAL ==="));
 
         
 
-                        assertTrue(text.contains("Edit file: test.txt"));
+                        
 
         
 
-                        assertTrue(text.contains("1 files"));
+                                assertTrue(text.contains("Edit file: test.txt"));
 
         
 
-                    }
+                        
 
         
 
-                
+                                assertTrue(text.contains("=== ACTIVE SESSION CONTEXT ==="));
 
-        }
+        
+
+                        
+
+        
+
+                                assertTrue(text.contains("- test.txt"));
+
+        
+
+                        
+
+        
+
+                            }
+
+        
+
+                        
+
+        
+
+                        }
+
+        
+
+                        
+
+        
+
+                        
 
         

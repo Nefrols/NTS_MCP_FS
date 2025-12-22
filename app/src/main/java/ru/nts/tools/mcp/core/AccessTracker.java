@@ -39,6 +39,13 @@ public class AccessTracker {
     }
 
     /**
+     * Возвращает список всех файлов, прочитанных в текущей сессии.
+     */
+    public static Set<Path> getReadFiles() {
+        return java.util.Collections.unmodifiableSet(readFiles);
+    }
+
+    /**
      * Очистка (при необходимости).
      */
     public static void reset() {
