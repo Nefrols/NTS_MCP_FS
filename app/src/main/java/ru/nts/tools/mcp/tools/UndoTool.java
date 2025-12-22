@@ -9,6 +9,7 @@ import ru.nts.tools.mcp.core.TransactionManager;
 
 /**
  * Инструмент для отмены последней транзакции.
+ * После выполнения возвращает актуальный журнал истории.
  */
 public class UndoTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -30,10 +31,12 @@ public class UndoTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        String resultMsg = TransactionManager.undo();
+        String status = TransactionManager.undo();
+        String journal = TransactionManager.getJournal();
         
         ObjectNode result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text").put("text", resultMsg);
+        result.putArray("content").addObject().put("type", "text")
+                .put("text", status + "\n\n" + journal);
         return result;
     }
 }

@@ -112,7 +112,7 @@ class UndoRedoTest {
 
         JsonNode redoResult = redoTool.execute(mapper.createObjectNode());
         String msg = redoResult.get("content").get(0).get("text").asText();
-        assertTrue(msg.contains("Нет операций для повтора"));
+        assertTrue(msg.contains("No operations to redo"));
         assertEquals("B", Files.readString(file));
     }
 
@@ -136,8 +136,86 @@ class UndoRedoTest {
         undoTool.execute(mapper.createObjectNode());
         assertEquals("0", Files.readString(file));
 
-        redoTool.execute(mapper.createObjectNode());
-        redoTool.execute(mapper.createObjectNode());
-        assertEquals("2", Files.readString(file));
-    }
-}
+                redoTool.execute(mapper.createObjectNode());
+
+                redoTool.execute(mapper.createObjectNode());
+
+                assertEquals("2", Files.readString(file));
+
+            }
+
+        
+
+            @Test
+
+            void testTransactionJournal(@TempDir Path tempDir) throws Exception {
+
+                PathSanitizer.setRoot(tempDir);
+
+                TransactionManager.reset();
+
+                
+
+                Path f = tempDir.resolve("test.txt");
+
+                Files.writeString(f, "init");
+
+                AccessTracker.registerRead(f);
+
+        
+
+                // Делаем одну операцию
+
+                ObjectNode p = mapper.createObjectNode();
+
+                p.put("path", "test.txt");
+
+                p.put("oldText", "init");
+
+                p.put("newText", "new");
+
+                editTool.execute(p);
+
+        
+
+                        // Проверяем журнал
+
+        
+
+                        TransactionJournalTool journalTool = new TransactionJournalTool();
+
+        
+
+                        JsonNode result = journalTool.execute(mapper.createObjectNode());
+
+        
+
+                        String text = result.get("content").get(0).get("text").asText();
+
+        
+
+                        
+
+        
+
+                        assertTrue(text.contains("=== TRANSACTION JOURNAL ==="));
+
+        
+
+                        assertTrue(text.contains("Edit file: test.txt"));
+
+        
+
+                        assertTrue(text.contains("1 files"));
+
+        
+
+                    }
+
+        
+
+                
+
+        }
+
+        

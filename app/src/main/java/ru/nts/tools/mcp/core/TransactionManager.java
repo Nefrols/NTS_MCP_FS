@@ -4,6 +4,8 @@ package ru.nts.tools.mcp.core;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -13,9 +15,13 @@ public class TransactionManager {
     
     private static final List<Transaction> undoStack = new ArrayList<>();
     private static final List<Transaction> redoStack = new ArrayList<>();
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss");
     
     private static Transaction currentTransaction = null;
 
+    /**
+     * Возвращает путь к директории снимков, создавая её при необходимости.
+     */
     private static Path getSnapshotDir() throws IOException {
         Path dir = PathSanitizer.getRoot().resolve(".mcp/snapshots");
         if (!Files.exists(dir)) {
@@ -26,14 +32,18 @@ public class TransactionManager {
 
     /**
      * Начинает новую транзакцию.
+     * 
+     * @param description Описание операции для журнала.
      */
     public static void startTransaction(String description) {
         if (currentTransaction != null) return;
-        currentTransaction = new Transaction(description);
+        currentTransaction = new Transaction(description, LocalDateTime.now());
     }
 
     /**
-     * Создает резервную копию файла перед изменением.
+     * Создает резервную копию файла перед его изменением в рамках текущей транзакции.
+     * 
+     * @param path Путь к файлу.
      */
     public static void backup(Path path) throws IOException {
         if (currentTransaction == null) return;
@@ -41,19 +51,19 @@ public class TransactionManager {
     }
 
     /**
-     * Завершает транзакцию и сохраняет её в историю.
+     * Завершает текущую транзакцию и сохраняет её в историю для возможности отмены.
      */
     public static void commit() {
         if (currentTransaction == null) return;
         if (!currentTransaction.isEmpty()) {
             undoStack.add(currentTransaction);
-            redoStack.clear(); 
+            redoStack.clear(); // Новая правка делает невозможным REDO старых отмененных правок
         }
         currentTransaction = null;
     }
 
     /**
-     * Откатывает текущую незавершенную транзакцию.
+     * Откатывает текущую незавершенную транзакцию (вызывается при ошибках).
      */
     public static void rollback() {
         if (currentTransaction == null) return;
@@ -66,41 +76,72 @@ public class TransactionManager {
     }
 
     /**
-     * Отменяет последнюю совершенную транзакцию.
+     * Отменяет последнюю совершенную транзакцию (UNDO).
+     * 
+     * @return Текстовый статус операции.
      */
     public static String undo() throws IOException {
-        if (undoStack.isEmpty()) return "Нет операций для отмены.";
+        if (undoStack.isEmpty()) return "No operations to undo.";
         
         Transaction tx = undoStack.remove(undoStack.size() - 1);
-        Transaction redoTx = new Transaction("REDO: " + tx.description);
+        // Сохраняем состояние ПЕРЕД откатом в REDO стек
+        Transaction redoTx = new Transaction("REDO: " + tx.description, LocalDateTime.now());
         for (Path path : tx.getAffectedPaths()) {
             redoTx.addFile(path);
         }
         
         tx.restore();
         redoStack.add(redoTx);
-        return "Отменено: " + tx.description;
+        return "Undone: " + tx.description;
     }
 
     /**
-     * Повторяет ранее отмененную транзакцию.
+     * Повторяет ранее отмененную транзакцию (REDO).
+     * 
+     * @return Текстовый статус операции.
      */
     public static String redo() throws IOException {
-        if (redoStack.isEmpty()) return "Нет операций для повтора.";
+        if (redoStack.isEmpty()) return "No operations to redo.";
         
         Transaction tx = redoStack.remove(redoStack.size() - 1);
-        Transaction undoTx = new Transaction("UNDO REDO: " + tx.description);
+        Transaction undoTx = new Transaction("UNDO REDO: " + tx.description, LocalDateTime.now());
         for (Path path : tx.getAffectedPaths()) {
             undoTx.addFile(path);
         }
         
         tx.restore();
         undoStack.add(undoTx);
-        return "Повторено: " + tx.description;
+        return "Redone: " + tx.description;
     }
 
     /**
-     * Очищает историю (используется в тестах).
+     * Формирует текстовый журнал истории транзакций.
+     */
+    public static String getJournal() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== TRANSACTION JOURNAL ===\n\n");
+        
+        sb.append("Available for UNDO:\n");
+        if (undoStack.isEmpty()) sb.append("  (empty)\n");
+        for (int i = undoStack.size() - 1; i >= 0; i--) {
+            Transaction tx = undoStack.get(i);
+            sb.append(String.format("  [%s] %s (%d files)\n", 
+                    tx.timestamp.format(formatter), tx.description, tx.snapshots.size()));
+        }
+
+        sb.append("\nAvailable for REDO:\n");
+        if (redoStack.isEmpty()) sb.append("  (empty)\n");
+        for (int i = redoStack.size() - 1; i >= 0; i--) {
+            Transaction tx = redoStack.get(i);
+            sb.append(String.format("  [%s] %s (%d files)\n", 
+                    tx.timestamp.format(formatter), tx.description, tx.snapshots.size()));
+        }
+        
+        return sb.toString();
+    }
+
+    /**
+     * Полный сброс истории (используется в тестах).
      */
     public static void reset() {
         undoStack.clear();
@@ -108,27 +149,40 @@ public class TransactionManager {
         currentTransaction = null;
     }
 
+    /**
+     * Внутренний класс для хранения данных транзакции и её снимков.
+     */
     private static class Transaction {
         private final String description;
+        private final LocalDateTime timestamp;
         private final Map<Path, Path> snapshots = new HashMap<>(); 
 
-        public Transaction(String description) {
+        public Transaction(String description, LocalDateTime timestamp) {
             this.description = description;
+            this.timestamp = timestamp;
         }
 
+        /**
+         * Добавляет файл в транзакцию, создавая его физическую копию.
+         */
         public void addFile(Path path) throws IOException {
             Path absPath = path.toAbsolutePath().normalize();
             if (snapshots.containsKey(absPath)) return; 
 
             if (Files.exists(absPath)) {
+                // Если файл существует — копируем его
                 Path backup = getSnapshotDir().resolve(UUID.randomUUID().toString() + ".bak");
                 Files.copy(absPath, backup);
                 snapshots.put(absPath, backup);
             } else {
+                // Если файл новый — помечаем как null (будет удален при откате)
                 snapshots.put(absPath, null);
             }
         }
 
+        /**
+         * Восстанавливает все файлы транзакции из их снимков.
+         */
         public void restore() throws IOException {
             for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
                 Path original = entry.getKey();

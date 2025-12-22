@@ -8,20 +8,19 @@ import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 /**
- * Инструмент для повтора ранее отмененной транзакции.
- * После выполнения возвращает актуальный журнал истории.
+ * Инструмент для просмотра журнала транзакций.
  */
-public class RedoTool implements McpTool {
+public class TransactionJournalTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
     public String getName() {
-        return "redo";
+        return "transaction_journal";
     }
 
     @Override
     public String getDescription() {
-        return "Повторяет ранее отмененное изменение файлов.";
+        return "Возвращает список выполненных и отмененных транзакций в текущей сессии.";
     }
 
     @Override
@@ -31,12 +30,10 @@ public class RedoTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        String status = TransactionManager.redo();
         String journal = TransactionManager.getJournal();
         
         ObjectNode result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text")
-                .put("text", status + "\n\n" + journal);
+        result.putArray("content").addObject().put("type", "text").put("text", journal);
         return result;
     }
 }
