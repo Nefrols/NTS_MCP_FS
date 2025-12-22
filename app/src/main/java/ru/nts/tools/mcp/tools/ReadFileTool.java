@@ -10,6 +10,9 @@ import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,10 +21,11 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
 
 /**
  * Инструмент для чтения содержимого файла.
- * Поддерживает чтение по диапазонам и умное чтение вокруг контекста.
+ * Поддерживает чтение по диапазонам и умное чтение вокруг контекста с выводом расширенных метаданных.
  */
 public class ReadFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -33,7 +37,7 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Читает содержимое файла. Поддерживает диапазоны строк и поиск контекста (contextStartPattern + contextRange).";
+        return "Читает содержимое файла. Возвращает метаданные (размер, строки, CRC32) и текст. Поддерживает диапазоны и поиск контекста.";
     }
 
     @Override
@@ -62,6 +66,7 @@ public class ReadFileTool implements McpTool {
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
+        // Регистрируем доступ к файлу для возможности последующего редактирования
         AccessTracker.registerRead(path);
         
         String content = Files.readString(path, charset);
@@ -114,8 +119,33 @@ public class ReadFileTool implements McpTool {
             resultText = content;
         }
 
+        // Формируем заголовок с расширенными метаданными для LLM
+        long size = Files.size(path);
+        long crc32 = calculateCRC32(path);
+        int charCount = content.length();
+        int lineCount = lines.length;
+        if (content.isEmpty()) lineCount = 0;
+
+        String header = String.format("[FILE: %s | SIZE: %d bytes | CHARS: %d | LINES: %d | ENCODING: %s | CRC32: %X]\n", 
+                path.getFileName(), size, charCount, lineCount, charset.name(), crc32);
+
         ObjectNode result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text").put("text", resultText);
+        result.putArray("content").addObject().put("type", "text").put("text", header + resultText);
         return result;
+    }
+
+    /**
+     * Вычисляет CRC32 хеш-сумму файла.
+     */
+    private long calculateCRC32(Path path) throws IOException {
+        CRC32 crc = new CRC32();
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 }

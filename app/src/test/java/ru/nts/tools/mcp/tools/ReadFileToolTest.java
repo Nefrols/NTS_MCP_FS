@@ -23,11 +23,19 @@ class ReadFileToolTest {
     void testReadFull(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
-        Files.writeString(file, "Line 1\nLine 2\nLine 3");
+        String content = "Line 1\nLine 2\nLine 3";
+        Files.writeString(file, content);
 
         JsonNode params = mapper.createObjectNode().put("path", file.toString());
         JsonNode result = tool.execute(params);
-        assertEquals("Line 1\nLine 2\nLine 3", result.get("content").get(0).get("text").asText());
+        String text = result.get("content").get(0).get("text").asText();
+        
+        assertTrue(text.contains("[FILE: test.txt"));
+        assertTrue(text.contains("SIZE:"));
+        assertTrue(text.contains("CHARS:"));
+        assertTrue(text.contains("LINES:"));
+        assertTrue(text.contains("CRC32:"));
+        assertTrue(text.endsWith(content));
     }
 
     @Test
@@ -41,7 +49,8 @@ class ReadFileToolTest {
         params.put("line", 2);
 
         JsonNode result = tool.execute(params);
-        assertEquals("Line 2", result.get("content").get(0).get("text").asText());
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.endsWith("Line 2"));
     }
 
     @Test
@@ -56,7 +65,8 @@ class ReadFileToolTest {
         params.put("endLine", 3); // Читаем 2 и 3
 
         JsonNode result = tool.execute(params);
-        assertEquals("Line 2\nLine 3", result.get("content").get(0).get("text").asText());
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.endsWith("Line 2\nLine 3"));
     }
 
     @Test
@@ -73,7 +83,7 @@ class ReadFileToolTest {
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertEquals("2\n3\nTARGET\n5\n6", text);
+        assertTrue(text.endsWith("2\n3\nTARGET\n5\n6"));
     }
 
     @Test
@@ -89,6 +99,7 @@ class ReadFileToolTest {
         params.put("contextRange", 5);
 
         JsonNode result = tool.execute(params);
-        assertEquals("TOP\n2\n3", result.get("content").get(0).get("text").asText());
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.endsWith("TOP\n2\n3"));
     }
 }
