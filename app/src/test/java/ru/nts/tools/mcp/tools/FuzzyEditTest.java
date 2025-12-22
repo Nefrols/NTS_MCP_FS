@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
@@ -23,6 +24,7 @@ class FuzzyEditTest {
         Path file = tempDir.resolve("test.java");
         // В файле табы и много пробелов
         Files.writeString(file, "public    void    test() {\n\treturn;\n}");
+        AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
@@ -43,6 +45,7 @@ class FuzzyEditTest {
         Path file = tempDir.resolve("test.txt");
         // Файл с CRLF
         Files.write(file, "Line 1\r\nLine 2\r\nLine 3".getBytes());
+        AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
@@ -48,8 +49,8 @@ public class CreateFileTool implements McpTool {
         // Санитарная проверка пути
         Path path = PathSanitizer.sanitize(pathStr, false);
         
-        if (Files.exists(path)) {
-            throw new IllegalArgumentException("Файл уже существует: " + pathStr);
+        if (Files.exists(path) && !AccessTracker.hasBeenRead(path)) {
+            throw new SecurityException("Доступ запрещен: файл уже существует и не был прочитан. Для перезаписи существующего файла он должен быть предварительно прочитан.");
         }
 
         // Создаем родительские директории если их нет

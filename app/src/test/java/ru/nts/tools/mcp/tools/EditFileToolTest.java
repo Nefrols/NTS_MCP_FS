@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
@@ -23,6 +24,7 @@ class EditFileToolTest {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.writeString(file, "Hello World");
+        AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
@@ -38,6 +40,7 @@ class EditFileToolTest {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.write(file, List.of("Line 1", "Line 2", "Line 3", "Line 4"));
+        AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
@@ -55,6 +56,7 @@ public class ReadFileTool implements McpTool {
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
+        AccessTracker.registerRead(path);
         String contentText;
         if (params.has("line")) {
             int lineNum = params.get("line").asInt();
