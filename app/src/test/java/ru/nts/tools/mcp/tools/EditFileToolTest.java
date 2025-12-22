@@ -3,6 +3,7 @@ package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -76,74 +77,64 @@ class EditFileToolTest {
     }
 
     @Test
-    void testContextAddressing(@TempDir Path tempDir) throws Exception {
+    void testBatchOperationsWithOffsets(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.java");
-        Files.write(file, List.of(
-            "public class Test {",
-            "    public void method() {",
-            "        System.out.println(\"Old\");",
-            "    }",
-            "}"
-        ));
+        Path file = tempDir.resolve("batch.txt");
+        Files.write(file, List.of("Line 1", "Line 2", "Line 3"));
         AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("contextStartPattern", "void method");
-        params.put("startLine", 2); // Строка внутри метода
-        params.put("endLine", 2);
-        params.put("expectedContent", "        System.out.println(\"Old\");");
-        params.put("newText", "        System.out.println(\"New\");");
+        ArrayNode ops = params.putArray("operations");
+
+        // Операция 1: Заменяем Line 1 на 3 строки
+        ObjectNode op1 = ops.addObject();
+        op1.put("operation", "replace");
+        op1.put("startLine", 1);
+        op1.put("endLine", 1);
+        op1.put("content", "A\nB\nC");
+
+        // Операция 2: Удаляем Line 2. 
+        // В оригинале это строка 2. После первой операции Line 2 стала строкой 4.
+        // Сервер должен сам вычислить offset (+2 строки).
+        ObjectNode op2 = ops.addObject();
+        op2.put("operation", "delete");
+        op2.put("startLine", 2);
+        op2.put("endLine", 2);
 
         tool.execute(params);
-        
-        String content = Files.readString(file).replace("\r", "");
-        assertTrue(content.contains("System.out.println(\"New\");"));
-        assertFalse(content.contains("System.out.println(\"Old\");"));
+
+        List<String> result = Files.readAllLines(file);
+        // Ожидаем: A, B, C (вместо Line 1), Line 3 (Line 2 удалена)
+        assertEquals(4, result.size());
+        assertEquals("A", result.get(0));
+        assertEquals("B", result.get(1));
+        assertEquals("C", result.get(2));
+        assertEquals("Line 3", result.get(3));
     }
 
     @Test
-    void testAutoIndentation(@TempDir Path tempDir) throws Exception {
+    void testInsertAfter(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.java");
-        Files.write(file, List.of(
-            "public class Test {",
-            "    public void method() {",
-            "    }"
-        ));
+        Path file = tempDir.resolve("insert.txt");
+        Files.write(file, List.of("Start", "End"));
         AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("startLine", 3); // Вставляем перед закрывающей скобкой
-        params.put("endLine", 2);   // По сути вставка между 2 и 3
-        params.put("newText", "System.out.println(\"Hi\");\nreturn;");
+        ArrayNode ops = params.putArray("operations");
+
+        ObjectNode op = ops.addObject();
+        op.put("operation", "insert_after");
+        op.put("line", 1);
+        op.put("content", "Middle");
 
         tool.execute(params);
-        
-        List<String> actualLines = Files.readAllLines(file);
-        // Ожидаем, что новые строки получили отступ в 4 пробела от строки 2
-        assertEquals("    System.out.println(\"Hi\");", actualLines.get(2));
-        assertEquals("    return;", actualLines.get(3));
-    }
 
-    @Test
-    void testAutoIndentationWithTabs(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.java");
-        Files.writeString(file, "class T {\n\tvoid m() {\n\t}");
-        AccessTracker.registerRead(file);
-
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("startLine", 3);
-        params.put("endLine", 2);
-        params.put("newText", "int x;");
-
-        tool.execute(params);
-        
-        String content = Files.readString(file);
-        assertTrue(content.contains("\tvoid m() {\n\tint x;\n\t}"));
+        List<String> result = Files.readAllLines(file);
+        assertEquals(3, result.size());
+        assertEquals("Start", result.get(0));
+        assertEquals("Middle", result.get(1));
+        assertEquals("End", result.get(2));
     }
 }
