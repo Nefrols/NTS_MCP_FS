@@ -21,6 +21,7 @@ import java.util.regex.Pattern;
  * 2. Интеллектуальный парсинг (Smart Error Parser): В случае ошибки выполнения (например, сбой компиляции или тестов),
  * инструмент анализирует лог и выводит краткую сводку (ERROR SUMMARY) для быстрой навигации LLM.
  * 3. Безопасность: Выполняет задачи только в рамках текущего проекта.
+ * 4. Управление задачами: Поддерживает контроль таймаутов и асинхронное накопление логов.
  */
 public class GradleTool implements McpTool {
 
@@ -49,7 +50,9 @@ public class GradleTool implements McpTool {
 
         props.putObject("arguments").put("type", "string").put("description", "CLI arguments.");
 
-        schema.putArray("required").add("task");
+        props.putObject("timeout").put("type", "integer").put("description", "Timeout in seconds (REQUIRED).");
+
+        schema.putArray("required").add("task").add("timeout");
         return schema;
     }
 
@@ -57,6 +60,7 @@ public class GradleTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String task = params.get("task").asText();
         String extraArgs = params.path("arguments").asText("");
+        long timeout = params.get("timeout").asLong();
 
         // Детекция операционной системы для выбора правильного скрипта враппера
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
@@ -81,25 +85,30 @@ public class GradleTool implements McpTool {
             }
         }
 
-        // Выполнение Gradle задачи
-        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command);
+        // Выполнение Gradle задачи с контролем времени и идентификацией задачи
+        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
 
         ObjectNode response = mapper.createObjectNode();
         var content = response.putArray("content").addObject();
         content.put("type", "text");
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Gradle execution finished with exit code: ").append(result.exitCode()).append("\n\n");
+        sb.append("Gradle task [").append(result.taskId()).append("] ");
+        if (result.isRunning()) {
+            sb.append("STILL RUNNING IN BACKGROUND\n");
+        } else {
+            sb.append("finished with exit code: ").append(result.exitCode()).append("\n");
+        }
 
-        // Если задача завершилась ошибкой, пытаемся выделить самое важное из логов
-        if (result.exitCode() != 0) {
+        // Если задача завершилась ошибкой (и не таймаутом), пытаемся выделить самое важное из логов
+        if (result.exitCode() != 0 && !result.isRunning()) {
             String summary = parseErrors(result.output());
             if (!summary.isEmpty()) {
-                sb.append("=== ERROR SUMMARY ===\n").append(summary).append("\n");
+                sb.append("\n=== ERROR SUMMARY ===\n").append(summary).append("\n");
             }
         }
 
-        sb.append("Full Output:\n").append(result.output());
+        sb.append("\nOutput:\n").append(result.output());
 
         content.put("text", sb.toString());
         return response;
@@ -118,7 +127,7 @@ public class GradleTool implements McpTool {
 
         // Паттерн для ошибок Java компилятора: извлекает путь к файлу, строку и описание ошибки.
         Pattern javaError = Pattern.compile("([^\\s]+\\.java):(\\d+): error: (.*)");
-        // Паттерн для отчетов о падении тестов в консоли.
+        // Паттерн для отчет о падении тестов в консоли.
         Pattern testFailure = Pattern.compile("([^\\s]+ > [^\\s]+ FAILED)");
 
         String[] lines = output.split("\\n");

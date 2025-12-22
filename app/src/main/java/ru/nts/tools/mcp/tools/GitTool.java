@@ -17,6 +17,7 @@ import java.util.Set;
  * 1. Ограничен списком разрешенных локальных команд.
  * 2. Запрещает любые операции с удаленными репозиториями (push, pull, remote).
  * 3. Использует прямой вызов исполняемого файла Git для исключения shell-инъекций.
+ * 4. Поддерживает контроль таймаутов и идентификацию задач.
  */
 public class GitTool implements McpTool {
 
@@ -51,7 +52,9 @@ public class GitTool implements McpTool {
 
         props.putObject("args").put("type", "string").put("description", "Command arguments.");
 
-        schema.putArray("required").add("command");
+        props.putObject("timeout").put("type", "integer").put("description", "Timeout in seconds (REQUIRED).");
+
+        schema.putArray("required").add("command").add("timeout");
         return schema;
     }
 
@@ -59,6 +62,7 @@ public class GitTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String subCmd = params.get("command").asText();
         String extraArgs = params.path("args").asText("");
+        long timeout = params.get("timeout").asLong();
 
         // Валидация подкоманды по белому списку
         if (!ALLOWED_CMDS.contains(subCmd)) {
@@ -80,17 +84,23 @@ public class GitTool implements McpTool {
             }
         }
 
-        // Выполнение команды через защищенное ядро ProcessExecutor
-        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command);
+        // Выполнение команды через защищенное ядро ProcessExecutor с контролем времени
+        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
 
         ObjectNode response = mapper.createObjectNode();
         var content = response.putArray("content").addObject();
         content.put("type", "text");
 
-        // Формирование отчета для LLM
+        // Формирование детального отчета для LLM
         StringBuilder sb = new StringBuilder();
-        sb.append("Git command finished with exit code: ").append(result.exitCode()).append("\n\n");
-        sb.append("Output:\n").append(result.output());
+        sb.append("Git task [").append(result.taskId()).append("] ");
+        if (result.isRunning()) {
+            sb.append("STILL RUNNING IN BACKGROUND\n");
+        } else {
+            sb.append("finished with exit code: ").append(result.exitCode()).append("\n");
+        }
+
+        sb.append("\nOutput:\n").append(result.output());
 
         content.put("text", sb.toString());
         return response;

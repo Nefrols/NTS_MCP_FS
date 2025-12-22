@@ -12,6 +12,11 @@ import java.util.List;
 public class GitUtils {
 
     /**
+     * Стандартный таймаут для быстрых информационных команд Git.
+     */
+    private static final long DEFAULT_GIT_TIMEOUT = 5;
+
+    /**
      * Возвращает краткое описание статуса файла в Git.
      * Использует команду 'git status --porcelain' для получения машиночитаемого и стабильного вывода.
      *
@@ -27,7 +32,7 @@ public class GitUtils {
             Path relativePath = root.relativize(path.toAbsolutePath().normalize());
 
             // Выполнение команды получения статуса только для конкретного файла
-            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(List.of("git", "status", "--porcelain", relativePath.toString()));
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(List.of("git", "status", "--porcelain", relativePath.toString()), DEFAULT_GIT_TIMEOUT);
 
             if (result.exitCode() == 0 && !result.output().isBlank()) {
                 String out = result.output().trim();
@@ -42,7 +47,7 @@ public class GitUtils {
 
             // Если porcelain пуст, файл может быть либо неизмененным (Unchanged), либо вообще не отслеживаться (Untracked)
             // Выполняем проверку на отслеживаемость через ls-files
-            ProcessExecutor.ExecutionResult trackCheck = ProcessExecutor.execute(List.of("git", "ls-files", "--error-unmatch", relativePath.toString()));
+            ProcessExecutor.ExecutionResult trackCheck = ProcessExecutor.execute(List.of("git", "ls-files", "--error-unmatch", relativePath.toString()), DEFAULT_GIT_TIMEOUT);
             if (trackCheck.exitCode() != 0) {
                 return "Untracked";
             }

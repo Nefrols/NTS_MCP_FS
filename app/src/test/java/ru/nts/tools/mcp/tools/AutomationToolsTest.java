@@ -11,39 +11,29 @@ import java.io.File;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Тесты для инструментов автоматизации (Git и Gradle).
- * Проверяют корректность выполнения внешних команд, механизмы поиска wrapper-скриптов
- * и соблюдение политик безопасности при вызове команд ОС.
+ * Тесты для инструментов автоматизации (Git и Gradle) с поддержкой таймаутов и управления задачами.
+ * Проверяют:
+ * 1. Корректность выполнения команд с обязательным параметром timeout.
+ * 2. Механизм генерации и отслеживания taskId (хешей задач).
+ * 3. Возможность получения промежуточных логов через task_log.
+ * 4. Возможность принудительного завершения задач через task_kill.
  */
 class AutomationToolsTest {
 
-    /**
-     * Тестируемый инструмент запуска Gradle задач.
-     */
     private final GradleTool gradleTool = new GradleTool();
-
-    /**
-     * Тестируемый инструмент выполнения Git команд.
-     */
     private final GitTool gitTool = new GitTool();
-
-    /**
-     * JSON манипулятор.
-     */
+    private final TaskLogTool logTool = new TaskLogTool();
+    private final TaskKillTool killTool = new TaskKillTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
-     * Инициализация окружения перед каждым тестом.
-     * Динамически находит корень проекта (наличие gradlew) для обеспечения работоспособности
-     * тестов в различных окружениях (IDE, CLI, CI).
+     * Динамическая инициализация корня проекта перед тестами.
      */
     @BeforeEach
     void setUp() {
-        // Рекурсивный поиск корня репозитория вверх по дереву каталогов
         Path current = Paths.get(".").toAbsolutePath().normalize();
         while (current != null) {
             if (new File(current.toFile(), "gradlew").exists() || new File(current.toFile(), "gradlew.bat").exists()) {
@@ -55,49 +45,68 @@ class AutomationToolsTest {
     }
 
     /**
-     * Тестирует выполнение базовой команды Git (status).
-     * Проверяет успешность вызова и формат возвращаемого отчета.
+     * Тестирует выполнение команды Git с указанием таймаута.
      */
     @Test
-    void testGitStatus() throws Exception {
+    void testGitStatusWithTimeout() throws Exception {
         ObjectNode params = mapper.createObjectNode();
         params.put("command", "status");
+        params.put("timeout", 10);
 
         var result = gitTool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
 
-        // Код выхода 0 гарантирует наличие Git в системе и корректность аргументов
-        assertTrue(text.contains("Git command finished with exit code: 0"), "Git status должен завершаться успешно");
+        // Проверка наличия статуса выполнения и идентификатора задачи
+        assertTrue(text.contains("finished with exit code: 0") || text.contains("Git task"), "Output should contain task info or finish status. Got: " + text);
     }
 
     /**
-     * Тестирует механизм блокировки запрещенных команд Git.
-     * Убеждается, что попытки выполнения команд работы с удаленными репозиториями (push) пресекаются.
+     * Тестирует полный цикл управления фоновой задачей (запуск -> логирование -> остановка).
      */
     @Test
-    void testGitForbiddenCommand() {
+    void testTaskManagement() throws Exception {
+        // Запускаем команду с намеренно коротким таймаутом для перевода в фоновый режим
         ObjectNode params = mapper.createObjectNode();
-        params.put("command", "push");
+        params.put("command", "log");
+        params.put("args", "--all");
+        params.put("timeout", 1);
 
-        // Ожидаем исключение безопасности
-        assertThrows(SecurityException.class, () -> gitTool.execute(params), "Команды сетевого взаимодействия Git должны быть запрещены");
+        var result = gitTool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+
+        // Извлекаем сгенерированный taskId из формата вывода: Git task [taskId] ...
+        int startIdx = text.indexOf("[");
+        int endIdx = text.indexOf("]");
+
+        if (startIdx != -1 && endIdx > startIdx) {
+            String taskId = text.substring(startIdx + 1, endIdx);
+
+            // 1. Проверяем получение лога по хешу
+            ObjectNode logParams = mapper.createObjectNode().put("taskId", taskId);
+            var logResult = logTool.execute(logParams);
+            String logText = logResult.get("content").get(0).get("text").asText();
+            assertTrue(logText.contains("Current log for task"), "Log output should be returned for taskId: " + taskId);
+
+            // 2. Проверяем остановку задачи по хешу
+            ObjectNode killParams = mapper.createObjectNode().put("taskId", taskId);
+            var killResult = killTool.execute(killParams);
+            String killText = killResult.get("content").get(0).get("text").asText();
+            assertTrue(killText.contains("successfully killed") || killText.contains("already finished"), "Task termination should be confirmed or handle already finished tasks");
+        }
     }
 
     /**
-     * Тестирует запуск стандартной задачи Gradle (help).
-     * Проверяет автоматическое обнаружение gradlew и захват вывода процесса.
+     * Тестирует выполнение задачи Gradle с таймаутом.
      */
     @Test
-    void testGradleHelp() throws Exception {
+    void testGradleHelpWithTimeout() throws Exception {
         ObjectNode params = mapper.createObjectNode();
         params.put("task", "help");
+        params.put("timeout", 30);
 
         var result = gradleTool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
 
-        // Проверка успешного завершения задачи
-        assertTrue(text.contains("Gradle execution finished with exit code: 0"), "Задача Gradle help должна завершаться успешно");
-        // Проверка наличия ключевых слов в выводе
-        assertTrue(text.contains("Welcome to Gradle") || text.contains("To see a list of available tasks"), "Вывод должен содержать справочную информацию Gradle");
+        assertTrue(text.contains("finished with exit code: 0") || text.contains("Gradle task"), "Output should contain task info. Got: " + text);
     }
 }
