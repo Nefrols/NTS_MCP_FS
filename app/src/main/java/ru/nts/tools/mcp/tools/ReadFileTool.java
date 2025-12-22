@@ -68,11 +68,13 @@ public class ReadFileTool implements McpTool {
         // Защита от OOM
         PathSanitizer.checkFileSize(path);
 
-        Charset charset = EncodingUtils.detectEncoding(path);
-        // Регистрируем доступ к файлу для возможности последующего редактирования
+        EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
+        Charset charset = fileData.charset();
+        String content = fileData.content();
+
+        // Регистрируем доступ к файлу
         AccessTracker.registerRead(path);
         
-        String content = Files.readString(path, charset);
         String[] lines = content.split("\n", -1);
         String resultText;
 

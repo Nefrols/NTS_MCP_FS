@@ -93,9 +93,14 @@ public class PathSanitizer {
      * @return true, если путь защищен.
      */
     public static boolean isProtected(Path path) {
-        String pathStr = path.toString().replace(File.separator, "/");
-        for (String protectedName : PROTECTED_NAMES) {
-            if (pathStr.contains("/" + protectedName + "/") || pathStr.endsWith("/" + protectedName) || path.getFileName().toString().equals(protectedName)) {
+        // Быстрая проверка по имени файла
+        if (PROTECTED_NAMES.contains(path.getFileName().toString())) {
+            return true;
+        }
+        
+        // Глубокая проверка по частям пути
+        for (Path part : path) {
+            if (PROTECTED_NAMES.contains(part.toString())) {
                 return true;
             }
         }

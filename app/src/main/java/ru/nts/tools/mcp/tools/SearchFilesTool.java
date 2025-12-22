@@ -87,10 +87,11 @@ public class SearchFilesTool implements McpTool {
                             // Проверка размера перед чтением (защита от OOM)
                             PathSanitizer.checkFileSize(path);
                             
-                            // Автоматическое определение кодировки и проверка на бинарность
-                            Charset charset = EncodingUtils.detectEncoding(path);
+                            // Читаем контент и кодировку за один проход
+                            EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
+                            String content = fileData.content();
+                            Charset charset = fileData.charset();
                             
-                            String content = Files.readString(path, charset);
                             String[] allLines = content.split("\n", -1);
                             List<MatchedLine> matchedLines = new ArrayList<>();
 

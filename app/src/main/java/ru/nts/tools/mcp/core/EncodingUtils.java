@@ -3,59 +3,72 @@ package ru.nts.tools.mcp.core;
 
 import org.mozilla.universalchardet.UniversalDetector;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Утилита для определения кодировки и типа файла (текстовый/бинарный).
+ * Утилита для определения кодировки и эффективного чтения файлов.
  */
 public class EncodingUtils {
 
     /**
-     * Определяет кодировку файла.
-     * Также выполняет базовую проверку на бинарность.
-     *
-     * @param path Путь к файлу.
-     * @return Обнаруженная кодировка или UTF-8 по умолчанию.
-     * @throws IOException Если произошла ошибка ввода-вывода или файл бинарный.
+     * Результат чтения текстового файла.
+     */
+    public record TextFileContent(String content, Charset charset) {}
+
+    /**
+     * Выполняет чтение текстового файла за один проход (Single-pass IO).
+     * Определяет кодировку, проверяет на бинарность и возвращает контент.
+     */
+    public static TextFileContent readTextFile(Path path) throws IOException {
+        byte[] allBytes = Files.readAllBytes(path);
+        
+        // Определение кодировки сначала
+        UniversalDetector detector = new UniversalDetector(null);
+        detector.handleData(allBytes, 0, allBytes.length);
+        detector.dataEnd();
+        
+        String encoding = detector.getDetectedCharset();
+        Charset charset = StandardCharsets.UTF_8;
+        if (encoding != null) {
+            try {
+                charset = Charset.forName(encoding);
+            } catch (Exception ignored) {}
+        }
+
+        // Проверка на бинарность: если кодировка не UTF-16/32 и есть NULL-байты
+        if (!charset.name().startsWith("UTF-16") && !charset.name().startsWith("UTF-32")) {
+            int checkLimit = Math.min(allBytes.length, 8192);
+            for (int i = 0; i < checkLimit; i++) {
+                if (allBytes[i] == 0) {
+                    throw new IOException("Binary file detected (contains NULL bytes).");
+                }
+            }
+        }
+
+        return new TextFileContent(new String(allBytes, charset), charset);
+    }
+
+    /**
+     * Определяет кодировку файла (облегченная версия).
      */
     public static Charset detectEncoding(Path path) throws IOException {
-        try (InputStream inputStream = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+        try (var inputStream = Files.newInputStream(path)) {
             byte[] buffer = new byte[4096];
             UniversalDetector detector = new UniversalDetector(null);
 
             int bytesRead = inputStream.read(buffer);
             if (bytesRead > 0) {
-                // Базовая проверка на бинарный файл (поиск NULL-байта)
-                for (int i = 0; i < bytesRead; i++) {
-                    if (buffer[i] == 0) {
-                        throw new IOException("Binary file detected (contains NULL bytes).");
-                    }
-                }
                 detector.handleData(buffer, 0, bytesRead);
             }
-
-            // Дочитываем остальное если нужно (хотя для кодировки обычно хватает 4кб)
-            int read;
-            while ((read = inputStream.read(buffer)) > 0 && !detector.isDone()) {
-                detector.handleData(buffer, 0, read);
-            }
-
             detector.dataEnd();
             String encoding = detector.getDetectedCharset();
-            if (encoding == null) {
-                return StandardCharsets.UTF_8; // fallback
-            }
-            try {
-                return Charset.forName(encoding);
-            } catch (Exception e) {
-                return StandardCharsets.UTF_8;
-            }
+            return (encoding != null) ? Charset.forName(encoding) : StandardCharsets.UTF_8;
+        } catch (Exception e) {
+            return StandardCharsets.UTF_8;
         }
     }
 }

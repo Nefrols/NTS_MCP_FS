@@ -177,8 +177,9 @@ public class EditFileTool implements McpTool {
         // Защита от OOM
         PathSanitizer.checkFileSize(path);
 
-        Charset charset = EncodingUtils.detectEncoding(path);
-        String content = Files.readString(path, charset);
+        EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
+        Charset charset = fileData.charset();
+        String content = fileData.content();
         
         // Разделяем контент на строки для корректной работы батчинга по индексам
         List<String> currentLines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
