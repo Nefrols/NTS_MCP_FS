@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
@@ -85,8 +86,11 @@ public class RenameFileTool implements McpTool {
             var result = mapper.createObjectNode();
             var contentArray = result.putArray("content");
             
+            String gitStatus = GitUtils.getFileStatus(target);
             StringBuilder sb = new StringBuilder();
-            sb.append("Successfully renamed to ").append(newName).append("\n\n");
+            sb.append("Successfully renamed to ").append(newName);
+            if (!gitStatus.isEmpty()) sb.append(" [Git: ").append(gitStatus).append("]");
+            sb.append("\n\n");
             sb.append("Directory content ").append(target.getParent()).append(":\n");
             sb.append(getDirectoryListing(target.getParent()));
             

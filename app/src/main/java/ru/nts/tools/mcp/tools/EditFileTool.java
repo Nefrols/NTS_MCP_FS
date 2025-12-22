@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.EncodingUtils;
+import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
@@ -109,11 +110,18 @@ public class EditFileTool implements McpTool {
         // Открываем одну глобальную транзакцию на весь батч файлов
         TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)");
         try {
+            StringBuilder statusMsg = new StringBuilder();
+            statusMsg.append("Successfully updated ").append(editsArray.size()).append(" files:\n");
+            
             for (JsonNode editNode : editsArray) {
-                applyFileEdits(editNode);
+                Path path = applyFileEdits(editNode);
+                String gitStatus = GitUtils.getFileStatus(path);
+                statusMsg.append("- ").append(path.getFileName());
+                if (!gitStatus.isEmpty()) statusMsg.append(" [Git: ").append(gitStatus).append("]");
+                statusMsg.append("\n");
             }
             TransactionManager.commit();
-            return createResponse("Successfully updated files: " + editsArray.size());
+            return createResponse(statusMsg.toString().trim());
         } catch (Exception e) {
             // При ошибке в ЛЮБОМ файле откатываем изменения во ВСЕХ файлах транзакции
             TransactionManager.rollback();
@@ -132,9 +140,14 @@ public class EditFileTool implements McpTool {
         // Транзакция для одного файла
         TransactionManager.startTransaction("Edit file: " + pathStr);
         try {
-            applyFileEdits(params);
+            Path path = applyFileEdits(params);
             TransactionManager.commit();
-            return createResponse("Edits successfully applied to file: " + pathStr);
+            
+            String gitStatus = GitUtils.getFileStatus(path);
+            String msg = "Edits successfully applied to file: " + pathStr;
+            if (!gitStatus.isEmpty()) msg += " [Git: " + gitStatus + "]";
+            
+            return createResponse(msg);
         } catch (Exception e) {
             TransactionManager.rollback();
             throw e;
@@ -146,8 +159,9 @@ public class EditFileTool implements McpTool {
      * Выполняет чтение, бэкап и последовательное применение операций.
      * 
      * @param fileParams Параметры правок для конкретного файла (path + operations/text).
+     * @return Путь к измененному файлу.
      */
-    private void applyFileEdits(JsonNode fileParams) throws Exception {
+    private Path applyFileEdits(JsonNode fileParams) throws Exception {
         String pathStr = fileParams.get("path").asText();
         Path path = PathSanitizer.sanitize(pathStr, false);
 
@@ -188,7 +202,7 @@ public class EditFileTool implements McpTool {
             // Режим нечеткой замены текста (fuzzy match)
             String newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
             Files.writeString(path, newContent, charset);
-            return;
+            return path;
         } else if (fileParams.has("startLine") && (fileParams.has("newText") || fileParams.has("content"))) {
             // Одиночная правка диапазона (для совместимости)
             applyTypedOperation(currentLines, fileParams, 0);
@@ -198,6 +212,7 @@ public class EditFileTool implements McpTool {
 
         // Физическая запись промежуточного результата (транзакция защищает файл)
         Files.writeString(path, String.join("\n", currentLines), charset);
+        return path;
     }
 
     /**

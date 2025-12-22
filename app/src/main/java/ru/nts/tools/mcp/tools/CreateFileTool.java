@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
@@ -82,8 +83,11 @@ public class CreateFileTool implements McpTool {
             var result = mapper.createObjectNode();
             var contentArray = result.putArray("content");
             
+            String gitStatus = GitUtils.getFileStatus(path);
             StringBuilder sb = new StringBuilder();
-            sb.append("File created successfully: ").append(pathStr).append("\n\n");
+            sb.append("File created successfully: ").append(pathStr);
+            if (!gitStatus.isEmpty()) sb.append(" [Git: ").append(gitStatus).append("]");
+            sb.append("\n\n");
             sb.append("Directory content ").append(path.getParent()).append(":\n");
             sb.append(getDirectoryListing(path.getParent()));
             

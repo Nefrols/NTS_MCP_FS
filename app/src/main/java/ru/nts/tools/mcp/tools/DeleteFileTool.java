@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
@@ -90,7 +92,12 @@ public class DeleteFileTool implements McpTool {
 
         var result = mapper.createObjectNode();
         var contentArray = result.putArray("content");
-        contentArray.addObject().put("type", "text").put("text", "Deleted successfully: " + pathStr);
+        
+        String gitStatus = GitUtils.getFileStatus(path.getParent());
+        String msg = "Deleted successfully: " + pathStr;
+        if (!gitStatus.isEmpty()) msg += " [Parent Git: " + gitStatus + "]";
+        
+        contentArray.addObject().put("type", "text").put("text", msg);
         return result;
     }
 }
