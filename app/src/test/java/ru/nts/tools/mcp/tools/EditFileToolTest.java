@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +20,7 @@ class EditFileToolTest {
 
     @Test
     void testReplaceText(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.writeString(file, "Hello World");
 
@@ -33,6 +35,7 @@ class EditFileToolTest {
 
     @Test
     void testReplaceLines(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.write(file, List.of("Line 0", "Line 1", "Line 2", "Line 3"));
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +18,7 @@ class FileInfoToolTest {
 
     @Test
     void testExecute(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         String contentStr = "Hello World\nLine 2";
         Files.writeString(file, contentStr);

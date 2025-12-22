@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +19,7 @@ class SearchFilesToolTest {
 
     @Test
     void testSearch(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path subDir = Files.createDirectory(tempDir.resolve("sub"));
         Files.writeString(tempDir.resolve("file1.txt"), "contains target string\nanother target here");
         Files.writeString(subDir.resolve("file2.txt"), "also target here");
@@ -40,6 +42,7 @@ class SearchFilesToolTest {
 
     @Test
     void testParallelSearchStress(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         int fileCount = 100;
         for (int i = 0; i < fileCount; i++) {
             Files.writeString(tempDir.resolve("file" + i + ".txt"), 
@@ -62,6 +65,7 @@ class SearchFilesToolTest {
 
     @Test
     void testRegexSearch(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Files.writeString(tempDir.resolve("test1.txt"), "The quick brown fox");
         Files.writeString(tempDir.resolve("test2.txt"), "The slow red fox");
 

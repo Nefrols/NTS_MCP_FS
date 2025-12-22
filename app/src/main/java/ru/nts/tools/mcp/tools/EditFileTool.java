@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -32,9 +33,9 @@ public class EditFileTool implements McpTool {
 
     @Override
     public JsonNode getInputSchema() {
-        ObjectNode schema = mapper.createObjectNode();
+        var schema = mapper.createObjectNode();
         schema.put("type", "object");
-        ObjectNode props = schema.putObject("properties");
+        var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
         props.putObject("oldText").put("type", "string").put("description", "Текст для замены");
         props.putObject("newText").put("type", "string").put("description", "Новый текст");
@@ -47,9 +48,11 @@ public class EditFileTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        Path path = Path.of(params.get("path").asText());
+        String pathStr = params.get("path").asText();
+        Path path = PathSanitizer.sanitize(pathStr, false); // Запрещаем редактирование защищенных файлов
+
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("Файл не найден: " + path);
+            throw new IllegalArgumentException("Файл не найден: " + pathStr);
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);

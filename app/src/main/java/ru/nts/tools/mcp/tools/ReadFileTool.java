@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -32,9 +33,9 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public JsonNode getInputSchema() {
-        ObjectNode schema = mapper.createObjectNode();
+        var schema = mapper.createObjectNode();
         schema.put("type", "object");
-        ObjectNode props = schema.putObject("properties");
+        var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
         props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (включительно, от 0)");
         props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (исключительно, от 0)");
@@ -46,9 +47,11 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        Path path = Path.of(params.get("path").asText());
+        String pathStr = params.get("path").asText();
+        Path path = PathSanitizer.sanitize(pathStr, true); // Разрешаем чтение защищенных файлов
+
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("Файл не найден: " + path);
+            throw new IllegalArgumentException("Файл не найден: " + pathStr);
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);

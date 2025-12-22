@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
@@ -34,9 +35,9 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public JsonNode getInputSchema() {
-        ObjectNode schema = mapper.createObjectNode();
+        var schema = mapper.createObjectNode();
         schema.put("type", "object");
-        ObjectNode props = schema.putObject("properties");
+        var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
         schema.putArray("required").add("path");
         return schema;
@@ -44,9 +45,11 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        Path path = Path.of(params.get("path").asText());
+        String pathStr = params.get("path").asText();
+        Path path = PathSanitizer.sanitize(pathStr, true); // Разрешаем чтение защищенных файлов
+        
         if (!Files.exists(path) || !Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Файл не найден или не является обычным файлом: " + path);
+            throw new IllegalArgumentException("Файл не найден или не является обычным файлом: " + pathStr);
         }
 
         BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);

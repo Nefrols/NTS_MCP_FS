@@ -28,6 +28,8 @@ public class McpServer {
         router.registerTool(new ReadFileTool());
         router.registerTool(new EditFileTool());
         router.registerTool(new SearchFilesTool());
+        router.registerTool(new CreateFileTool());
+        router.registerTool(new DeleteFileTool());
     }
 
     public static void main(String[] args) {

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +19,7 @@ class ReadFileToolTest {
 
     @Test
     void testReadFull(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.writeString(file, "Line 0\nLine 1\nLine 2");
 
@@ -28,6 +30,7 @@ class ReadFileToolTest {
 
     @Test
     void testReadLine(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.writeString(file, "Line 0\nLine 1\nLine 2");
 
@@ -41,6 +44,7 @@ class ReadFileToolTest {
 
     @Test
     void testReadRange(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.writeString(file, "Line 0\nLine 1\nLine 2\nLine 3");
 

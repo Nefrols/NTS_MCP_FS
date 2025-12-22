@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpTool;
+import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -31,9 +32,9 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public JsonNode getInputSchema() {
-        ObjectNode schema = mapper.createObjectNode();
+        var schema = mapper.createObjectNode();
         schema.put("type", "object");
-        ObjectNode props = schema.putObject("properties");
+        var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к директории");
         schema.putArray("required").add("path");
         return schema;
@@ -41,16 +42,18 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        Path path = Path.of(params.get("path").asText());
+        String pathStr = params.get("path").asText();
+        Path path = PathSanitizer.sanitize(pathStr, true); // Разрешаем листинг в защищенных папках
+
         if (!Files.exists(path) || !Files.isDirectory(path)) {
-            throw new IllegalArgumentException("Директория не найдена: " + path);
+            throw new IllegalArgumentException("Директория не найдена: " + pathStr);
         }
 
         List<String> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
             for (Path entry : stream) {
                 String type = Files.isDirectory(entry) ? "[DIR] " : "[FILE] ";
-                entries.add(type + entry.getFileName().toString() + " (" + entry.toAbsolutePath() + ")");
+                entries.add(type + entry.getFileName().toString());
             }
         }
 
@@ -58,7 +61,7 @@ public class ListDirectoryTool implements McpTool {
         ArrayNode content = result.putArray("content");
         ObjectNode text = content.addObject();
         text.put("type", "text");
-        text.put("text", String.join("\n", entries));
+        text.put("text", entries.isEmpty() ? "(пусто)" : String.join("\n", entries));
         
         return result;
     }
