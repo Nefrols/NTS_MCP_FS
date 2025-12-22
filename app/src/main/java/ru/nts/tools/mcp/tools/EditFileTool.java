@@ -17,11 +17,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Инструмент для редактирования файлов.
- * Устойчив к ошибкам LLM и поддерживает проверку ожидаемого содержимого.
+ * Поддерживает контекстную адресацию и проверку содержимого.
  */
 public class EditFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -33,7 +32,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Редактирует файл. Поддерживает замену текста и замену диапазона строк с проверкой expectedContent.";
+        return "Редактирует файл. Поддерживает контекстную адресацию (contextStartPattern) и проверку expectedContent.";
     }
 
     @Override
@@ -44,9 +43,10 @@ public class EditFileTool implements McpTool {
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
         props.putObject("oldText").put("type", "string").put("description", "Текст для замены");
         props.putObject("newText").put("type", "string").put("description", "Новый текст");
-        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (от 1)");
-        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (от 1)");
-        props.putObject("expectedContent").put("type", "string").put("description", "Ожидаемое содержимое диапазона строк для проверки");
+        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (от 1, или относительная от контекста)");
+        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (от 1, или относительная от контекста)");
+        props.putObject("expectedContent").put("type", "string").put("description", "Ожидаемое содержимое диапазона");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Регулярное выражение для поиска строки-якоря");
         
         schema.putArray("required").add("path");
         return schema;
@@ -62,46 +62,53 @@ public class EditFileTool implements McpTool {
         }
 
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Доступ запрещен: нельзя редактировать файл, который не был прочитан. Используйте read_file.");
+            throw new SecurityException("Доступ запрещен: файл не был прочитан.");
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
         String content = Files.readString(path, charset);
+        String[] lines = content.split("\n", -1);
         String resultMsg;
 
         if (params.has("oldText") && params.has("newText")) {
             String oldText = params.get("oldText").asText();
             String newText = params.get("newText").asText();
-            
             content = performSmartReplace(content, oldText, newText);
             Files.writeString(path, content, charset);
             resultMsg = "Успешно заменено вхождение текста.";
         } else if (params.has("startLine") && params.has("endLine") && params.has("newText")) {
-            int start = params.get("startLine").asInt();
-            int end = params.get("endLine").asInt();
+            int requestedStart = params.get("startLine").asInt();
+            int requestedEnd = params.get("endLine").asInt();
             String newText = params.get("newText").asText();
             String expectedContent = params.path("expectedContent").asText(null);
+            String contextPattern = params.path("contextStartPattern").asText(null);
             
-            String[] lines = content.split("\n", -1);
-            
-            // Валидация диапазона
-            if (start < 1 || end > lines.length || start > end) {
-                throw new IllegalArgumentException("Неверный диапазон строк: " + start + "-" + end + ". В файле " + lines.length + " строк.");
+            int anchorLine = 0; // 0-based
+            if (contextPattern != null) {
+                anchorLine = findAnchorLine(lines, contextPattern);
+                if (anchorLine == -1) {
+                    throw new IllegalArgumentException("Контекстный паттерн не найден: " + contextPattern);
+                }
             }
 
-            // Проверка expectedContent
+            int start = anchorLine + requestedStart; 
+            int end = anchorLine + requestedEnd;
+
+            if (start < 1 || end > lines.length || start > end) {
+                throw new IllegalArgumentException("Ошибка адресации. Абсолютный диапазон: " + start + "-" + end + " (Файл: " + lines.length + " строк).");
+            }
+
+            // Валидация содержимого
             if (expectedContent != null) {
                 StringBuilder actualPart = new StringBuilder();
                 for (int i = start - 1; i < end; i++) {
                     actualPart.append(lines[i].replace("\r", ""));
                     if (i < end - 1) actualPart.append("\n");
                 }
-                
                 String normActual = actualPart.toString().replace("\r", "");
                 String normExpected = expectedContent.replace("\r", "");
-                
                 if (!normActual.equals(normExpected)) {
-                    throw new IllegalStateException("Контроль содержимого не пройден! Ожидалось:\n[" + normExpected + "]\nНо на строках " + start + "-" + end + " сейчас:\n[" + normActual + "]");
+                    throw new IllegalStateException("Контроль содержимого не пройден! Ожидалось:\n[" + normExpected + "]\nНо получено:\n[" + normActual + "]");
                 }
             }
 
@@ -115,59 +122,51 @@ public class EditFileTool implements McpTool {
                     resultLines.add(lines[i].replace("\r", ""));
                 }
             }
-            
             Files.writeString(path, String.join("\n", resultLines), charset);
-            resultMsg = "Успешно заменен диапазон строк " + start + "-" + end;
+            resultMsg = "Успешно заменен диапазон строк " + start + "-" + end + (contextPattern != null ? " (относительно контекста)" : "");
         } else {
-            throw new IllegalArgumentException("Недостаточно параметров для редактирования.");
+            throw new IllegalArgumentException("Недостаточно параметров.");
         }
 
         ObjectNode result = mapper.createObjectNode();
-        var contentArray = result.putArray("content");
-        contentArray.addObject().put("type", "text").put("text", resultMsg);
+        result.putArray("content").addObject().put("type", "text").put("text", resultMsg);
         return result;
     }
 
-    private String performSmartReplace(String content, String oldText, String newText) {
-        if (content.contains(oldText)) {
-            return content.replace(oldText, newText);
+    private int findAnchorLine(String[] lines, String patternStr) {
+        Pattern pattern = Pattern.compile(patternStr);
+        for (int i = 0; i < lines.length; i++) {
+            if (pattern.matcher(lines[i]).find()) {
+                return i;
+            }
         }
+        return -1;
+    }
 
+    private String performSmartReplace(String content, String oldText, String newText) {
+        if (content.contains(oldText)) return content.replace(oldText, newText);
         String normContent = content.replace("\r\n", "\n");
         String normOld = oldText.replace("\r\n", "\n");
-        if (normContent.contains(normOld)) {
-            return normContent.replace(normOld, newText);
-        }
+        if (normContent.contains(normOld)) return normContent.replace(normOld, newText);
 
-        String escapedOld = escapeRegexExceptWhitespace(normOld);
-        String regex = escapedOld.replaceAll("\s+", "\\\\s+");
-        
-        Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(normContent);
-        
-        if (matcher.find()) {
-            int start = matcher.start();
-            int end = matcher.end();
-            if (matcher.find()) {
-                throw new IllegalArgumentException("Найдено более одного совпадения при нечетком поиске. Укажите более точный контекст.");
-            }
-            return normContent.substring(0, start) + newText + normContent.substring(end);
+        String regex = escapeRegexExceptWhitespace(normOld).replaceAll("\\s+", "\\\\s+");
+        Pattern p = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
+        Matcher m = p.matcher(normContent);
+        if (m.find()) {
+            int s = m.start();
+            int e = m.end();
+            if (m.find()) throw new IllegalArgumentException("Неоднозначное совпадение.");
+            return normContent.substring(0, s) + newText + normContent.substring(e);
         }
-
-        throw new IllegalArgumentException("Текст не найден. Проверьте правильность oldText или используйте номера строк с expectedContent.");
+        throw new IllegalArgumentException("Текст не найден.");
     }
 
     private String escapeRegexExceptWhitespace(String input) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < input.length(); i++) {
-            char c = input.charAt(i);
-            if (Character.isWhitespace(c)) {
-                sb.append(c);
-            } else if ("<([{\\^-=$!|]})?*+.>".indexOf(c) != -1) {
-                sb.append('\\').append(c);
-            } else {
-                sb.append(c);
-            }
+        for (char c : input.toCharArray()) {
+            if (Character.isWhitespace(c)) sb.append(c);
+            else if ("<([{\\^-=$!|]})?*+.>".indexOf(c) != -1) sb.append('\\').append(c);
+            else sb.append(c);
         }
         return sb.toString();
     }

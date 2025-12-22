@@ -76,19 +76,47 @@ class EditFileToolTest {
     }
 
     @Test
-    void testExpectedContentFailure(@TempDir Path tempDir) throws Exception {
+    void testContextAddressing(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.txt");
-        Files.write(file, List.of("AAA", "BBB", "CCC"));
+        Path file = tempDir.resolve("test.java");
+        Files.write(file, List.of(
+            "public class Test {",
+            "    public void method() {",
+            "        System.out.println(\"Old\");",
+            "    }",
+            "}"
+        ));
         AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("startLine", 2);
+        params.put("contextStartPattern", "void method");
+        params.put("startLine", 2); // Строка внутри метода
         params.put("endLine", 2);
-        params.put("expectedContent", "WRONG");
+        params.put("expectedContent", "        System.out.println(\"Old\");");
+        params.put("newText", "        System.out.println(\"New\");");
+
+        tool.execute(params);
+        
+        String content = Files.readString(file).replace("\r", "");
+        assertTrue(content.contains("System.out.println(\"New\");"));
+        assertFalse(content.contains("System.out.println(\"Old\");"));
+    }
+
+    @Test
+    void testContextNotFound(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("test.txt");
+        Files.writeString(file, "Some content");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("contextStartPattern", "NON_EXISTENT");
+        params.put("startLine", 1);
+        params.put("endLine", 1);
         params.put("newText", "XXX");
 
-        assertThrows(IllegalStateException.class, () -> tool.execute(params));
+        assertThrows(IllegalArgumentException.class, () -> tool.execute(params));
     }
 }
