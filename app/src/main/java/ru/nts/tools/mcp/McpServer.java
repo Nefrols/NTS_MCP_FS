@@ -4,18 +4,19 @@ package ru.nts.tools.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.McpRouter;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Основной класс MCP сервера для работы с файловой системой.
- * Реализует базовый цикл обработки JSON-RPC сообщений через стандартный ввод/вывод.
+ * Основной класс MCP сервера.
  */
 public class McpServer {
 
     private static final ObjectMapper mapper = new ObjectMapper();
+    private static final McpRouter router = new McpRouter(mapper);
     private static final boolean DEBUG = true;
 
     public static void main(String[] args) {
@@ -36,11 +37,6 @@ public class McpServer {
         }
     }
 
-    /**
-     * Обрабатывает входящее JSON-RPC сообщение.
-     *
-     * @param message Строка сообщения.
-     */
     private static void processMessage(String message) {
         try {
             JsonNode request = mapper.readTree(message);
@@ -51,31 +47,50 @@ public class McpServer {
                 System.err.println("Received method: " + method);
             }
 
-            // Базовая заглушка для обработки методов
             ObjectNode response = mapper.createObjectNode();
             response.set("jsonrpc", mapper.convertValue("2.0", JsonNode.class));
             if (id != null) {
                 response.set("id", id);
             }
 
-            switch (method) {
-                case "initialize" -> {
-                    ObjectNode result = mapper.createObjectNode();
-                    result.put("protocolVersion", "2024-11-05");
-                    response.set("result", result);
-                }
-                case "tools/list" -> {
-                    ObjectNode result = mapper.createObjectNode();
-                    result.set("tools", mapper.createArrayNode()); // Пока пусто
-                    response.set("result", result);
-                }
-                default -> {
-                    if (id != null) {
-                        ObjectNode error = mapper.createObjectNode();
-                        error.put("code", -32601);
-                        error.put("message", "Method not found");
-                        response.set("error", error);
+            try {
+                switch (method) {
+                    case "initialize" -> {
+                        ObjectNode result = mapper.createObjectNode();
+                        result.put("protocolVersion", "2024-11-05");
+                        result.set("capabilities", mapper.createObjectNode()); // Добавить capabilities если нужно
+                        ObjectNode serverInfo = result.putObject("serverInfo");
+                        serverInfo.put("name", "L2NTS-FileSystem-MCP");
+                        serverInfo.put("version", "1.0.0");
+                        response.set("result", result);
                     }
+                    case "tools/list" -> {
+                        response.set("result", router.listTools());
+                    }
+                    case "tools/call" -> {
+                        String toolName = request.path("params").path("name").asText();
+                        JsonNode params = request.path("params").path("arguments");
+                        response.set("result", router.callTool(toolName, params));
+                    }
+                    case "notifications/initialized" -> {
+                        // Игнорируем или логгируем
+                        return;
+                    }
+                    default -> {
+                        if (id != null) {
+                            ObjectNode error = mapper.createObjectNode();
+                            error.put("code", -32601);
+                            error.put("message", "Method not found: " + method);
+                            response.set("error", error);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                if (id != null) {
+                    ObjectNode error = mapper.createObjectNode();
+                    error.put("code", -32000);
+                    error.put("message", "Internal error: " + e.getMessage());
+                    response.set("error", error);
                 }
             }
 
