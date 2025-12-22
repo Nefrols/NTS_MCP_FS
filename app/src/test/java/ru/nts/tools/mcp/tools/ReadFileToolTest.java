@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,9 +53,42 @@ class ReadFileToolTest {
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
         params.put("startLine", 2);
-        params.put("endLine", 4);
+        params.put("endLine", 3); // Читаем 2 и 3
 
         JsonNode result = tool.execute(params);
         assertEquals("Line 2\nLine 3", result.get("content").get(0).get("text").asText());
+    }
+
+    @Test
+    void testReadContext(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("context.txt");
+        Files.writeString(file, "1\n2\n3\nTARGET\n5\n6\n7");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("contextStartPattern", "TARGET");
+        params.put("contextRange", 2);
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+        assertEquals("2\n3\nTARGET\n5\n6", text);
+    }
+
+    @Test
+    void testReadContextBoundaries(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("bound.txt");
+        Files.writeString(file, "TOP\n2\n3");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("contextStartPattern", "TOP");
+        params.put("contextRange", 5);
+
+        JsonNode result = tool.execute(params);
+        assertEquals("TOP\n2\n3", result.get("content").get(0).get("text").asText());
     }
 }

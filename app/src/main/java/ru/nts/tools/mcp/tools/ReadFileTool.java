@@ -13,11 +13,15 @@ import ru.nts.tools.mcp.core.PathSanitizer;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
  * Инструмент для чтения содержимого файла.
+ * Поддерживает чтение по диапазонам и умное чтение вокруг контекста.
  */
 public class ReadFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -29,7 +33,7 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Читает содержимое файла с автоматическим определением кодировки. Можно указать конкретную строку или диапазон строк (от 1).";
+        return "Читает содержимое файла. Поддерживает диапазоны строк и поиск контекста (contextStartPattern + contextRange).";
     }
 
     @Override
@@ -38,9 +42,11 @@ public class ReadFileTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
-        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (включительно, от 1)");
-        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (исключительно, от 1)");
-        props.putObject("line").put("type", "integer").put("description", "Конкретная строка для чтения (от 1)");
+        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (от 1)");
+        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (от 1)");
+        props.putObject("line").put("type", "integer").put("description", "Конкретная строка (от 1)");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Паттерн для поиска якоря");
+        props.putObject("contextRange").put("type", "integer").put("description", "Количество строк вокруг паттерна (по умолчанию 0)");
         
         schema.putArray("required").add("path");
         return schema;
@@ -57,28 +63,59 @@ public class ReadFileTool implements McpTool {
 
         Charset charset = EncodingUtils.detectEncoding(path);
         AccessTracker.registerRead(path);
-        String contentText;
-        if (params.has("line")) {
-            int lineNum = params.get("line").asInt();
-            try (Stream<String> lines = Files.lines(path, charset)) {
-                contentText = lines.skip(Math.max(0, lineNum - 1)).findFirst().orElse("");
+        
+        String content = Files.readString(path, charset);
+        String[] lines = content.split("\n", -1);
+        String resultText;
+
+        if (params.has("contextStartPattern")) {
+            // Умное чтение вокруг контекста
+            String patternStr = params.get("contextStartPattern").asText();
+            int range = params.path("contextRange").asInt(0);
+            
+            int anchorIdx = -1;
+            Pattern pattern = Pattern.compile(patternStr);
+            for (int i = 0; i < lines.length; i++) {
+                if (pattern.matcher(lines[i]).find()) {
+                    anchorIdx = i;
+                    break;
+                }
             }
+
+            if (anchorIdx == -1) {
+                throw new IllegalArgumentException("Паттерн не найден: " + patternStr);
+            }
+
+            int start = Math.max(0, anchorIdx - range);
+            int end = Math.min(lines.length - 1, anchorIdx + range);
+            
+            resultText = Stream.of(Arrays.copyOfRange(lines, start, end + 1))
+                    .map(l -> l.replace("\r", ""))
+                    .collect(Collectors.joining("\n"));
+            
+        } else if (params.has("line")) {
+            int lineNum = params.get("line").asInt();
+            resultText = (lineNum >= 1 && lineNum <= lines.length) ? lines[lineNum - 1].replace("\r", "") : "";
         } else if (params.has("startLine") || params.has("endLine")) {
             int start = params.path("startLine").asInt(1);
-            int end = params.path("endLine").asInt(Integer.MAX_VALUE);
-            try (Stream<String> lines = Files.lines(path, charset)) {
-                contentText = lines.skip(Math.max(0, start - 1)).limit(Math.max(0, end - start)).collect(Collectors.joining("\n"));
+            int end = params.path("endLine").asInt(lines.length);
+            
+            int startIdx = Math.max(0, start - 1);
+            int endIdx = Math.min(lines.length, end);
+            
+            if (startIdx >= endIdx) {
+                resultText = "";
+            } else {
+                resultText = Stream.of(Arrays.copyOfRange(lines, startIdx, endIdx))
+                        .map(l -> l.replace("\r", ""))
+                        .collect(Collectors.joining("\n"));
             }
         } else {
-            contentText = Files.readString(path, charset);
+            resultText = content;
         }
 
         ObjectNode result = mapper.createObjectNode();
-        ArrayNode content = result.putArray("content");
-        ObjectNode text = content.addObject();
-        text.put("type", "text");
-        text.put("text", contentText);
-        
+        result.putArray("content").addObject().put("type", "text").put("text", resultText);
         return result;
     }
 }
