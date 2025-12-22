@@ -59,7 +59,7 @@ class EditFileToolTest {
     }
 
     @Test
-    void testExpectedContentSuccess(@TempDir Path tempDir) throws Exception {
+    void testExpectedContentFailure(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
         Files.write(file, List.of("AAA", "BBB", "CCC"));
@@ -69,11 +69,12 @@ class EditFileToolTest {
         params.put("path", file.toString());
         params.put("startLine", 2);
         params.put("endLine", 2);
-        params.put("expectedContent", "BBB");
+        params.put("expectedContent", "WRONG");
         params.put("newText", "XXX");
 
-        tool.execute(params);
-        assertEquals("AAA\nXXX\nCCC\n", Files.readString(file).replace("\r", ""));
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("АКТУАЛЬНОЕ СОДЕРЖИМОЕ В ДИАПАЗОНЕ 2-2:"));
+        assertTrue(ex.getMessage().contains("[BBB]"));
     }
 
     @Test
