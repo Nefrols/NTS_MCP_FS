@@ -2,6 +2,8 @@
 package ru.nts.tools.mcp.core;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Set;
@@ -15,6 +17,9 @@ public class PathSanitizer {
 
     private static Path root = Paths.get(".").toAbsolutePath().normalize();
     
+    // Максимальный размер файла для текстовых операций (10 MB), чтобы избежать OOM
+    private static final long MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024;
+
     /**
      * Список файлов и папок, которые запрещено изменять или удалять для LLM.
      */
@@ -63,6 +68,21 @@ public class PathSanitizer {
         }
 
         return target;
+    }
+
+    /**
+     * Проверяет, не слишком ли велик файл для загрузки в память.
+     * 
+     * @param path Путь к файлу.
+     * @throws SecurityException Если файл превышает допустимый размер.
+     */
+    public static void checkFileSize(Path path) throws IOException {
+        if (Files.exists(path) && Files.isRegularFile(path)) {
+            long size = Files.size(path);
+            if (size > MAX_TEXT_FILE_SIZE) {
+                throw new SecurityException(String.format("File is too large (%d bytes). Limit is %d bytes.", size, MAX_TEXT_FILE_SIZE));
+            }
+        }
     }
 
     /**

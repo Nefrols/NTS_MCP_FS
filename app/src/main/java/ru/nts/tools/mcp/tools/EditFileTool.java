@@ -174,6 +174,9 @@ public class EditFileTool implements McpTool {
             throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
         }
 
+        // Защита от OOM
+        PathSanitizer.checkFileSize(path);
+
         Charset charset = EncodingUtils.detectEncoding(path);
         String content = Files.readString(path, charset);
         

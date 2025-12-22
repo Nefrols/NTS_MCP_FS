@@ -65,6 +65,9 @@ public class ReadFileTool implements McpTool {
             throw new IllegalArgumentException("File not found: " + pathStr);
         }
 
+        // Защита от OOM
+        PathSanitizer.checkFileSize(path);
+
         Charset charset = EncodingUtils.detectEncoding(path);
         // Регистрируем доступ к файлу для возможности последующего редактирования
         AccessTracker.registerRead(path);

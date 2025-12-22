@@ -30,7 +30,7 @@ import java.util.stream.Stream;
  * - Вывод найденных строк с номерами для мгновенного анализа контекста.
  * - Поддержка контекстных строк (before/after) для лучшего понимания кода.
  * - Маркировка файлов, которые уже были прочитаны LLM ( [READ] ).
- * - Игнорирование системных и защищенных папок.
+ * - Игнорирование системных, защищенных и слишком больших бинарных файлов.
  */
 public class SearchFilesTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -84,7 +84,12 @@ public class SearchFilesTool implements McpTool {
                 walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
                     executor.submit(() -> {
                         try {
+                            // Проверка размера перед чтением (защита от OOM)
+                            PathSanitizer.checkFileSize(path);
+                            
+                            // Автоматическое определение кодировки и проверка на бинарность
                             Charset charset = EncodingUtils.detectEncoding(path);
+                            
                             String content = Files.readString(path, charset);
                             String[] allLines = content.split("\n", -1);
                             List<MatchedLine> matchedLines = new ArrayList<>();
@@ -107,6 +112,7 @@ public class SearchFilesTool implements McpTool {
                                 results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
                             }
                         } catch (Exception ignored) {
+                            // Пропускаем слишком большие или бинарные файлы молча при массовом поиске
                         }
                     });
                 });
@@ -145,7 +151,6 @@ public class SearchFilesTool implements McpTool {
      * Извлекает строку с совпадением и окружающий контекст.
      */
     private void addMatchWithContext(String content, String[] allLines, int startPos, int before, int after, List<MatchedLine> matchedLines) {
-        // Определяем номер строки совпадения
         int lineNum = 1;
         for (int i = 0; i < startPos; i++) {
             if (content.charAt(i) == '\n') lineNum++;
@@ -160,12 +165,10 @@ public class SearchFilesTool implements McpTool {
             boolean isMatch = (currentNum == lineNum);
             String text = allLines[i].replace("\r", "");
             
-            // Избегаем дублей при перекрывающемся контексте
             int finalI = i;
             if (matchedLines.stream().noneMatch(l -> l.number == (finalI + 1))) {
                 matchedLines.add(new MatchedLine(currentNum, text, isMatch));
             } else if (isMatch) {
-                // Если строка уже есть как контекст, помечаем её как совпадение
                 for (int j = 0; j < matchedLines.size(); j++) {
                     if (matchedLines.get(j).number == currentNum) {
                         matchedLines.set(j, new MatchedLine(currentNum, text, true));
