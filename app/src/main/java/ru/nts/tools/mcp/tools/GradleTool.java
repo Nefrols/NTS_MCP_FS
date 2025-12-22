@@ -101,51 +101,85 @@ public class GradleTool implements McpTool {
         }
 
         // Если задача завершилась ошибкой (и не таймаутом), пытаемся выделить самое важное из логов
-        if (result.exitCode() != 0 && !result.isRunning()) {
-            String summary = parseErrors(result.output());
-            if (!summary.isEmpty()) {
-                sb.append("\n=== ERROR SUMMARY ===\n").append(summary).append("\n");
+        if (!result.isRunning()) {
+            String smartSummary = parseSmartSummary(result.output());
+            if (!smartSummary.isEmpty()) {
+                sb.append("\n=== SMART SUMMARY ===\n").append(smartSummary).append("\n");
             }
         }
 
-        sb.append("\nOutput:\n").append(result.output());
+        // Если вывод слишком большой и есть summary, сокращаем лог
+        String output = result.output();
+        if (output.length() > 5000 && sb.indexOf("=== SMART SUMMARY ===") != -1) {
+            sb.append("\nFull output truncated due to size. Showing last 50 lines:\n");
+            String[] lines = output.split("\n");
+            int start = Math.max(0, lines.length - 50);
+            for (int i = start; i < lines.length; i++) {
+                sb.append(lines[i]).append("\n");
+            }
+        } else {
+            sb.append("\nOutput:\n").append(output);
+        }
 
         content.put("text", sb.toString());
         return response;
     }
 
     /**
-     * Выполняет анализ текста лога сборки для выделения критических ошибок.
-     * Распознает ошибки компиляции Java и падения тестов JUnit.
+     * Выполняет глубокий анализ текста лога сборки.
+     * Извлекает:
+     * 1. Статистику тестов (Total, Failed, Skipped).
+     * 2. Ошибки компиляции.
+     * 3. Критические сбои Gradle.
      *
      * @param output Полный текстовый вывод Gradle.
      *
-     * @return Краткая сводка ошибок или пустая строка, если паттерны не найдены.
+     * @return Структурированная сводка.
      */
-    private String parseErrors(String output) {
+    private String parseSmartSummary(String output) {
         StringBuilder summary = new StringBuilder();
 
-        // Паттерн для ошибок Java компилятора: извлекает путь к файлу, строку и описание ошибки.
+        // 1. Поиск статистики тестов
+        Pattern testSummary = Pattern.compile("(\\d+) tests completed, (\\d+) failed, (\\d+) skipped");
+        Matcher ms = testSummary.matcher(output);
+        if (ms.find()) {
+            summary.append(String.format("[TESTS] Total: %s, Failed: %s, Skipped: %s\n", ms.group(1), ms.group(2), ms.group(3)));
+        }
+
+        // 2. Поиск конкретных падений тестов
+        Pattern testFailure = Pattern.compile("(?m)^> Task .* FAILED$");
         Pattern javaError = Pattern.compile("([^\\s]+\\.java):(\\d+): error: (.*)");
-        // Паттерн для отчет о падении тестов в консоли.
-        Pattern testFailure = Pattern.compile("([^\\s]+ > [^\\s]+ FAILED)");
+        Pattern detailedTestFailure = Pattern.compile("([^\\s]+ > [^\\s]+ FAILED)");
 
         String[] lines = output.split("\\n");
+        int compilationErrors = 0;
+        int testFailures = 0;
+
         for (String line : lines) {
-            // Поиск ошибок компиляции
             Matcher mj = javaError.matcher(line);
-            if (mj.find()) {
-                summary.append(String.format("[COMPILATION] %s (Line %s): %s\n", mj.group(1), mj.group(2), mj.group(3)));
+            if (mj.find() && compilationErrors < 10) {
+                summary.append(String.format("[ERROR] %s:%s - %s\n", mj.group(1), mj.group(2), mj.group(3)));
+                compilationErrors++;
                 continue;
             }
 
-            // Поиск проваленных тестов
-            Matcher mt = testFailure.matcher(line);
-            if (mt.find()) {
-                summary.append(String.format("[TEST FAILED] %s\n", mt.group(1)));
+            Matcher mt = detailedTestFailure.matcher(line);
+            if (mt.find() && testFailures < 10) {
+                summary.append(String.format("[FAIL] %s\n", mt.group(1)));
+                testFailures++;
             }
         }
 
-        return summary.toString();
+        if (compilationErrors >= 10) summary.append("... and more compilation errors\n");
+        if (testFailures >= 10) summary.append("... and more test failures\n");
+
+        // 3. Общий статус билда
+        if (output.contains("BUILD FAILED")) {
+            summary.append("[STATUS] BUILD FAILED\n");
+        } else if (output.contains("BUILD SUCCESSFUL")) {
+            summary.append("[STATUS] BUILD SUCCESSFUL\n");
+        }
+
+        return summary.toString().trim();
     }
 }

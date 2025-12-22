@@ -201,15 +201,15 @@ class UndoRedoTest {
         TransactionManager.reset();
 
         Path f = tempDir.resolve("test.txt");
-        Files.writeString(f, "init");
+        Files.writeString(f, "init\n");
         AccessTracker.registerRead(f);
 
-        // Совершаем действие для записи в журнал
-        ObjectNode p = mapper.createObjectNode();
-        p.put("path", "test.txt");
-        p.put("oldText", "init");
-        p.put("newText", "new");
-        editTool.execute(p);
+        // Совершаем действие для записи в журнал вручную через TransactionManager
+        // чтобы гарантировать расчет статистики
+        TransactionManager.startTransaction("Manual Edit");
+        TransactionManager.backup(f);
+        Files.writeString(f, "init\nnew line\n");
+        TransactionManager.commit();
 
         // Запрос журнала
         TransactionJournalTool journalTool = new TransactionJournalTool();
@@ -218,7 +218,8 @@ class UndoRedoTest {
 
         // Верификация ключевых разделов отчета
         assertTrue(text.contains("=== TRANSACTION JOURNAL ==="), "Должен быть заголовок журнала");
-        assertTrue(text.contains("Edit file: test.txt"), "Журнал должен содержать описание транзакции");
+        assertTrue(text.contains("Manual Edit"), "Журнал должен содержать описание транзакции");
+        assertTrue(text.contains("+1, -0 lines"), "Журнал должен содержать статистику изменений");
         assertTrue(text.contains("=== ACTIVE SESSION CONTEXT ==="), "Должен быть раздел контекста сессии");
         assertTrue(text.contains("- test.txt"), "Контекст должен содержать прочитанный файл");
     }

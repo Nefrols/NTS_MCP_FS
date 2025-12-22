@@ -124,6 +124,7 @@ public class TransactionManager {
 
         if (level <= 0) {
             if (!tx.isEmpty()) {
+                tx.updateStats();
                 undoStack.add(tx);
                 // Новая зафиксированная правка делает невозможным REDO старых отмененных правок (стандарт истории)
                 redoStack.clear();
@@ -251,9 +252,7 @@ public class TransactionManager {
             sb.append("  (empty)\n");
         }
         for (int i = undoStack.size() - 1; i >= 0; i--) {
-            Transaction tx = undoStack.get(i);
-            String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
-            sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
+            appendTransactionInfo(sb, undoStack.get(i));
         }
 
         sb.append("\nAvailable for REDO:\n");
@@ -261,12 +260,26 @@ public class TransactionManager {
             sb.append("  (empty)\n");
         }
         for (int i = redoStack.size() - 1; i >= 0; i--) {
-            Transaction tx = redoStack.get(i);
-            String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
-            sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
+            appendTransactionInfo(sb, redoStack.get(i));
         }
 
         return sb.toString();
+    }
+
+    private static void appendTransactionInfo(StringBuilder sb, Transaction tx) {
+        String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
+        sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
+        
+        Path root = PathSanitizer.getRoot();
+        for (Map.Entry<Path, FileDiffStats> entry : tx.stats.entrySet()) {
+            Path relPath = root.relativize(entry.getKey());
+            FileDiffStats s = entry.getValue();
+            sb.append(String.format("    - %s: +%d, -%d lines", relPath, s.added, s.deleted));
+            if (!s.affectedBlocks.isEmpty()) {
+                sb.append(" | Blocks: ").append(String.join(", ", s.affectedBlocks));
+            }
+            sb.append("\n");
+        }
     }
 
     /**
@@ -302,6 +315,11 @@ public class TransactionManager {
          */
         private final Map<Path, Path> snapshots = new HashMap<>();
 
+        /**
+         * Карта: Абсолютный путь файла -> Статистика изменений (diff).
+         */
+        private final Map<Path, FileDiffStats> stats = new HashMap<>();
+
         public Transaction(String description, LocalDateTime timestamp) {
             this.description = description;
             this.timestamp = timestamp;
@@ -329,6 +347,75 @@ public class TransactionManager {
                 // Файл еще не существует (будет создан) — запоминаем это как null
                 snapshots.put(absPath, null);
             }
+        }
+
+        /**
+         * Обновляет статистику изменений для файла в конце транзакции.
+         */
+        public void updateStats() {
+            for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
+                Path original = entry.getKey();
+                Path snapshot = entry.getValue();
+                
+                try {
+                    String oldContent = (snapshot != null) ? Files.readString(snapshot) : "";
+                    String newContent = Files.exists(original) ? Files.readString(original) : "";
+                    
+                    if (!oldContent.equals(newContent)) {
+                        stats.put(original, calculateStats(oldContent, newContent));
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+        }
+
+        private FileDiffStats calculateStats(String oldContent, String newContent) {
+            String normOld = oldContent.replace("\r\n", "\n");
+            String normNew = newContent.replace("\r\n", "\n");
+            
+            String[] oldLines = normOld.isEmpty() ? new String[0] : normOld.split("\n", -1);
+            String[] newLines = normNew.isEmpty() ? new String[0] : normNew.split("\n", -1);
+            
+            // Упрощенный подсчет изменений (разница в количестве строк как база)
+            int linesAdded = 0;
+            int linesDeleted = 0;
+            
+            Set<String> oldLineSet = new HashSet<>(Arrays.asList(oldLines));
+            Set<String> newLineSet = new HashSet<>(Arrays.asList(newLines));
+            
+            for (String line : newLines) {
+                if (!oldLineSet.contains(line)) linesAdded++;
+            }
+            for (String line : oldLines) {
+                if (!newLineSet.contains(line)) linesDeleted++;
+            }
+            
+            // Поиск затронутых блоков (методы/классы)
+            Set<String> affectedBlocks = new TreeSet<>();
+            for (String line : newLines) {
+                String trimmed = line.trim();
+                if (!oldLineSet.contains(line) && (trimmed.contains("class ") || trimmed.contains("void ") || trimmed.contains("String ") || (trimmed.contains("(") && trimmed.endsWith("{")))) {
+                    // Пытаемся вычленить имя
+                    String name = extractName(trimmed);
+                    if (name != null) affectedBlocks.add(name);
+                }
+            }
+            
+            return new FileDiffStats(linesAdded, linesDeleted, new ArrayList<>(affectedBlocks));
+        }
+
+        private String extractName(String line) {
+            // Очень простая эвристика для Java
+            String[] parts = line.split("\\s+");
+            for (int i = 0; i < parts.length; i++) {
+                if (parts[i].contains("(")) {
+                    return parts[i].split("\\(")[0];
+                }
+                if ("class".equals(parts[i]) && i + 1 < parts.length) {
+                    return "class " + parts[i+1].split("\\{")[0];
+                }
+            }
+            return null;
         }
 
         /**
@@ -393,4 +480,6 @@ public class TransactionManager {
             this.status = status;
         }
     }
+
+    private record FileDiffStats(int added, int deleted, List<String> affectedBlocks) {}
 }

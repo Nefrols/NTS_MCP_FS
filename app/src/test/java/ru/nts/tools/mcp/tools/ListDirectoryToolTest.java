@@ -12,6 +12,7 @@ import ru.nts.tools.mcp.core.PathSanitizer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -92,5 +93,28 @@ class ListDirectoryToolTest {
 
         String text = result.get("content").get(0).get("text").asText();
         assertTrue(text.contains("[FILE] known.txt [READ]"), "Прочитанный файл должен иметь маркер [READ]");
+    }
+
+    /**
+     * Тестирует автоматическое игнорирование служебных папок (autoIgnore).
+     */
+    @Test
+    void testAutoIgnore(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Files.createFile(tempDir.resolve("important.txt"));
+        Files.createDirectories(tempDir.resolve("build"));
+        Files.createDirectories(tempDir.resolve(".gradle"));
+
+        // С включенным autoIgnore
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", ".");
+        params.put("autoIgnore", true);
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+
+        assertTrue(text.contains("important.txt"));
+        assertFalse(text.contains("build"), "Папка build должна быть проигнорирована");
+        assertFalse(text.contains(".gradle"), "Папка .gradle должна быть проигнорирована");
     }
 }

@@ -2,7 +2,9 @@
 package ru.nts.tools.mcp.core;
 
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Утилита для взаимодействия с системой контроля версий Git.
@@ -15,6 +17,37 @@ public class GitUtils {
      * Стандартный таймаут для быстрых информационных команд Git.
      */
     private static final long DEFAULT_GIT_TIMEOUT = 5;
+
+    /**
+     * Возвращает список путей, которые игнорируются Git в текущем репозитории.
+     * Использует 'git clean -ndX' для получения списка игнорируемых файлов и директорий.
+     *
+     * @return Множество строк с относительными путями игнорируемых объектов.
+     */
+    public static Set<String> getIgnoredPaths() {
+        Set<String> ignored = new HashSet<>();
+        try {
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(
+                    List.of("git", "clean", "-ndX"), DEFAULT_GIT_TIMEOUT);
+            
+            if (result.exitCode() == 0) {
+                // Вывод формата: "Would remove path/to/file"
+                for (String line : result.output().split("\n")) {
+                    if (line.startsWith("Would remove ")) {
+                        String path = line.substring("Would remove ".length()).trim();
+                        // Убираем слеши в конце для папок
+                        if (path.endsWith("/") || path.endsWith("\\")) {
+                            path = path.substring(0, path.length() - 1);
+                        }
+                        ignored.add(path);
+                    }
+                }
+            }
+        } catch (Exception ignoredErr) {
+            // Если Git недоступен — возвращаем пустой набор
+        }
+        return ignored;
+    }
 
     /**
      * Возвращает краткое описание статуса файла в Git.

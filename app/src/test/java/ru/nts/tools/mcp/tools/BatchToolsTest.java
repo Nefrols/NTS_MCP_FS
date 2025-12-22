@@ -59,7 +59,37 @@ class BatchToolsTest {
         router = new McpRouter(mapper);
         router.registerTool(new RenameFileTool());
         router.registerTool(new EditFileTool());
+        router.registerTool(new ReadFileTool());
         batchTool = new BatchToolsTool(router);
+    }
+
+    /**
+     * Тестирует бесшовную передачу прав доступа внутри батча.
+     * Если файл прочитан в начале батча, последующая правка должна быть разрешена.
+     */
+    @Test
+    void testAccessTransferInBatch() throws Exception {
+        Path file = tempDir.resolve("access.txt");
+        Files.writeString(file, "content");
+        // НЕ регистрируем чтение заранее
+
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Чтение (дает права)
+        ObjectNode a1 = actions.addObject();
+        a1.put("tool", "nts_read_file");
+        a1.putObject("params").put("path", "access.txt");
+
+        // Шаг 2: Правка
+        ObjectNode a2 = actions.addObject();
+        a2.put("tool", "nts_edit_file");
+        a2.putObject("params").put("path", "access.txt").put("oldText", "content").put("newText", "updated");
+
+        // Выполнение не должно выбросить SecurityException
+        batchTool.execute(params);
+
+        assertEquals("updated", Files.readString(file), "Файл должен быть успешно изменен");
     }
 
     /**

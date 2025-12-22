@@ -96,4 +96,22 @@ class ProjectStructureToolTest {
         assertFalse(text.contains(".git/"), "Protected directory should be hidden");
         assertFalse(text.contains("config"));
     }
+
+    @Test
+    void testAutoIgnore(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Files.createFile(tempDir.resolve("important.txt"));
+        Files.createDirectories(tempDir.resolve("build"));
+        Files.createDirectories(tempDir.resolve(".gradle"));
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("autoIgnore", true);
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+
+        assertTrue(text.contains("important.txt"));
+        assertFalse(text.contains("build"), "build folder should be ignored");
+        assertFalse(text.contains(".gradle"), "gradle folder should be ignored");
+    }
 }

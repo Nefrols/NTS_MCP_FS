@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
@@ -15,7 +16,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Инструмент для исследования структуры файловой системы (Listing).
@@ -52,6 +55,8 @@ public class ListDirectoryTool implements McpTool {
 
         props.putObject("depth").put("type", "integer").put("description", "Recursion limit (default 1).");
 
+        props.putObject("autoIgnore").put("type", "boolean").put("description", "Automatically ignore files from .gitignore and standard artifact folders (build, .gradle, .idea).");
+
         schema.putArray("required").add("path");
         return schema;
     }
@@ -60,6 +65,7 @@ public class ListDirectoryTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
         int depth = params.path("depth").asInt(1);
+        boolean autoIgnore = params.path("autoIgnore").asBoolean(false);
 
         // Санитарная нормализация пути
         Path path = PathSanitizer.sanitize(pathStr, true);
@@ -68,9 +74,19 @@ public class ListDirectoryTool implements McpTool {
             throw new IllegalArgumentException("Directory not found or is not a folder: " + pathStr);
         }
 
+        // Сбор игнорируемых путей
+        Set<String> autoIgnoredPaths = new HashSet<>();
+        if (autoIgnore) {
+            autoIgnoredPaths.addAll(GitUtils.getIgnoredPaths());
+            autoIgnoredPaths.add(".gradle");
+            autoIgnoredPaths.add(".idea");
+            autoIgnoredPaths.add("build");
+            autoIgnoredPaths.add(".git");
+        }
+
         List<String> entries = new ArrayList<>();
         // Запуск рекурсивного формирования текстового представления дерева папок
-        listRecursive(path, entries, 0, depth, "");
+        listRecursive(path, entries, 0, depth, "", autoIgnoredPaths);
 
         ObjectNode result = mapper.createObjectNode();
         ArrayNode content = result.putArray("content");
@@ -91,10 +107,11 @@ public class ListDirectoryTool implements McpTool {
      * @param currentDepth Текущий уровень вложенности.
      * @param maxDepth     Лимит рекурсии из параметров.
      * @param indent       Префикс отступа для текущего уровня.
+     * @param autoIgnoredPaths Набор игнорируемых путей.
      *
      * @throws IOException При ошибках чтения файловой системы.
      */
-    private void listRecursive(Path currentPath, List<String> result, int currentDepth, int maxDepth, String indent) throws IOException {
+    private void listRecursive(Path currentPath, List<String> result, int currentDepth, int maxDepth, String indent, Set<String> autoIgnoredPaths) throws IOException {
         // Остановка при достижении заданного лимита глубины
         if (currentDepth >= maxDepth) {
             return;
@@ -117,9 +134,18 @@ public class ListDirectoryTool implements McpTool {
             return a.getFileName().toString().compareToIgnoreCase(b.getFileName().toString());
         });
 
+        Path root = PathSanitizer.getRoot();
+
         for (Path entry : subEntries) {
             // Игнорируем защищенные объекты (скрываем их от глаз LLM)
             if (PathSanitizer.isProtected(entry)) {
+                continue;
+            }
+
+            // Фильтрация игнорируемых путей
+            Path relative = root.relativize(entry.toAbsolutePath().normalize());
+            String relativeStr = relative.toString().replace('\\', '/');
+            if (autoIgnoredPaths.contains(relativeStr) || autoIgnoredPaths.contains(entry.getFileName().toString())) {
                 continue;
             }
 
@@ -135,7 +161,7 @@ public class ListDirectoryTool implements McpTool {
 
             // Рекурсивный спуск в поддиректории
             if (isDir) {
-                listRecursive(entry, result, currentDepth + 1, maxDepth, indent + "  ");
+                listRecursive(entry, result, currentDepth + 1, maxDepth, indent + "  ", autoIgnoredPaths);
             }
         }
     }
