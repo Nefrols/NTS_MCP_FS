@@ -66,7 +66,7 @@ public class TransactionManager {
         if (nestingLevel <= 0) {
             if (!currentTransaction.isEmpty()) {
                 undoStack.add(currentTransaction);
-                redoStack.clear(); 
+                redoStack.clear(); // Новая правка делает невозможным REDO старых отмененных правок
             }
             currentTransaction = null;
             nestingLevel = 0;
