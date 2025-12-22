@@ -11,9 +11,15 @@ import ru.nts.tools.mcp.core.ProcessExecutor;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Инструмент для запуска задач Gradle через wrapper.
+ * Особенности:
+ * - Автоматически находит gradlew / gradlew.bat.
+ * - Выполняет задачи в корне проекта.
+ * - Содержит Smart Error Parser для выделения критических ошибок из длинного лога.
  */
 public class GradleTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -25,7 +31,7 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Executes a Gradle task (e.g., build, test, clean). Automatically uses gradlew wrapper.";
+        return "Executes a Gradle task (e.g., build, test). Automatically parses logs to highlight errors.";
     }
 
     @Override
@@ -47,7 +53,6 @@ public class GradleTool implements McpTool {
 
         // Определяем правильное имя исполняемого файла для текущей ОС
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
-        String wrapperName = isWindows ? "gradlew.bat" : "./gradlew";
         
         File wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
         if (!wrapperFile.exists()) {
@@ -73,9 +78,46 @@ public class GradleTool implements McpTool {
         
         StringBuilder sb = new StringBuilder();
         sb.append("Gradle execution finished with exit code: ").append(result.exitCode()).append("\n\n");
-        sb.append("Output:\n").append(result.output());
+        
+        // Добавляем ERROR SUMMARY если выполнение завершилось со сбоем
+        if (result.exitCode() != 0) {
+            String summary = parseErrors(result.output());
+            if (!summary.isEmpty()) {
+                sb.append("=== ERROR SUMMARY ===\n").append(summary).append("\n");
+            }
+        }
+
+        sb.append("Full Output:\n").append(result.output());
         
         content.put("text", sb.toString());
         return response;
+    }
+
+    /**
+     * Анализирует лог сборки и извлекает информацию об ошибках компиляции и падениях тестов.
+     */
+    private String parseErrors(String output) {
+        StringBuilder summary = new StringBuilder();
+        
+        // Паттерн для Java компилятора: "path\File.java:line: error: message"
+        Pattern javaError = Pattern.compile("([^\\s]+\\.java):(\\d+): error: (.*)");
+        // Паттерн для падения тестов JUnit: "TestName > method() FAILED"
+        Pattern testFailure = Pattern.compile("([^\\s]+ > [^\\s]+ FAILED)");
+
+        String[] lines = output.split("\\n");
+        for (String line : lines) {
+            Matcher mj = javaError.matcher(line);
+            if (mj.find()) {
+                summary.append(String.format("[COMPILATION] %s (Line %s): %s\n", mj.group(1), mj.group(2), mj.group(3)));
+                continue;
+            }
+            
+            Matcher mt = testFailure.matcher(line);
+            if (mt.find()) {
+                summary.append(String.format("[TEST FAILED] %s\n", mt.group(1)));
+            }
+        }
+        
+        return summary.toString();
     }
 }
