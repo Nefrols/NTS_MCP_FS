@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,25 +38,70 @@ class EditFileToolTest {
     }
 
     @Test
-    void testReplaceLines(@TempDir Path tempDir) throws Exception {
+    void testMultiFileBatchEdit(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.txt");
-        Files.write(file, List.of("Line 1", "Line 2", "Line 3", "Line 4"));
-        AccessTracker.registerRead(file);
+        TransactionManager.reset();
+        
+        Path f1 = tempDir.resolve("file1.txt");
+        Path f2 = tempDir.resolve("file2.txt");
+        Files.writeString(f1, "Original 1");
+        Files.writeString(f2, "Original 2");
+        AccessTracker.registerRead(f1);
+        AccessTracker.registerRead(f2);
 
         ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("startLine", 2);
-        params.put("endLine", 3);
-        params.put("newText", "New Line 2 and 3");
+        ArrayNode edits = params.putArray("edits");
+
+        ObjectNode e1 = edits.addObject();
+        e1.put("path", f1.toString());
+        e1.put("oldText", "Original 1");
+        e1.put("newText", "Changed 1");
+
+        ObjectNode e2 = edits.addObject();
+        e2.put("path", f2.toString());
+        e2.put("oldText", "Original 2");
+        e2.put("newText", "Changed 2");
 
         tool.execute(params);
-        
-        List<String> actualLines = Files.readAllLines(file);
-        assertEquals(3, actualLines.size());
-        assertEquals("Line 1", actualLines.get(0));
-        assertEquals("New Line 2 and 3", actualLines.get(1));
-        assertEquals("Line 4", actualLines.get(2));
+
+        assertEquals("Changed 1", Files.readString(f1));
+        assertEquals("Changed 2", Files.readString(f2));
+    }
+
+    @Test
+    void testMultiFileRollback(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        TransactionManager.reset();
+
+        Path f1 = tempDir.resolve("file1.txt");
+        Path f2 = tempDir.resolve("file2.txt");
+        Files.writeString(f1, "Safe");
+        Files.writeString(f2, "Danger");
+        AccessTracker.registerRead(f1);
+        AccessTracker.registerRead(f2);
+
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode edits = params.putArray("edits");
+
+        // Первая правка валидна
+        ObjectNode e1 = edits.addObject();
+        e1.put("path", f1.toString());
+        e1.put("oldText", "Safe");
+        e1.put("newText", "Broken");
+
+        // Вторая правка содержит ошибку контроля
+        ObjectNode e2 = edits.addObject();
+        e2.put("path", f2.toString());
+        e2.put("startLine", 1);
+        e2.put("endLine", 1);
+        e2.put("expectedContent", "WRONG_CONTENT");
+        e2.put("newText", "ShouldNotChange");
+
+        assertThrows(IllegalStateException.class, () -> tool.execute(params));
+
+        // Оба файла должны остаться в исходном состоянии
+        assertEquals("Safe", Files.readString(f1));
+        assertEquals("Danger", Files.readString(f2));
     }
 
     @Test
@@ -88,16 +134,12 @@ class EditFileToolTest {
         params.put("path", file.toString());
         ArrayNode ops = params.putArray("operations");
 
-        // Операция 1: Заменяем Line 1 на 3 строки
         ObjectNode op1 = ops.addObject();
         op1.put("operation", "replace");
         op1.put("startLine", 1);
         op1.put("endLine", 1);
         op1.put("content", "A\nB\nC");
 
-        // Операция 2: Удаляем Line 2. 
-        // В оригинале это строка 2. После первой операции Line 2 стала строкой 4.
-        // Сервер должен сам вычислить offset (+2 строки).
         ObjectNode op2 = ops.addObject();
         op2.put("operation", "delete");
         op2.put("startLine", 2);
@@ -106,7 +148,6 @@ class EditFileToolTest {
         tool.execute(params);
 
         List<String> result = Files.readAllLines(file);
-        // Ожидаем: A, B, C (вместо Line 1), Line 3 (Line 2 удалена)
         assertEquals(4, result.size());
         assertEquals("A", result.get(0));
         assertEquals("B", result.get(1));
@@ -151,14 +192,12 @@ class EditFileToolTest {
         params.put("path", file.toString());
         ArrayNode ops = params.putArray("operations");
 
-        // Операция 1: Валидная замена
         ObjectNode op1 = ops.addObject();
         op1.put("operation", "replace");
         op1.put("startLine", 1);
         op1.put("endLine", 1);
         op1.put("content", "MODIFIED");
 
-        // Операция 2: Ошибочная (неверный expectedContent)
         ObjectNode op2 = ops.addObject();
         op2.put("operation", "replace");
         op2.put("startLine", 2);
@@ -166,11 +205,196 @@ class EditFileToolTest {
         op2.put("expectedContent", "WRONG_STUFF");
         op2.put("content", "SHOULD_NOT_HAPPEN");
 
-        // Выполнение должно упасть
         assertThrows(IllegalStateException.class, () -> tool.execute(params));
 
-        // Файл должен остаться нетронутым (Line 1 не должна стать MODIFIED)
-        String currentContent = Files.readString(file).replace("\r", "");
-        assertEquals(originalContent, currentContent, "Файл не должен измениться, если одна из операций батча провалена");
-    }
-}
+                String currentContent = Files.readString(file).replace("\r", "");
+
+                assertEquals(originalContent, currentContent);
+
+            }
+
+        
+
+            @Test
+
+            void testComplexMultiFileBatch(@TempDir Path tempDir) throws Exception {
+
+                PathSanitizer.setRoot(tempDir);
+
+                TransactionManager.reset();
+
+                
+
+                Path f1 = tempDir.resolve("f1.txt");
+
+                Path f2 = tempDir.resolve("f2.txt");
+
+                Files.writeString(f1, "A\nB\nC");
+
+                Files.writeString(f2, "1\n2\n3");
+
+                AccessTracker.registerRead(f1);
+
+                AccessTracker.registerRead(f2);
+
+        
+
+                ObjectNode params = mapper.createObjectNode();
+
+                ArrayNode edits = params.putArray("edits");
+
+        
+
+                // Файл 1: Удаляем B, вставляем X после A
+
+                ObjectNode e1 = edits.addObject();
+
+                e1.put("path", f1.toString());
+
+                ArrayNode ops1 = e1.putArray("operations");
+
+                ops1.addObject().put("operation", "delete").put("startLine", 2).put("endLine", 2);
+
+                ops1.addObject().put("operation", "insert_after").put("line", 1).put("content", "X");
+
+        
+
+                // Файл 2: Заменяем 2 на "TWO"
+
+                ObjectNode e2 = edits.addObject();
+
+                e2.put("path", f2.toString());
+
+                e2.put("startLine", 2);
+
+                e2.put("endLine", 2);
+
+                e2.put("newText", "TWO");
+
+        
+
+                tool.execute(params);
+
+        
+
+                assertEquals("A\nX\nC", Files.readString(f1).replace("\r", ""));
+
+                assertEquals("1\nTWO\n3", Files.readString(f2).replace("\r", ""));
+
+            }
+
+        
+
+            @Test
+
+            void testMultiFileRollbackOnSecurityException(@TempDir Path tempDir) throws Exception {
+
+                PathSanitizer.setRoot(tempDir);
+
+                TransactionManager.reset();
+
+        
+
+                Path safeFile = tempDir.resolve("safe.txt");
+
+                Files.writeString(safeFile, "Safe Content");
+
+                AccessTracker.registerRead(safeFile);
+
+        
+
+                ObjectNode params = mapper.createObjectNode();
+
+                ArrayNode edits = params.putArray("edits");
+
+        
+
+                // 1. Валидная правка
+
+                ObjectNode e1 = edits.addObject();
+
+                e1.put("path", safeFile.toString());
+
+                e1.put("oldText", "Safe");
+
+                e1.put("newText", "Hacked");
+
+        
+
+                // 2. Попытка изменить защищенный файл проекта
+
+                ObjectNode e2 = edits.addObject();
+
+                e2.put("path", "gradlew"); // PathSanitizer его защищает
+
+                e2.put("oldText", "any");
+
+                e2.put("newText", "bad");
+
+        
+
+                assertThrows(SecurityException.class, () -> tool.execute(params));
+
+        
+
+                // Первый файл не должен измениться!
+
+                assertEquals("Safe Content", Files.readString(safeFile));
+
+            }
+
+        
+
+            @Test
+
+            void testMultiFileRollbackOnAccessError(@TempDir Path tempDir) throws Exception {
+
+                PathSanitizer.setRoot(tempDir);
+
+                TransactionManager.reset();
+
+        
+
+                Path f1 = tempDir.resolve("f1.txt");
+
+                Path f2 = tempDir.resolve("f2.txt");
+
+                Files.writeString(f1, "Content 1");
+
+                Files.writeString(f2, "Content 2");
+
+                
+
+                // Регистрируем ТОЛЬКО первый файл
+
+                AccessTracker.registerRead(f1);
+
+        
+
+                ObjectNode params = mapper.createObjectNode();
+
+                ArrayNode edits = params.putArray("edits");
+
+        
+
+                edits.addObject().put("path", f1.toString()).put("oldText", "Content 1").put("newText", "Modified");
+
+                edits.addObject().put("path", f2.toString()).put("oldText", "Content 2").put("newText", "Modified");
+
+        
+
+                // Должно упасть на втором файле
+
+                assertThrows(SecurityException.class, () -> tool.execute(params));
+
+        
+
+                // Первый файл должен откатиться
+
+                assertEquals("Content 1", Files.readString(f1));
+
+            }
+
+        }
+
+        
