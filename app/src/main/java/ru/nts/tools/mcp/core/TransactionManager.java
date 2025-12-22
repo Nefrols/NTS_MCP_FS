@@ -10,13 +10,14 @@ import java.util.*;
 
 /**
  * Менеджер транзакций для обеспечения атомарности и функций UNDO/REDO.
- * Поддерживает вложенные транзакции: изменения фиксируются на диск только при завершении внешней транзакции.
+ * Поддерживает вложенные транзакции и автоматическое управление хранилищем снимков.
  */
 public class TransactionManager {
     
     private static final List<Transaction> undoStack = new ArrayList<>();
     private static final List<Transaction> redoStack = new ArrayList<>();
     private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final int MAX_HISTORY_SIZE = 50;
     
     private static Transaction currentTransaction = null;
     private static int nestingLevel = 0;
@@ -35,8 +36,6 @@ public class TransactionManager {
     /**
      * Начинает новую транзакцию. 
      * Если транзакция уже активна, увеличивает уровень вложенности.
-     * 
-     * @param description Описание операции для журнала.
      */
     public static void startTransaction(String description) {
         if (currentTransaction == null) {
@@ -46,9 +45,7 @@ public class TransactionManager {
     }
 
     /**
-     * Создает резервную копию файла перед его изменением в рамках текущей транзакции.
-     * 
-     * @param path Путь к файлу.
+     * Создает резервную копию файла перед его изменением.
      */
     public static void backup(Path path) throws IOException {
         if (currentTransaction == null) return;
@@ -67,6 +64,12 @@ public class TransactionManager {
             if (!currentTransaction.isEmpty()) {
                 undoStack.add(currentTransaction);
                 redoStack.clear(); // Новая правка делает невозможным REDO старых отмененных правок
+                
+                // Ограничиваем размер истории для экономии диска
+                if (undoStack.size() > MAX_HISTORY_SIZE) {
+                    Transaction old = undoStack.remove(0);
+                    old.deleteSnapshots();
+                }
             }
             currentTransaction = null;
             nestingLevel = 0;
@@ -74,30 +77,32 @@ public class TransactionManager {
     }
 
     /**
-     * Откатывает текущую незавершенную транзакцию (вызывается при ошибках).
+     * Откатывает текущую незавершенную транзакцию.
      * Сбрасывает уровень вложенности до нуля.
+     * 
+     * @throws RuntimeException если восстановление из снимков не удалось.
      */
     public static void rollback() {
         if (currentTransaction == null) return;
         try {
             currentTransaction.restore();
+            currentTransaction.deleteSnapshots(); // Снимки неудачной транзакции больше не нужны
         } catch (IOException e) {
-            System.err.println("Rollback failed: " + e.getMessage());
+            // Критическая ошибка: ФС в неопределенном состоянии
+            throw new RuntimeException("CRITICAL: Transaction rollback failed! File system might be corrupted. " + e.getMessage(), e);
+        } finally {
+            currentTransaction = null;
+            nestingLevel = 0;
         }
-        currentTransaction = null;
-        nestingLevel = 0;
     }
 
     /**
      * Отменяет последнюю совершенную транзакцию (UNDO).
-     * 
-     * @return Текстовый статус операции.
      */
     public static String undo() throws IOException {
         if (undoStack.isEmpty()) return "No operations to undo.";
         
         Transaction tx = undoStack.remove(undoStack.size() - 1);
-        // Сохраняем состояние ПЕРЕД откатом в REDO стек
         Transaction redoTx = new Transaction("REDO: " + tx.description, LocalDateTime.now());
         for (Path path : tx.getAffectedPaths()) {
             redoTx.addFile(path);
@@ -105,13 +110,12 @@ public class TransactionManager {
         
         tx.restore();
         redoStack.add(redoTx);
+        // Мы НЕ удаляем снимки отмененной транзакции здесь, так как они переехали в redoTx или нужны для REDO
         return "Undone: " + tx.description;
     }
 
     /**
      * Повторяет ранее отмененную транзакцию (REDO).
-     * 
-     * @return Текстовый статус операции.
      */
     public static String redo() throws IOException {
         if (redoStack.isEmpty()) return "No operations to redo.";
@@ -154,18 +158,18 @@ public class TransactionManager {
     }
 
     /**
-     * Полный сброс истории (используется в тестах).
+     * Полный сброс истории и очистка диска.
      */
     public static void reset() {
+        for (Transaction tx : undoStack) tx.deleteSnapshots();
+        for (Transaction tx : redoStack) tx.deleteSnapshots();
         undoStack.clear();
         redoStack.clear();
+        if (currentTransaction != null) currentTransaction.deleteSnapshots();
         currentTransaction = null;
         nestingLevel = 0;
     }
 
-    /**
-     * Внутренний класс для хранения данных транзакции и её снимков.
-     */
     private static class Transaction {
         private final String description;
         private final LocalDateTime timestamp;
@@ -176,27 +180,19 @@ public class TransactionManager {
             this.timestamp = timestamp;
         }
 
-        /**
-         * Добавляет файл в транзакцию, создавая его физическую копию.
-         */
         public void addFile(Path path) throws IOException {
             Path absPath = path.toAbsolutePath().normalize();
             if (snapshots.containsKey(absPath)) return; 
 
             if (Files.exists(absPath)) {
-                // Если файл существует — копируем его
                 Path backup = getSnapshotDir().resolve(UUID.randomUUID().toString() + ".bak");
                 Files.copy(absPath, backup);
                 snapshots.put(absPath, backup);
             } else {
-                // Если файл новый — помечаем как null (будет удален при откате)
                 snapshots.put(absPath, null);
             }
         }
 
-        /**
-         * Восстанавливает все файлы транзакции из их снимков.
-         */
         public void restore() throws IOException {
             for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
                 Path original = entry.getKey();
@@ -207,6 +203,19 @@ public class TransactionManager {
                     Files.copy(backup, original, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 } else {
                     Files.deleteIfExists(original);
+                }
+            }
+        }
+
+        /**
+         * Удаляет временные файлы снимков с диска.
+         */
+        public void deleteSnapshots() {
+            for (Path backup : snapshots.values()) {
+                if (backup != null) {
+                    try {
+                        Files.deleteIfExists(backup);
+                    } catch (IOException ignored) {}
                 }
             }
         }

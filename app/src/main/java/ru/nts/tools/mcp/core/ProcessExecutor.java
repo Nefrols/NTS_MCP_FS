@@ -2,13 +2,11 @@
 package ru.nts.tools.mcp.core;
 
 import java.io.BufferedReader;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * Утилита для безопасного выполнения внешних процессов.
@@ -37,29 +35,41 @@ public class ProcessExecutor {
         pb.redirectErrorStream(true); // Объединяем stdout и stderr для простоты анализа LLM
 
         Process process = pb.start();
-        
         StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            int linesRead = 0;
-            while ((line = reader.readLine()) != null) {
-                if (linesRead < MAX_OUTPUT_LINES) {
-                    output.append(line).append("\n");
-                    linesRead++;
-                } else if (linesRead == MAX_OUTPUT_LINES) {
-                    output.append("... [Output truncated due to size limit] ...");
-                    linesRead++;
+
+        try {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                int linesRead = 0;
+                while ((line = reader.readLine()) != null) {
+                    if (linesRead < MAX_OUTPUT_LINES) {
+                        output.append(line).append("\n");
+                        linesRead++;
+                    } else if (linesRead == MAX_OUTPUT_LINES) {
+                        output.append("... [Output truncated due to size limit] ...");
+                        linesRead++;
+                    }
                 }
             }
-        }
 
-        boolean finished = process.waitFor(DEFAULT_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-        if (!finished) {
+            boolean finished = process.waitFor(DEFAULT_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                return new ExecutionResult(-1, output.toString() + "\nERROR: Process timed out.");
+            }
+
+            return new ExecutionResult(process.exitValue(), output.toString());
+        } catch (InterruptedException e) {
+            // Если поток прерван — убиваем дочерний процесс
             process.destroyForcibly();
-            return new ExecutionResult(-1, output.toString() + "\nERROR: Process timed out.");
+            Thread.currentThread().interrupt();
+            throw e;
+        } finally {
+            // Гарантируем закрытие потоков и освобождение ресурсов процесса
+            if (process.isAlive()) {
+                process.destroy();
+            }
         }
-
-        return new ExecutionResult(process.exitValue(), output.toString());
     }
 
     /**
