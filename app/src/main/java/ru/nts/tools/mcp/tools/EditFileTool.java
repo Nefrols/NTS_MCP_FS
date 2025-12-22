@@ -17,10 +17,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Инструмент для редактирования файлов.
- * Устойчив к ошибкам LLM в пробелах и типах переносов строк.
+ * Устойчив к ошибкам LLM и поддерживает проверку ожидаемого содержимого.
  */
 public class EditFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -32,7 +33,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Редактирует файл. Поддерживает замену текста. Инструмент устойчив к различиям в пробелах и переносах строк.";
+        return "Редактирует файл. Поддерживает замену текста и замену диапазона строк с проверкой expectedContent.";
     }
 
     @Override
@@ -45,6 +46,7 @@ public class EditFileTool implements McpTool {
         props.putObject("newText").put("type", "string").put("description", "Новый текст");
         props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (от 1)");
         props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (от 1)");
+        props.putObject("expectedContent").put("type", "string").put("description", "Ожидаемое содержимое диапазона строк для проверки");
         
         schema.putArray("required").add("path");
         return schema;
@@ -60,7 +62,7 @@ public class EditFileTool implements McpTool {
         }
 
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Доступ запрещен: нельзя редактировать файл, который не был прочитан в текущей сессии. Используйте read_file или file_info.");
+            throw new SecurityException("Доступ запрещен: нельзя редактировать файл, который не был прочитан. Используйте read_file.");
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
@@ -73,13 +75,36 @@ public class EditFileTool implements McpTool {
             
             content = performSmartReplace(content, oldText, newText);
             Files.writeString(path, content, charset);
-            resultMsg = "Успешно заменено вхождение текста (использован умный поиск).";
+            resultMsg = "Успешно заменено вхождение текста.";
         } else if (params.has("startLine") && params.has("endLine") && params.has("newText")) {
             int start = params.get("startLine").asInt();
             int end = params.get("endLine").asInt();
             String newText = params.get("newText").asText();
+            String expectedContent = params.path("expectedContent").asText(null);
             
             String[] lines = content.split("\n", -1);
+            
+            // Валидация диапазона
+            if (start < 1 || end > lines.length || start > end) {
+                throw new IllegalArgumentException("Неверный диапазон строк: " + start + "-" + end + ". В файле " + lines.length + " строк.");
+            }
+
+            // Проверка expectedContent
+            if (expectedContent != null) {
+                StringBuilder actualPart = new StringBuilder();
+                for (int i = start - 1; i < end; i++) {
+                    actualPart.append(lines[i].replace("\r", ""));
+                    if (i < end - 1) actualPart.append("\n");
+                }
+                
+                String normActual = actualPart.toString().replace("\r", "");
+                String normExpected = expectedContent.replace("\r", "");
+                
+                if (!normActual.equals(normExpected)) {
+                    throw new IllegalStateException("Контроль содержимого не пройден! Ожидалось:\n[" + normExpected + "]\nНо на строках " + start + "-" + end + " сейчас:\n[" + normActual + "]");
+                }
+            }
+
             List<String> resultLines = new ArrayList<>();
             for (int i = 0; i < lines.length; i++) {
                 int currentLineNum = i + 1;
@@ -90,6 +115,7 @@ public class EditFileTool implements McpTool {
                     resultLines.add(lines[i].replace("\r", ""));
                 }
             }
+            
             Files.writeString(path, String.join("\n", resultLines), charset);
             resultMsg = "Успешно заменен диапазон строк " + start + "-" + end;
         } else {
@@ -113,9 +139,8 @@ public class EditFileTool implements McpTool {
             return normContent.replace(normOld, newText);
         }
 
-        // Fuzzy match: экранируем только спецсимволы, а пробелы заменяем на \s+
         String escapedOld = escapeRegexExceptWhitespace(normOld);
-        String regex = escapedOld.replaceAll("\\s+", "\\\\s+");
+        String regex = escapedOld.replaceAll("\s+", "\\\\s+");
         
         Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
         Matcher matcher = pattern.matcher(normContent);
@@ -123,15 +148,13 @@ public class EditFileTool implements McpTool {
         if (matcher.find()) {
             int start = matcher.start();
             int end = matcher.end();
-            
             if (matcher.find()) {
                 throw new IllegalArgumentException("Найдено более одного совпадения при нечетком поиске. Укажите более точный контекст.");
             }
-            
             return normContent.substring(0, start) + newText + normContent.substring(end);
         }
 
-        throw new IllegalArgumentException("Текст не найден. Проверьте правильность oldText или используйте номера строк для редактирования.");
+        throw new IllegalArgumentException("Текст не найден. Проверьте правильность oldText или используйте номера строк с expectedContent.");
     }
 
     private String escapeRegexExceptWhitespace(String input) {

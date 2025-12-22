@@ -56,4 +56,39 @@ class EditFileToolTest {
         assertEquals("New Line 2 and 3", actualLines.get(1));
         assertEquals("Line 4", actualLines.get(2));
     }
+
+    @Test
+    void testExpectedContentSuccess(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("test.txt");
+        Files.write(file, List.of("AAA", "BBB", "CCC"));
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 2);
+        params.put("endLine", 2);
+        params.put("expectedContent", "BBB");
+        params.put("newText", "XXX");
+
+        tool.execute(params);
+        assertEquals("AAA\nXXX\nCCC\n", Files.readString(file).replace("\r", ""));
+    }
+
+    @Test
+    void testExpectedContentFailure(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("test.txt");
+        Files.write(file, List.of("AAA", "BBB", "CCC"));
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 2);
+        params.put("endLine", 2);
+        params.put("expectedContent", "WRONG");
+        params.put("newText", "XXX");
+
+        assertThrows(IllegalStateException.class, () -> tool.execute(params));
+    }
 }
