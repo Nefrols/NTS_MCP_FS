@@ -24,7 +24,7 @@ import java.util.stream.Stream;
 
 /**
  * Инструмент для рекурсивного поиска текста.
- * Поддерживает многострочные запросы и сохраняет все спецсимволы.
+ * Поддерживает многострочные запросы, сохраняет все спецсимволы и помечает прочитанные файлы.
  */
 public class SearchFilesTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -36,7 +36,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Параллельный рекурсивный поиск. Учитывает все спецсимволы, табы и переносы строк. Возвращает точное содержимое строк.";
+        return "Параллельный рекурсивный поиск. Учитывает все спецсимволы и помечает прочитанные файлы как [READ].";
     }
 
     @Override
@@ -67,6 +67,7 @@ public class SearchFilesTool implements McpTool {
         final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
         var results = new ConcurrentLinkedQueue<FileSearchResult>();
         
+        // Используем виртуальные потоки для параллельного сканирования файлов
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             try (Stream<Path> walk = Files.walk(rootPath)) {
                 walk.filter(Files::isRegularFile).forEach(path -> {
@@ -90,13 +91,17 @@ public class SearchFilesTool implements McpTool {
                             }
                             
                             if (!matchedLines.isEmpty()) {
-                                results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines));
+                                // Проверяем, был ли файл прочитан ранее
+                                boolean wasRead = AccessTracker.hasBeenRead(path);
+                                results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
                             }
                         } catch (Exception ignored) {
+                            // Ошибки доступа или кодировки игнорируем при массовом поиске
                         }
                     });
                 });
             }
+            // Executor автоматически дождется завершения всех задач при закрытии
         }
 
         var sortedResults = new ArrayList<>(results);
@@ -113,7 +118,8 @@ public class SearchFilesTool implements McpTool {
             StringBuilder sb = new StringBuilder();
             sb.append("Найдены совпадения в файлах (").append(sortedResults.size()).append("):\n\n");
             for (var res : sortedResults) {
-                sb.append(res.path()).append(":\n");
+                String readMarker = res.wasRead() ? " [READ]" : "";
+                sb.append(res.path()).append(readMarker).append(":\n");
                 for (var line : res.lines()) {
                     sb.append(line.number()).append("|").append(line.text()).append("\n");
                 }
@@ -125,8 +131,10 @@ public class SearchFilesTool implements McpTool {
         return resultNode;
     }
 
+    /**
+     * Извлекает строку и номер строки для найденного совпадения.
+     */
     private void addMatchWithLines(String content, int start, int end, List<MatchedLine> matchedLines) {
-        // Определяем номер строки начала совпадения
         int lineNum = 1;
         int lastNewLine = -1;
         for (int i = 0; i < start; i++) {
@@ -136,7 +144,6 @@ public class SearchFilesTool implements McpTool {
             }
         }
         
-        // Извлекаем всю строку, в которой находится совпадение
         int nextNewLine = content.indexOf('\n', start);
         if (nextNewLine == -1) nextNewLine = content.length();
         
@@ -148,6 +155,9 @@ public class SearchFilesTool implements McpTool {
         }
     }
 
+    /**
+     * Вспомогательные классы данных.
+     */
     private record MatchedLine(int number, String text) {}
-    private record FileSearchResult(String path, List<MatchedLine> lines) {}
+    private record FileSearchResult(String path, List<MatchedLine> lines, boolean wasRead) {}
 }

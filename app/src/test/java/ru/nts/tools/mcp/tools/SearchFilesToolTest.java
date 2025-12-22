@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
@@ -75,5 +76,24 @@ class SearchFilesToolTest {
         
         assertTrue(text.contains("test1.txt"));
         assertFalse(text.contains("test2.txt"));
+    }
+
+    @Test
+    void testSearchReadMarker(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("known.txt");
+        Files.writeString(file, "target string");
+        
+        // Регистрируем как прочитанный
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", ".");
+        params.put("query", "target");
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+        
+        assertTrue(text.contains("known.txt [READ]:"), "Должен отображаться маркер [READ] в поиске");
     }
 }
