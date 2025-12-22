@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpRouter;
+import ru.nts.tools.mcp.tools.*;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -18,6 +19,14 @@ public class McpServer {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final McpRouter router = new McpRouter(mapper);
     private static final boolean DEBUG = true;
+
+    static {
+        router.registerTool(new FileInfoTool());
+        router.registerTool(new ListDirectoryTool());
+        router.registerTool(new ReadFileTool());
+        router.registerTool(new EditFileTool());
+        router.registerTool(new SearchFilesTool());
+    }
 
     public static void main(String[] args) {
         if (DEBUG) {

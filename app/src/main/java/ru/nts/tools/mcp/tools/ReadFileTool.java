@@ -1,0 +1,79 @@
+// Aristo 22.12.2025
+package ru.nts.tools.mcp.tools;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.EncodingUtils;
+import ru.nts.tools.mcp.core.McpTool;
+
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * Инструмент для чтения содержимого файла.
+ */
+public class ReadFileTool implements McpTool {
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    @Override
+    public String getName() {
+        return "read_file";
+    }
+
+    @Override
+    public String getDescription() {
+        return "Читает содержимое файла с автоматическим определением кодировки. Можно указать конкретную строку или диапазон строк (начиная с 0).";
+    }
+
+    @Override
+    public JsonNode getInputSchema() {
+        ObjectNode schema = mapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode props = schema.putObject("properties");
+        props.putObject("path").put("type", "string").put("description", "Путь к файлу");
+        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (включительно, от 0)");
+        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (исключительно, от 0)");
+        props.putObject("line").put("type", "integer").put("description", "Конкретная строка для чтения");
+        
+        schema.putArray("required").add("path");
+        return schema;
+    }
+
+    @Override
+    public JsonNode execute(JsonNode params) throws Exception {
+        Path path = Path.of(params.get("path").asText());
+        if (!Files.exists(path)) {
+            throw new IllegalArgumentException("Файл не найден: " + path);
+        }
+
+        Charset charset = EncodingUtils.detectEncoding(path);
+        String contentText;
+        if (params.has("line")) {
+            int lineIdx = params.get("line").asInt();
+            try (Stream<String> lines = Files.lines(path, charset)) {
+                contentText = lines.skip(lineIdx).findFirst().orElse("");
+            }
+        } else if (params.has("startLine") || params.has("endLine")) {
+            int start = params.path("startLine").asInt(0);
+            int end = params.path("endLine").asInt(Integer.MAX_VALUE);
+            try (Stream<String> lines = Files.lines(path, charset)) {
+                contentText = lines.skip(start).limit(Math.max(0, end - start)).collect(Collectors.joining("\n"));
+            }
+        } else {
+            contentText = Files.readString(path, charset);
+        }
+
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode content = result.putArray("content");
+        ObjectNode text = content.addObject();
+        text.put("type", "text");
+        text.put("text", contentText);
+        
+        return result;
+    }
+}
