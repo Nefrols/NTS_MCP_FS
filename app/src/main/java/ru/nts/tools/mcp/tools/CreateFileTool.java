@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +21,11 @@ import java.util.List;
 
 /**
  * Инструмент для создания новых файлов.
- * После создания возвращает листинг директории для подтверждения структуры.
+ * Возможности:
+ * - Автоматическое создание промежуточных директорий.
+ * - Защита от перезаписи существующих непрочитанных файлов.
+ * - Транзакционная атомарность через TransactionManager.
+ * - Возвращает листинг директории после создания для мгновенной обратной связи.
  */
 public class CreateFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -32,7 +37,7 @@ public class CreateFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Создает новый файл с указанным содержимым. Автоматически создает промежуточные директории.";
+        return "Создает новый файл. Поддерживает авто-создание папок и возвращает обновленный листинг директории.";
     }
 
     @Override
@@ -40,8 +45,8 @@ public class CreateFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к новому файлу");
-        props.putObject("content").put("type", "string").put("description", "Содержимое файла");
+        props.putObject("path").put("type", "string").put("description", "Путь к новому файлу.");
+        props.putObject("content").put("type", "string").put("description", "Текстовое содержимое файла.");
         
         schema.putArray("required").add("path").add("content");
         return schema;
@@ -55,31 +60,44 @@ public class CreateFileTool implements McpTool {
         // Санитарная проверка пути
         Path path = PathSanitizer.sanitize(pathStr, false);
         
+        // Предохранитель: если файл существует, его нужно прочитать перед перезаписью
         if (Files.exists(path) && !AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Доступ запрещен: файл уже существует и не был прочитан. Для перезаписи существующего файла он должен быть предварительно прочитан.");
+            throw new SecurityException("Доступ запрещен: файл уже существует и не был прочитан. Используйте read_file перед перезаписью.");
         }
 
-        // Создаем родительские директории если их нет
-        if (path.getParent() != null) {
-            Files.createDirectories(path.getParent());
+        // Запуск транзакции
+        TransactionManager.startTransaction("Create file: " + pathStr);
+        try {
+            // Создаем резервную копию (если файл новый, TransactionManager пометит его на удаление при откате)
+            TransactionManager.backup(path);
+
+            // Создаем родительские директории если их нет
+            if (path.getParent() != null) {
+                Files.createDirectories(path.getParent());
+            }
+
+            Files.writeString(path, content, StandardCharsets.UTF_8);
+            TransactionManager.commit();
+
+            var result = mapper.createObjectNode();
+            var contentArray = result.putArray("content");
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("Файл успешно создан: ").append(pathStr).append("\n\n");
+            sb.append("Содержимое директории ").append(path.getParent()).append(":\n");
+            sb.append(getDirectoryListing(path.getParent()));
+            
+            contentArray.addObject().put("type", "text").put("text", sb.toString());
+            return result;
+        } catch (Exception e) {
+            // Откат при сбое
+            TransactionManager.rollback();
+            throw e;
         }
-
-        Files.writeString(path, content, StandardCharsets.UTF_8);
-
-        var result = mapper.createObjectNode();
-        var contentArray = result.putArray("content");
-        
-        StringBuilder sb = new StringBuilder();
-        sb.append("Файл успешно создан: ").append(pathStr).append("\n\n");
-        sb.append("Содержимое директории ").append(path.getParent()).append(":\n");
-        sb.append(getDirectoryListing(path.getParent()));
-        
-        contentArray.addObject().put("type", "text").put("text", sb.toString());
-        return result;
     }
 
     /**
-     * Формирует простой листинг директории.
+     * Формирует простой список файлов в директории для обратной связи LLM.
      */
     private String getDirectoryListing(Path dir) throws IOException {
         if (dir == null || !Files.exists(dir)) return "(пусто)";

@@ -23,8 +23,13 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Инструмент для рекурсивного поиска текста.
- * Поддерживает многострочные запросы, сохраняет все спецсимволы и помечает прочитанные файлы.
+ * Инструмент для рекурсивного поиска текста в файлах проекта.
+ * Особенности:
+ * - Параллельное сканирование файлов с использованием виртуальных потоков Java 21+.
+ * - Поддержка регулярных выражений и многострочного поиска.
+ * - Вывод найденных строк с номерами для мгновенного анализа контекста.
+ * - Маркировка файлов, которые уже были прочитаны LLM ( [READ] ).
+ * - Игнорирование системных и защищенных папок.
  */
 public class SearchFilesTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -36,7 +41,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Параллельный рекурсивный поиск. Учитывает все спецсимволы и помечает прочитанные файлы как [READ].";
+        return "Рекурсивный поиск текста или регулярных выражений в файлах проекта. Возвращает фрагменты кода.";
     }
 
     @Override
@@ -44,9 +49,9 @@ public class SearchFilesTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Путь к базовой директории");
-        props.putObject("query").put("type", "string").put("description", "Строка или регулярное выражение для поиска (может быть многострочным)");
-        props.putObject("isRegex").put("type", "boolean").put("description", "Если true, то query трактуется как регулярное выражение");
+        props.putObject("path").put("type", "string").put("description", "Базовая директория для поиска.");
+        props.putObject("query").put("type", "string").put("description", "Строка или регулярное выражение.");
+        props.putObject("isRegex").put("type", "boolean").put("description", "Трактовать запрос как регулярное выражение.");
         
         schema.putArray("required").add("path").add("query");
         return schema;
@@ -64,15 +69,18 @@ public class SearchFilesTool implements McpTool {
             throw new IllegalArgumentException("Директория не найдена: " + pathStr);
         }
 
+        // Подготовка паттерна (MULTILINE позволяет искать по строкам, DOTALL - захватывать переводы строк если нужно)
         final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
         var results = new ConcurrentLinkedQueue<FileSearchResult>();
         
-        // Используем виртуальные потоки для параллельного сканирования файлов
+        // Используем виртуальные потоки для высокой производительности при массовом чтении с диска
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             try (Stream<Path> walk = Files.walk(rootPath)) {
-                walk.filter(Files::isRegularFile).forEach(path -> {
+                // Фильтруем только обычные файлы и пропускаем системные/защищенные объекты
+                walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
                     executor.submit(() -> {
                         try {
+                            // Автоматическое определение кодировки для каждого файла
                             Charset charset = EncodingUtils.detectEncoding(path);
                             String content = Files.readString(path, charset);
                             List<MatchedLine> matchedLines = new ArrayList<>();
@@ -80,36 +88,34 @@ public class SearchFilesTool implements McpTool {
                             if (isRegex) {
                                 Matcher m = pattern.matcher(content);
                                 while (m.find()) {
-                                    addMatchWithLines(content, m.start(), m.end(), matchedLines);
+                                    addMatchWithLines(content, m.start(), matchedLines);
                                 }
                             } else {
                                 int index = content.indexOf(query);
                                 while (index >= 0) {
-                                    addMatchWithLines(content, index, index + query.length(), matchedLines);
+                                    addMatchWithLines(content, index, matchedLines);
                                     index = content.indexOf(query, index + 1);
                                 }
                             }
                             
                             if (!matchedLines.isEmpty()) {
-                                // Проверяем, был ли файл прочитан ранее
+                                // Помечаем, видел ли я уже этот файл целиком
                                 boolean wasRead = AccessTracker.hasBeenRead(path);
                                 results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
                             }
                         } catch (Exception ignored) {
-                            // Ошибки доступа или кодировки игнорируем при массовом поиске
+                            // Ошибки доступа или бинарные данные игнорируем
                         }
                     });
                 });
             }
-            // Executor автоматически дождется завершения всех задач при закрытии
         }
 
         var sortedResults = new ArrayList<>(results);
         Collections.sort(sortedResults, (a, b) -> a.path().compareTo(b.path()));
 
         var resultNode = mapper.createObjectNode();
-        var contentArray = resultNode.putArray("content");
-        var textNode = contentArray.addObject();
+        var textNode = resultNode.putArray("content").addObject();
         textNode.put("type", "text");
         
         if (sortedResults.isEmpty()) {
@@ -121,7 +127,7 @@ public class SearchFilesTool implements McpTool {
                 String readMarker = res.wasRead() ? " [READ]" : "";
                 sb.append(res.path()).append(readMarker).append(":\n");
                 for (var line : res.lines()) {
-                    sb.append(line.number()).append("|").append(line.text()).append("\n");
+                    sb.append("  ").append(line.number()).append("| ").append(line.text()).append("\n");
                 }
                 sb.append("\n");
             }
@@ -132,9 +138,9 @@ public class SearchFilesTool implements McpTool {
     }
 
     /**
-     * Извлекает строку и номер строки для найденного совпадения.
+     * Извлекает полную строку, в которой произошло совпадение, и определяет её номер.
      */
-    private void addMatchWithLines(String content, int start, int end, List<MatchedLine> matchedLines) {
+    private void addMatchWithLines(String content, int start, List<MatchedLine> matchedLines) {
         int lineNum = 1;
         int lastNewLine = -1;
         for (int i = 0; i < start; i++) {
@@ -147,6 +153,7 @@ public class SearchFilesTool implements McpTool {
         int nextNewLine = content.indexOf('\n', start);
         if (nextNewLine == -1) nextNewLine = content.length();
         
+        // Очищаем строку от CR для консистентного вывода
         String lineText = content.substring(lastNewLine + 1, nextNewLine).replace("\r", "");
         
         int finalLineNum = lineNum;
@@ -155,9 +162,6 @@ public class SearchFilesTool implements McpTool {
         }
     }
 
-    /**
-     * Вспомогательные классы данных.
-     */
     private record MatchedLine(int number, String text) {}
     private record FileSearchResult(String path, List<MatchedLine> lines, boolean wasRead) {}
 }

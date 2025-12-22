@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -19,7 +20,10 @@ import java.util.List;
 
 /**
  * Инструмент для переименования файлов и директорий.
- * После переименования возвращает листинг директории.
+ * Особенности:
+ * - Работает только в рамках одной директории (для перемещения используйте move_file).
+ * - Транзакционная защита через TransactionManager.
+ * - Возвращает обновленный листинг директории.
  */
 public class RenameFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -31,7 +35,7 @@ public class RenameFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Переименовывает файл или директорию внутри текущего расположения. Возвращает обновленный листинг.";
+        return "Переименовывает объект внутри текущей папки. Поддерживает отмену.";
     }
 
     @Override
@@ -39,8 +43,8 @@ public class RenameFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Текущий путь к файлу");
-        props.putObject("newName").put("type", "string").put("description", "Новое имя (только имя, не путь)");
+        props.putObject("path").put("type", "string").put("description", "Текущий путь к объекту.");
+        props.putObject("newName").put("type", "string").put("description", "Новое имя (только имя, не путь).");
         
         schema.putArray("required").add("path").add("newName");
         return schema;
@@ -57,29 +61,41 @@ public class RenameFileTool implements McpTool {
             throw new IllegalArgumentException("Файл не найден: " + pathStr);
         }
 
+        // Запрещаем пути в новом имени
         if (newName.contains("/") || newName.contains("\\")) {
-            throw new IllegalArgumentException("Новое имя не должно содержать путь. Используйте move_file для перемещения.");
+            throw new IllegalArgumentException("Новое имя не должно содержать путь. Используйте move_file.");
         }
 
         Path target = source.resolveSibling(newName);
         
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Файл с именем " + newName + " уже существует.");
+            throw new IllegalArgumentException("Объект с именем " + newName + " уже существует.");
         }
 
-        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        AccessTracker.moveRecord(source, target);
+        TransactionManager.startTransaction("Rename: " + pathStr + " -> " + newName);
+        try {
+            // Бэкапим исходный путь и целевой
+            TransactionManager.backup(source);
+            TransactionManager.backup(target);
 
-        var result = mapper.createObjectNode();
-        var contentArray = result.putArray("content");
-        
-        StringBuilder sb = new StringBuilder();
-        sb.append("Успешно переименовано в ").append(newName).append("\n\n");
-        sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
-        sb.append(getDirectoryListing(target.getParent()));
-        
-        contentArray.addObject().put("type", "text").put("text", sb.toString());
-        return result;
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            AccessTracker.moveRecord(source, target);
+            TransactionManager.commit();
+
+            var result = mapper.createObjectNode();
+            var contentArray = result.putArray("content");
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("Успешно переименовано в ").append(newName).append("\n\n");
+            sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
+            sb.append(getDirectoryListing(target.getParent()));
+            
+            contentArray.addObject().put("type", "text").put("text", sb.toString());
+            return result;
+        } catch (Exception e) {
+            TransactionManager.rollback();
+            throw e;
+        }
     }
 
     private String getDirectoryListing(Path dir) throws IOException {

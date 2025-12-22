@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -19,7 +20,11 @@ import java.util.List;
 
 /**
  * Инструмент для перемещения файлов и директорий.
- * После перемещения возвращает листинг целевой директории.
+ * Особенности:
+ * - Автоматическое создание папок назначения.
+ * - Перенос статуса прочтения [READ] в AccessTracker.
+ * - Транзакционная защита (возможность UNDO).
+ * - Возврат листинга новой директории.
  */
 public class MoveFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -31,7 +36,7 @@ public class MoveFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Перемещает файл или директорию в новое местоположение. Возвращает листинг новой директории.";
+        return "Перемещает файл или директорию. Поддерживает отмену и возвращает обновленный листинг.";
     }
 
     @Override
@@ -39,8 +44,8 @@ public class MoveFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("sourcePath").put("type", "string").put("description", "Исходный путь");
-        props.putObject("targetPath").put("type", "string").put("description", "Путь назначения");
+        props.putObject("sourcePath").put("type", "string").put("description", "Текущий путь к объекту.");
+        props.putObject("targetPath").put("type", "string").put("description", "Новый путь к объекту.");
         
         schema.putArray("required").add("sourcePath").add("targetPath");
         return schema;
@@ -55,30 +60,53 @@ public class MoveFileTool implements McpTool {
         Path target = PathSanitizer.sanitize(targetStr, false);
 
         if (!Files.exists(source)) {
-            throw new IllegalArgumentException("Исходный файл не найден: " + sourceStr);
+            throw new IllegalArgumentException("Исходный объект не найден: " + sourceStr);
         }
         
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Файл назначения уже существует: " + targetStr);
+            throw new IllegalArgumentException("Объект по пути назначения уже существует: " + targetStr);
         }
 
-        if (target.getParent() != null) {
-            Files.createDirectories(target.getParent());
+        TransactionManager.startTransaction("Move: " + sourceStr + " -> " + targetStr);
+        try {
+            // Бэкапим исходный файл перед его исчезновением
+            if (Files.isRegularFile(source)) {
+                TransactionManager.backup(source);
+            } else if (Files.isDirectory(source)) {
+                // Для папок бэкапим все файлы внутри рекурсивно
+                try (var walk = Files.walk(source)) {
+                    for (Path p : (Iterable<Path>)walk::iterator) {
+                        if (Files.isRegularFile(p)) TransactionManager.backup(p);
+                    }
+                }
+            }
+            // Целевой путь бэкапим как "null" (для удаления при откате)
+            TransactionManager.backup(target);
+
+            // Создаем папки назначения
+            if (target.getParent() != null) {
+                Files.createDirectories(target.getParent());
+            }
+
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            // Переносим статус [READ] на новое место
+            AccessTracker.moveRecord(source, target);
+            TransactionManager.commit();
+
+            var result = mapper.createObjectNode();
+            var contentArray = result.putArray("content");
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("Успешно перемещено из ").append(sourceStr).append(" в ").append(targetStr).append("\n\n");
+            sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
+            sb.append(getDirectoryListing(target.getParent()));
+            
+            contentArray.addObject().put("type", "text").put("text", sb.toString());
+            return result;
+        } catch (Exception e) {
+            TransactionManager.rollback();
+            throw e;
         }
-
-        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        AccessTracker.moveRecord(source, target);
-
-        var result = mapper.createObjectNode();
-        var contentArray = result.putArray("content");
-        
-        StringBuilder sb = new StringBuilder();
-        sb.append("Успешно перемещено из ").append(sourceStr).append(" в ").append(targetStr).append("\n\n");
-        sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
-        sb.append(getDirectoryListing(target.getParent()));
-        
-        contentArray.addObject().put("type", "text").put("text", sb.toString());
-        return result;
     }
 
     private String getDirectoryListing(Path dir) throws IOException {

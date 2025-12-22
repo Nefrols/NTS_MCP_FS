@@ -34,7 +34,7 @@ class SearchFilesToolTest {
         String text = result.get("content").get(0).get("text").asText();
         
         assertTrue(text.contains("file1.txt:"));
-        assertTrue(text.contains("1|    indented string"));
+        assertTrue(text.contains("1|     indented string"));
     }
 
     @Test

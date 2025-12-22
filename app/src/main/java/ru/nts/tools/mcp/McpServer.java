@@ -32,6 +32,8 @@ public class McpServer {
         router.registerTool(new DeleteFileTool());
         router.registerTool(new MoveFileTool());
         router.registerTool(new RenameFileTool());
+        router.registerTool(new UndoTool());
+        router.registerTool(new RedoTool());
     }
 
     public static void main(String[] args) {
