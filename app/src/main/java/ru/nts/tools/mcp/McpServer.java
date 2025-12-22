@@ -124,7 +124,7 @@ public class McpServer {
                         var capabilities = result.putObject("capabilities");
                         capabilities.putObject("tools"); // Объявляем поддержку инструментов
                         var serverInfo = result.putObject("serverInfo");
-                        serverInfo.put("name", "L2NTS-FileSystem-MCP");
+                        serverInfo.put("name", "NTS-FileSystem-MCP");
                         serverInfo.put("version", "1.0.0");
                         response.set("result", result);
                     }

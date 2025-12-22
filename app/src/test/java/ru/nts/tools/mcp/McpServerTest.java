@@ -45,7 +45,7 @@ class McpServerTest {
         String response = outContent.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("\"id\":1"), "Ответ должен содержать ID запроса");
         assertTrue(response.contains("protocolVersion"), "Ответ должен содержать версию протокола");
-        assertTrue(response.contains("L2NTS-FileSystem-MCP"), "Ответ должен содержать имя сервера");
+        assertTrue(response.contains("NTS-FileSystem-MCP"), "Ответ должен содержать имя сервера");
     }
 
     /**

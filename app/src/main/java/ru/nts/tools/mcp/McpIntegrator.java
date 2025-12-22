@@ -41,7 +41,7 @@ public class McpIntegrator {
     /**
      * Имя сервера в конфигурации клиентов.
      */
-    private static final String SERVER_NAME = "L2NTS-FileSystem-Server";
+    private static final String SERVER_NAME = "NTS-FileSystem-Server";
 
     /**
      * Запись о поддерживаемом клиенте.
