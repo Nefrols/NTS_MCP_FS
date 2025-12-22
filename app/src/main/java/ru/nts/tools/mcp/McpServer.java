@@ -64,6 +64,12 @@ public class McpServer {
      * @param args Аргументы командной строки (не используются).
      */
     public static void main(String[] args) {
+        // Принудительно устанавливаем UTF-8 для стандартных потоков вывода, 
+        // так как на Windows они по умолчанию используют системную кодировку (cp1251/866).
+        // Это критически важно для передачи кириллицы в JSON-RPC сообщениях.
+        System.setOut(new java.io.PrintStream(System.out, true, StandardCharsets.UTF_8));
+        System.setErr(new java.io.PrintStream(System.err, true, StandardCharsets.UTF_8));
+
         if (DEBUG) {
             System.err.println("MCP Server starting with Virtual Threads support...");
         }

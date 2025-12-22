@@ -78,12 +78,12 @@ class BatchToolsTest {
 
         // Шаг 1: Переименование
         ObjectNode a1 = actions.addObject();
-        a1.put("tool", "rename_file");
+        a1.put("tool", "nts_rename_file");
         a1.putObject("params").put("path", "old.txt").put("newName", "new.txt");
 
         // Шаг 2: Редактирование (используем уже новое имя файла)
         ObjectNode a2 = actions.addObject();
-        a2.put("tool", "edit_file");
+        a2.put("tool", "nts_edit_file");
         a2.putObject("params").put("path", "new.txt").put("oldText", "Original").put("newText", "Updated");
 
         // Выполнение батча
@@ -111,12 +111,12 @@ class BatchToolsTest {
 
         // Шаг 1: Валидная правка (должна быть откатана)
         ObjectNode a1 = actions.addObject();
-        a1.put("tool", "edit_file");
+        a1.put("tool", "nts_edit_file");
         a1.putObject("params").put("path", "safe.txt").put("oldText", "Untouched").put("newText", "MODIFIED");
 
         // Шаг 2: Заведомо ошибочная операция (несуществующий файл)
         ObjectNode a2 = actions.addObject();
-        a2.put("tool", "edit_file");
+        a2.put("tool", "nts_edit_file");
         a2.putObject("params").put("path", "missing.txt").put("oldText", "any").put("newText", "fail");
 
         // Ожидаем исключение
