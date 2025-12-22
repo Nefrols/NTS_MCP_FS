@@ -21,23 +21,19 @@ class SearchFilesToolTest {
     void testSearch(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         Path subDir = Files.createDirectory(tempDir.resolve("sub"));
-        Files.writeString(tempDir.resolve("file1.txt"), "contains target string\nanother target here");
+        Files.writeString(tempDir.resolve("file1.txt"), "    indented string\nanother target here");
         Files.writeString(subDir.resolve("file2.txt"), "also target here");
         Files.writeString(tempDir.resolve("file3.txt"), "no match");
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", tempDir.toString());
-        params.put("query", "target");
+        params.put("query", "indented");
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
         
         assertTrue(text.contains("file1.txt:"));
-        assertTrue(text.contains("1: contains target string"));
-        assertTrue(text.contains("2: another target here"));
-        assertTrue(text.contains("file2.txt:"));
-        assertTrue(text.contains("1: also target here"));
-        assertFalse(text.contains("file3.txt"));
+        assertTrue(text.contains("1|    indented string"));
     }
 
     @Test

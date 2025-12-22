@@ -37,20 +37,20 @@ class EditFileToolTest {
     void testReplaceLines(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         Path file = tempDir.resolve("test.txt");
-        Files.write(file, List.of("Line 0", "Line 1", "Line 2", "Line 3"));
+        Files.write(file, List.of("Line 1", "Line 2", "Line 3", "Line 4"));
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("startLine", 1);
-        params.put("endLine", 2);
-        params.put("newText", "New Line 1 and 2");
+        params.put("startLine", 2);
+        params.put("endLine", 3);
+        params.put("newText", "New Line 2 and 3");
 
         tool.execute(params);
         
         List<String> actualLines = Files.readAllLines(file);
         assertEquals(3, actualLines.size());
-        assertEquals("Line 0", actualLines.get(0));
-        assertEquals("New Line 1 and 2", actualLines.get(1));
-        assertEquals("Line 3", actualLines.get(2));
+        assertEquals("Line 1", actualLines.get(0));
+        assertEquals("New Line 2 and 3", actualLines.get(1));
+        assertEquals("Line 4", actualLines.get(2));
     }
 }

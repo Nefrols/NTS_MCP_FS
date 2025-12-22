@@ -14,9 +14,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Инструмент для редактирования файлов.
+ * Устойчив к ошибкам LLM в пробелах и типах переносов строк.
  */
 public class EditFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -28,7 +31,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Редактирует файл с автоматическим определением кодировки. Поддерживает замену подстроки или замену диапазона строк.";
+        return "Редактирует файл. Поддерживает замену текста. Инструмент устойчив к различиям в пробелах и переносах строк.";
     }
 
     @Override
@@ -39,8 +42,8 @@ public class EditFileTool implements McpTool {
         props.putObject("path").put("type", "string").put("description", "Путь к файлу");
         props.putObject("oldText").put("type", "string").put("description", "Текст для замены");
         props.putObject("newText").put("type", "string").put("description", "Новый текст");
-        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка диапазона (от 0)");
-        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка диапазона (от 0)");
+        props.putObject("startLine").put("type", "integer").put("description", "Начальная строка (от 1)");
+        props.putObject("endLine").put("type", "integer").put("description", "Конечная строка (от 1)");
         
         schema.putArray("required").add("path");
         return schema;
@@ -49,47 +52,95 @@ public class EditFileTool implements McpTool {
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
-        Path path = PathSanitizer.sanitize(pathStr, false); // Запрещаем редактирование защищенных файлов
+        Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
             throw new IllegalArgumentException("Файл не найден: " + pathStr);
         }
 
         Charset charset = EncodingUtils.detectEncoding(path);
+        String content = Files.readString(path, charset);
         String resultMsg;
+
         if (params.has("oldText") && params.has("newText")) {
-            String content = Files.readString(path, charset);
             String oldText = params.get("oldText").asText();
             String newText = params.get("newText").asText();
-            if (!content.contains(oldText)) {
-                throw new IllegalArgumentException("Текст для замены не найден в файле.");
-            }
-            Files.writeString(path, content.replace(oldText, newText), charset);
-            resultMsg = "Успешно заменено вхождение текста.";
+            
+            content = performSmartReplace(content, oldText, newText);
+            Files.writeString(path, content, charset);
+            resultMsg = "Успешно заменено вхождение текста (использован умный поиск).";
         } else if (params.has("startLine") && params.has("endLine") && params.has("newText")) {
             int start = params.get("startLine").asInt();
             int end = params.get("endLine").asInt();
             String newText = params.get("newText").asText();
             
-            List<String> lines = Files.readAllLines(path, charset);
-            List<String> newLines = new ArrayList<>();
-            for (int i = 0; i < lines.size(); i++) {
-                if (i == start) {
-                    newLines.add(newText);
+            String[] lines = content.split("\n", -1);
+            List<String> resultLines = new ArrayList<>();
+            for (int i = 0; i < lines.length; i++) {
+                int currentLineNum = i + 1;
+                if (currentLineNum == start) {
+                    resultLines.add(newText);
                 }
-                if (i < start || i > end) {
-                    newLines.add(lines.get(i));
+                if (currentLineNum < start || currentLineNum > end) {
+                    resultLines.add(lines[i].replace("\r", ""));
                 }
             }
-            Files.write(path, newLines, charset);
+            Files.writeString(path, String.join("\n", resultLines), charset);
             resultMsg = "Успешно заменен диапазон строк " + start + "-" + end;
         } else {
             throw new IllegalArgumentException("Недостаточно параметров для редактирования.");
         }
 
         ObjectNode result = mapper.createObjectNode();
-        ArrayNode content = result.putArray("content");
-        content.addObject().put("type", "text").put("text", resultMsg);
+        var contentArray = result.putArray("content");
+        contentArray.addObject().put("type", "text").put("text", resultMsg);
         return result;
+    }
+
+    private String performSmartReplace(String content, String oldText, String newText) {
+        if (content.contains(oldText)) {
+            return content.replace(oldText, newText);
+        }
+
+        String normContent = content.replace("\r\n", "\n");
+        String normOld = oldText.replace("\r\n", "\n");
+        if (normContent.contains(normOld)) {
+            return normContent.replace(normOld, newText);
+        }
+
+        // Fuzzy match: экранируем только спецсимволы, а пробелы заменяем на \s+
+        String escapedOld = escapeRegexExceptWhitespace(normOld);
+        String regex = escapedOld.replaceAll("\\s+", "\\\\s+");
+        
+        Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(normContent);
+        
+        if (matcher.find()) {
+            int start = matcher.start();
+            int end = matcher.end();
+            
+            if (matcher.find()) {
+                throw new IllegalArgumentException("Найдено более одного совпадения при нечетком поиске. Укажите более точный контекст.");
+            }
+            
+            return normContent.substring(0, start) + newText + normContent.substring(end);
+        }
+
+        throw new IllegalArgumentException("Текст не найден. Проверьте правильность oldText или используйте номера строк для редактирования.");
+    }
+
+    private String escapeRegexExceptWhitespace(String input) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (Character.isWhitespace(c)) {
+                sb.append(c);
+            } else if ("<([{\\^-=$!|]})?*+.>".indexOf(c) != -1) {
+                sb.append('\\').append(c);
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 }
