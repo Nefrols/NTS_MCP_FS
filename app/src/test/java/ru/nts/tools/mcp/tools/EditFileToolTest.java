@@ -137,4 +137,39 @@ class EditFileToolTest {
         assertEquals("Middle", result.get(1));
         assertEquals("End", result.get(2));
     }
+
+    @Test
+    void testBatchAtomicity(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("atomic.txt");
+        String originalContent = "Line 1\nLine 2\nLine 3";
+        Files.writeString(file, originalContent);
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        ArrayNode ops = params.putArray("operations");
+
+        // Операция 1: Валидная замена
+        ObjectNode op1 = ops.addObject();
+        op1.put("operation", "replace");
+        op1.put("startLine", 1);
+        op1.put("endLine", 1);
+        op1.put("content", "MODIFIED");
+
+        // Операция 2: Ошибочная (неверный expectedContent)
+        ObjectNode op2 = ops.addObject();
+        op2.put("operation", "replace");
+        op2.put("startLine", 2);
+        op2.put("endLine", 2);
+        op2.put("expectedContent", "WRONG_STUFF");
+        op2.put("content", "SHOULD_NOT_HAPPEN");
+
+        // Выполнение должно упасть
+        assertThrows(IllegalStateException.class, () -> tool.execute(params));
+
+        // Файл должен остаться нетронутым (Line 1 не должна стать MODIFIED)
+        String currentContent = Files.readString(file).replace("\r", "");
+        assertEquals(originalContent, currentContent, "Файл не должен измениться, если одна из операций батча провалена");
+    }
 }
