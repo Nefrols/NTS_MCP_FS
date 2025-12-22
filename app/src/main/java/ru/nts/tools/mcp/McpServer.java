@@ -14,15 +14,29 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Основной класс MCP сервера, оптимизированный для работы с виртуальными потоками.
+ * Основной класс MCP сервера, оптимизированный для работы с виртуальными потоками Java 24.
+ * Реализует протокол Model Context Protocol через стандартные потоки ввода-вывода (stdio).
+ * Обеспечивает параллельную обработку запросов от LLM с поддержкой транзакционности.
  */
 public class McpServer {
 
+    /**
+     * Объект для работы с JSON данными.
+     */
     private static final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * Центральный роутер для регистрации и вызова инструментов.
+     */
     private static final McpRouter router = new McpRouter(mapper);
+
+    /**
+     * Флаг включения отладочной информации в stderr.
+     */
     private static final boolean DEBUG = true;
 
     static {
+        // Регистрация всех доступных инструментов сервера
         router.registerTool(new FileInfoTool());
         router.registerTool(new ListDirectoryTool());
         router.registerTool(new ReadFileTool());
@@ -40,18 +54,25 @@ public class McpServer {
         router.registerTool(new BatchToolsTool(router));
     }
 
+    /**
+     * Точка входа в приложение. Инициализирует цикл чтения команд.
+     * Использует Virtual Threads для предотвращения блокировок при тяжелых IO операциях.
+     *
+     * @param args Аргументы командной строки (не используются).
+     */
     public static void main(String[] args) {
         if (DEBUG) {
             System.err.println("MCP Server starting with Virtual Threads support...");
         }
 
-        // Используем ExecutorService с виртуальными потоками для обработки каждого запроса
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-             BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-            
+        // Используем ExecutorService с виртуальными потоками для обработки каждого запроса.
+        // Это позволяет серверу оставаться отзывчивым даже во время выполнения длительных задач.
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor(); BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+
             String line;
             while ((line = reader.readLine()) != null) {
                 final String message = line;
+                // Каждый входящий JSON-RPC запрос обрабатывается в отдельном виртуальном потоке
                 executor.submit(() -> processMessage(message));
             }
         } catch (Exception e) {
@@ -62,6 +83,12 @@ public class McpServer {
         }
     }
 
+    /**
+     * Обрабатывает одиночное JSON-RPC сообщение.
+     * Выполняет парсинг, маршрутизацию к соответствующему методу и формирование ответа.
+     *
+     * @param message Строка, содержащая JSON-RPC запрос.
+     */
     private static void processMessage(String message) {
         try {
             JsonNode request = mapper.readTree(message);
@@ -72,6 +99,7 @@ public class McpServer {
                 System.err.println("[" + Thread.currentThread() + "] Received method: " + method);
             }
 
+            // Подготовка базового каркаса ответа
             ObjectNode response = mapper.createObjectNode();
             response.set("jsonrpc", mapper.convertValue("2.0", JsonNode.class));
             if (id != null) {
@@ -79,6 +107,7 @@ public class McpServer {
             }
 
             try {
+                // Диспетчеризация методов MCP протокола
                 switch (method) {
                     case "initialize" -> {
                         var result = mapper.createObjectNode();
@@ -95,7 +124,10 @@ public class McpServer {
                         JsonNode params = request.path("params").path("arguments");
                         response.set("result", router.callTool(toolName, params));
                     }
-                    case "notifications/initialized" -> { return; }
+                    case "notifications/initialized" -> {
+                        // Уведомление об успешной инициализации клиентом
+                        return;
+                    }
                     default -> {
                         if (id != null) {
                             var error = mapper.createObjectNode();
@@ -106,6 +138,7 @@ public class McpServer {
                     }
                 }
             } catch (Exception e) {
+                // Обработка внутренних ошибок инструментов
                 if (id != null) {
                     var error = mapper.createObjectNode();
                     error.put("code", -32000);
@@ -114,6 +147,7 @@ public class McpServer {
                 }
             }
 
+            // Отправляем ответ только если это был запрос (есть id) или есть результат/ошибка
             if (id != null || response.has("result") || response.has("error")) {
                 sendResponse(response);
             }
@@ -126,7 +160,11 @@ public class McpServer {
     }
 
     /**
-     * Синхронизированная отправка ответа, чтобы избежать перемешивания вывода от разных потоков.
+     * Синхронизированная отправка ответа в стандартный поток вывода.
+     * Синхронизация необходима, так как несколько виртуальных потоков могут пытаться писать одновременно,
+     * что приведет к перемешиванию байтов в JSON сообщениях.
+     *
+     * @param response Объект JSON ответа.
      */
     private static synchronized void sendResponse(ObjectNode response) {
         try {

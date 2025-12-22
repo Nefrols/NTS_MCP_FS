@@ -8,10 +8,15 @@ import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 /**
- * Инструмент для повтора ранее отмененной транзакции.
- * После выполнения возвращает актуальный журнал истории.
+ * Инструмент для выполнения операции повтора (REDO).
+ * Позволяет вернуть изменения, которые были ранее отменены командой 'undo'.
+ * Инструмент взаимодействует с глобальным стеком транзакций.
  */
 public class RedoTool implements McpTool {
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -26,17 +31,19 @@ public class RedoTool implements McpTool {
 
     @Override
     public JsonNode getInputSchema() {
+        // Инструмент не требует входных параметров
         return mapper.createObjectNode().put("type", "object");
     }
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
+        // Выполнение команды REDO через менеджер транзакций
         String status = TransactionManager.redo();
+        // Получение актуального состояния журнала после операции
         String journal = TransactionManager.getJournal();
-        
+
         ObjectNode result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text")
-                .put("text", status + "\n\n" + journal);
+        result.putArray("content").addObject().put("type", "text").put("text", status + "\n\n" + journal);
         return result;
     }
 }

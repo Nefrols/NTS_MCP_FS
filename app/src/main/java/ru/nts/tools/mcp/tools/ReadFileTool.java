@@ -3,7 +3,6 @@ package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.EncodingUtils;
@@ -17,17 +16,24 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
 
 /**
- * Инструмент для чтения содержимого файла.
- * Поддерживает чтение по диапазонам и умное чтение вокруг контекста с выводом расширенных метаданных.
+ * Инструмент для чтения содержимого файлов проекта.
+ * Особенности:
+ * 1. Умное чтение: Поддержка выборки по диапазонам строк и поиска контекста вокруг паттернов.
+ * 2. Метаданные: Каждый ответ содержит технический заголовок (размер, строки, кодировка, CRC32).
+ * 3. Безопасность: Автоматическая детекция и блокировка бинарных файлов, а также лимиты на размер (OOM Protection).
+ * 4. Контроль доступа: Регистрация факта чтения в трекере доступа (AccessTracker) для последующего разрешения правок.
  */
 public class ReadFileTool implements McpTool {
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -45,13 +51,19 @@ public class ReadFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
+
         props.putObject("path").put("type", "string").put("description", "File path.");
+
         props.putObject("startLine").put("type", "integer").put("description", "Start line (from 1).");
+
         props.putObject("endLine").put("type", "integer").put("description", "End line (inclusive).");
+
         props.putObject("line").put("type", "integer").put("description", "Single line to read.");
+
         props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor to find context.");
+
         props.putObject("contextRange").put("type", "integer").put("description", "Lines around anchor (default 0).");
-        
+
         schema.putArray("required").add("path");
         return schema;
     }
@@ -59,30 +71,34 @@ public class ReadFileTool implements McpTool {
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
+        // Санитарная нормализация пути и проверка прав
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path)) {
             throw new IllegalArgumentException("File not found: " + pathStr);
         }
 
-        // Защита от OOM
+        // Предотвращение загрузки гигантских файлов (OOM Protection)
         PathSanitizer.checkFileSize(path);
 
+        // Чтение файла, автоматическое определение кодировки и проверка на бинарность за один проход
         EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
         Charset charset = fileData.charset();
         String content = fileData.content();
 
-        // Регистрируем доступ к файлу
+        // Регистрация в трекере доступа: LLM "увидела" файл, теперь она может его править
         AccessTracker.registerRead(path);
-        
+
+        // Подготовка строк для выборки диапазонов
         String[] lines = content.split("\n", -1);
         String resultText;
 
+        // Логика выборки контента
         if (params.has("contextStartPattern")) {
-            // Умное чтение вокруг контекста
+            // Режим "Умное чтение вокруг контекста"
             String patternStr = params.get("contextStartPattern").asText();
             int range = params.path("contextRange").asInt(0);
-            
+
             int anchorIdx = -1;
             Pattern pattern = Pattern.compile(patternStr);
             for (int i = 0; i < lines.length; i++) {
@@ -96,43 +112,41 @@ public class ReadFileTool implements McpTool {
                 throw new IllegalArgumentException("Pattern not found: " + patternStr);
             }
 
+            // Вычисление границ окна чтения
             int start = Math.max(0, anchorIdx - range);
             int end = Math.min(lines.length - 1, anchorIdx + range);
-            
-            resultText = Stream.of(Arrays.copyOfRange(lines, start, end + 1))
-                    .map(l -> l.replace("\r", ""))
-                    .collect(Collectors.joining("\n"));
-            
+
+            resultText = Stream.of(Arrays.copyOfRange(lines, start, end + 1)).map(l -> l.replace("\r", "")).collect(Collectors.joining("\n"));
+
         } else if (params.has("line")) {
+            // Режим чтения одной конкретной строки
             int lineNum = params.get("line").asInt();
             resultText = (lineNum >= 1 && lineNum <= lines.length) ? lines[lineNum - 1].replace("\r", "") : "";
         } else if (params.has("startLine") || params.has("endLine")) {
+            // Режим чтения диапазона строк
             int start = params.path("startLine").asInt(1);
             int end = params.path("endLine").asInt(lines.length);
-            
+
             int startIdx = Math.max(0, start - 1);
             int endIdx = Math.min(lines.length, end);
-            
+
             if (startIdx >= endIdx) {
                 resultText = "";
             } else {
-                resultText = Stream.of(Arrays.copyOfRange(lines, startIdx, endIdx))
-                        .map(l -> l.replace("\r", ""))
-                        .collect(Collectors.joining("\n"));
+                resultText = Stream.of(Arrays.copyOfRange(lines, startIdx, endIdx)).map(l -> l.replace("\r", "")).collect(Collectors.joining("\n"));
             }
         } else {
+            // Чтение всего файла целиком
             resultText = content;
         }
 
-        // Формируем заголовок с расширенными метаданными для LLM
+        // Подготовка информативного заголовка для LLM
         long size = Files.size(path);
         long crc32 = calculateCRC32(path);
         int charCount = content.length();
-        int lineCount = lines.length;
-        if (content.isEmpty()) lineCount = 0;
+        int lineCount = content.isEmpty() ? 0 : lines.length;
 
-        String header = String.format("[FILE: %s | SIZE: %d bytes | CHARS: %d | LINES: %d | ENCODING: %s | CRC32: %X]\n", 
-                path.getFileName(), size, charCount, lineCount, charset.name(), crc32);
+        String header = String.format("[FILE: %s | SIZE: %d bytes | CHARS: %d | LINES: %d | ENCODING: %s | CRC32: %X]\n", path.getFileName(), size, charCount, lineCount, charset.name(), crc32);
 
         ObjectNode result = mapper.createObjectNode();
         result.putArray("content").addObject().put("type", "text").put("text", header + resultText);
@@ -140,7 +154,14 @@ public class ReadFileTool implements McpTool {
     }
 
     /**
-     * Вычисляет CRC32 хеш-сумму файла.
+     * Вычисляет контрольную сумму файла CRC32.
+     * Используется моделью для верификации локального кэша и отслеживания изменений.
+     *
+     * @param path Путь к файлу.
+     *
+     * @return Значение CRC32.
+     *
+     * @throws IOException При ошибках чтения.
      */
     private long calculateCRC32(Path path) throws IOException {
         CRC32 crc = new CRC32();

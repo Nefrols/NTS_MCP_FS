@@ -9,35 +9,49 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Утилита для безопасного выполнения внешних процессов.
- * Особенности безопасности:
- * 1. Не использует командную оболочку (cmd.exe/sh), что исключает shell-инъекции.
- * 2. Работает только в рамках корня проекта.
- * 3. Ограничивает время выполнения и объем возвращаемых данных.
+ * Утилита для безопасного выполнения внешних процессов (команд ОС).
+ * Спроектирована для предотвращения распространенных уязвимостей при работе с LLM:
+ * 1. Изоляция: Команды выполняются строго в рабочей директории проекта.
+ * 2. Безопасность: Прямой запуск через ProcessBuilder без использования shell (cmd.exe/sh),
+ * что делает невозможным выполнение цепочек команд через ';' или пайпы '|'.
+ * 3. Стабильность: Жесткие лимиты на время выполнения (timeout) и объем возвращаемых данных (защита от зацикливания вывода).
  */
 public class ProcessExecutor {
 
+    /**
+     * Максимальное количество строк вывода, которое будет прочитано и возвращено.
+     * Предотвращает переполнение памяти при запуске команд с огромным логом.
+     */
     private static final int MAX_OUTPUT_LINES = 500;
+
+    /**
+     * Время ожидания завершения процесса по умолчанию.
+     */
     private static final long DEFAULT_TIMEOUT_MINUTES = 5;
 
     /**
-     * Выполняет команду и возвращает результат.
-     * 
-     * @param command Список аргументов команды (первый элемент - исполняемый файл).
-     * @return Объект с результатом выполнения (stdout + stderr + exit code).
-     * @throws Exception Если выполнение прервано или произошла системная ошибка.
+     * Выполняет внешнюю команду и возвращает агрегированный результат.
+     *
+     * @param command Список аргументов команды. Первый элемент — исполняемый файл или скрипт.
+     *
+     * @return Объект {@link ExecutionResult}, содержащий код выхода и текстовый вывод.
+     *
+     * @throws Exception Если возникла системная ошибка, процесс был прерван или выполнение невозможно.
      */
     public static ExecutionResult execute(List<String> command) throws Exception {
         Path root = PathSanitizer.getRoot();
-        
+
+        // Настройка процесса: передаем аргументы напрямую в ОС как массив, минуя командный интерпретатор
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(root.toFile());
-        pb.redirectErrorStream(true); // Объединяем stdout и stderr для простоты анализа LLM
+        // Объединяем stdout и stderr в один поток для упрощения анализа результата моделью
+        pb.redirectErrorStream(true);
 
         Process process = pb.start();
         StringBuilder output = new StringBuilder();
 
         try {
+            // Потоковое чтение вывода процесса с лимитированием по строкам
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 int linesRead = 0;
@@ -52,20 +66,22 @@ public class ProcessExecutor {
                 }
             }
 
+            // Ожидание завершения процесса с таймаутом
             boolean finished = process.waitFor(DEFAULT_TIMEOUT_MINUTES, TimeUnit.MINUTES);
             if (!finished) {
+                // Принудительное завершение при превышении времени ожидания
                 process.destroyForcibly();
                 return new ExecutionResult(-1, output.toString() + "\nERROR: Process timed out.");
             }
 
             return new ExecutionResult(process.exitValue(), output.toString());
         } catch (InterruptedException e) {
-            // Если поток прерван — убиваем дочерний процесс
+            // Корректная обработка прерывания потока Java (например, при закрытии сервера)
             process.destroyForcibly();
             Thread.currentThread().interrupt();
             throw e;
         } finally {
-            // Гарантируем закрытие потоков и освобождение ресурсов процесса
+            // Гарантированное освобождение системных ресурсов процесса
             if (process.isAlive()) {
                 process.destroy();
             }
@@ -73,7 +89,11 @@ public class ProcessExecutor {
     }
 
     /**
-     * Результат выполнения процесса.
+     * Контейнер для результата выполнения внешней команды.
+     *
+     * @param exitCode Код выхода процесса (0 обычно означает успех).
+     * @param output   Текстовый вывод процесса (stdout + stderr).
      */
-    public record ExecutionResult(int exitCode, String output) {}
+    public record ExecutionResult(int exitCode, String output) {
+    }
 }

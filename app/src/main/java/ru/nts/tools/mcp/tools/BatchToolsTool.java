@@ -10,13 +10,27 @@ import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 /**
- * Инструмент для объединения вызовов различных инструментов в одну атомарную транзакцию.
- * Позволяет выполнять сложные цепочки действий (например, Rename + Edit).
+ * Инструмент-оркестратор для пакетного выполнения различных инструментов MCP в рамках одной транзакции.
+ * Позволяет объединять логически связанные действия (например, переименование класса и последующая правка его контента)
+ * в единый атомарный блок. Если любой инструмент в цепочке вернет ошибку, все предыдущие действия будут откатаны.
  */
 public class BatchToolsTool implements McpTool {
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * Ссылка на роутер сервера для выполнения вложенных вызовов инструментов.
+     */
     private final McpRouter router;
 
+    /**
+     * Создает новый инструмент пакетного выполнения.
+     *
+     * @param router Роутер, содержащий реестр всех доступных инструментов.
+     */
     public BatchToolsTool(McpRouter router) {
         this.router = router;
     }
@@ -36,15 +50,18 @@ public class BatchToolsTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        
+
+        // Определение массива действий для выполнения
         var actions = props.putObject("actions");
         actions.put("type", "array");
         var item = actions.putObject("items");
         item.put("type", "object");
         var itemProps = item.putObject("properties");
+
         itemProps.putObject("tool").put("type", "string").put("description", "Tool name.");
+
         itemProps.putObject("params").put("type", "object").put("description", "Tool parameters.");
-        
+
         schema.putArray("required").add("actions");
         return schema;
     }
@@ -56,28 +73,32 @@ public class BatchToolsTool implements McpTool {
             throw new IllegalArgumentException("Parameter 'actions' must be an array.");
         }
 
+        // Запуск глобальной транзакции для всей цепочки действий
         TransactionManager.startTransaction("Batch Tools (" + actions.size() + " actions)");
         try {
             ArrayNode results = mapper.createArrayNode();
             for (JsonNode action : actions) {
                 String toolName = action.path("tool").asText();
                 JsonNode toolParams = action.path("params");
-                
-                // Вызываем инструмент через роутер. Благодаря вложенности в TransactionManager,
-                // внутренние commit() инструментов ничего не сделают до завершения этого метода.
+
+                // Вызываем целевой инструмент через роутер.
+                // Благодаря поддержке вложенности в TransactionManager, вызовы commit() 
+                // внутри этих инструментов не приведут к фиксации на диск до завершения батча.
                 JsonNode result = router.callTool(toolName, toolParams);
                 results.add(result);
             }
+            // Успешное завершение всей цепочки — фиксируем изменения
             TransactionManager.commit();
 
             ObjectNode response = mapper.createObjectNode();
             var content = response.putArray("content").addObject();
             content.put("type", "text");
             content.put("text", "Batch execution successful. All " + actions.size() + " actions applied atomically.");
-            
+
             return response;
         } catch (Exception e) {
-            // Любая ошибка в цепочке приводит к полному откату всех инструментов в батче
+            // Любая ошибка (включая ошибки валидации или безопасности в любом инструменте)
+            // приводит к полному откату всех изменений, сделанных в рамках этого батча.
             TransactionManager.rollback();
             throw e;
         }

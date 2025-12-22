@@ -1,7 +1,6 @@
 // Aristo 22.12.2025
 package ru.nts.tools.mcp.core;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,58 +8,70 @@ import java.nio.file.Paths;
 import java.util.Set;
 
 /**
- * Утилита для проверки и нормализации путей.
- * Обеспечивает безопасность, предотвращая выход за пределы рабочей директории.
- * Блокирует доступ к системным файлам проекта (.git, .gradle, .mcp и т.д.).
+ * Утилита для проверки, нормализации и защиты путей файловой системы (Path Sanitizer).
+ * Реализует механизм "песочницы" (sandboxing), предотвращая:
+ * 1. Выход за пределы рабочей директории проекта (Path Traversal).
+ * 2. Доступ к скрытым системным файлам и папкам инфраструктуры (.git, .gradle, .mcp).
+ * 3. Попытки загрузки сверхбольших файлов, способных вызвать переполнение памяти (OOM).
  */
 public class PathSanitizer {
 
+    /**
+     * Текущий корень рабочей директории. Все операции должны ограничиваться этим путем.
+     */
     private static Path root = Paths.get(".").toAbsolutePath().normalize();
-    
-    // Максимальный размер файла для текстовых операций (10 MB), чтобы избежать OOM
+
+    /**
+     * Максимально допустимый размер файла для текстовой обработки (10 MB).
+     * Служит предохранителем против зависания сервера при попытке чтения гигантских логов или дампов.
+     */
     private static final long MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024;
 
     /**
-     * Список файлов и папок, которые запрещено изменять или удалять для LLM.
+     * Набор имен файлов и папок, доступ к которым для LLM заблокирован или ограничен.
+     * Включает инфраструктурные компоненты (Git, Gradle) и служебную директорию транзакций MCP.
      */
-    private static final Set<String> PROTECTED_NAMES = Set.of(
-        ".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".mcp"
-    );
+    private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".mcp");
 
     /**
-     * Устанавливает корень проекта (используется в тестах для переопределения окружения).
-     * 
-     * @param newRoot Новый путь к корню проекта.
+     * Переопределяет корень проекта.
+     * В основном используется в модульных тестах для изоляции тестового окружения во временных папках.
+     *
+     * @param newRoot Новый путь, который будет считаться корнем "песочницы".
      */
     public static void setRoot(Path newRoot) {
         root = newRoot.toAbsolutePath().normalize();
     }
 
     /**
-     * Проверяет путь на безопасность и возвращает абсолютный путь.
-     * Выполняет нормализацию и проверку нахождения внутри корня.
-     * 
-     * @param requestedPath Путь, полученный от LLM (абсолютный или относительный).
-     * @param allowProtected Если false, запрещает работу с системными файлами проекта.
-     * @return Безопасный абсолютный путь к объекту.
-     * @throws SecurityException Если путь ведет за пределы корня или файл защищен.
+     * Выполняет санитарную проверку и нормализацию пути.
+     * Гарантирует, что итоговый абсолютный путь находится строго внутри корня проекта.
+     *
+     * @param requestedPath  Путь, переданный LLM (может быть абсолютным, относительным или содержать '..').
+     * @param allowProtected Если true, разрешает чтение системных файлов (например, для анализа build.gradle).
+     *                       Если false, блокирует любые операции с защищенными объектами.
+     *
+     * @return Абсолютный нормализованный объект {@link Path}.
+     *
+     * @throws SecurityException Если путь ведет за пределы корня или файл защищен политикой безопасности.
      */
     public static Path sanitize(String requestedPath, boolean allowProtected) {
         Path target;
         Path requested = Paths.get(requestedPath);
-        
+
+        // Преобразование в абсолютный путь относительно текущего корня
         if (requested.isAbsolute()) {
             target = requested.normalize();
         } else {
             target = root.resolve(requestedPath).toAbsolutePath().normalize();
         }
 
-        // Проверка: путь должен начинаться с корня
+        // Проверка Path Traversal: итоговый путь обязан начинаться с префикса корня
         if (!target.startsWith(root)) {
             throw new SecurityException("Access denied: path is outside of working directory: " + requestedPath + " (Root: " + root + ")");
         }
 
-        // Проверка на защищенные файлы (только для записи/удаления)
+        // Проверка политик защиты инфраструктуры
         if (!allowProtected) {
             if (isProtected(target)) {
                 throw new SecurityException("Access denied: file or directory is protected by project security policy.");
@@ -71,10 +82,13 @@ public class PathSanitizer {
     }
 
     /**
-     * Проверяет, не слишком ли велик файл для загрузки в память.
-     * 
-     * @param path Путь к файлу.
-     * @throws SecurityException Если файл превышает допустимый размер.
+     * Проверяет файл на соответствие лимитам размера.
+     * Предотвращает загрузку бинарного "мусора" или гигантских файлов в контекст LLM.
+     *
+     * @param path Путь к проверяемому файлу.
+     *
+     * @throws IOException       Если возникла ошибка при определении размера файла.
+     * @throws SecurityException Если размер файла превышает константу {@link #MAX_TEXT_FILE_SIZE}.
      */
     public static void checkFileSize(Path path) throws IOException {
         if (Files.exists(path) && Files.isRegularFile(path)) {
@@ -86,19 +100,20 @@ public class PathSanitizer {
     }
 
     /**
-     * Проверяет, является ли указанный путь защищенным системным объектом.
-     * Используется для скрытия служебных файлов из листинга и поиска.
-     * 
-     * @param path Путь для проверки.
-     * @return true, если путь защищен.
+     * Определяет, является ли указанный путь частью защищенной инфраструктуры.
+     * Выполняет как быструю проверку по имени, так и глубокую проверку всех сегментов пути.
+     *
+     * @param path Путь для анализа.
+     *
+     * @return true, если хотя бы один сегмент пути совпадает с защищенным именем.
      */
     public static boolean isProtected(Path path) {
-        // Быстрая проверка по имени файла
+        // Быстрая проверка имени самого файла/папки
         if (PROTECTED_NAMES.contains(path.getFileName().toString())) {
             return true;
         }
-        
-        // Глубокая проверка по частям пути
+
+        // Рекурсивная проверка всех родительских сегментов (для вложенных системных файлов)
         for (Path part : path) {
             if (PROTECTED_NAMES.contains(part.toString())) {
                 return true;
@@ -108,7 +123,9 @@ public class PathSanitizer {
     }
 
     /**
-     * Возвращает текущий корень проекта.
+     * Возвращает текущий абсолютный путь к корню рабочей директории.
+     *
+     * @return Объект {@link Path} корня.
      */
     public static Path getRoot() {
         return root;

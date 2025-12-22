@@ -10,25 +10,45 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Роутер для управления инструментами и маршрутизации запросов.
+ * Роутер для управления инструментами (Tools) и маршрутизации запросов от MCP клиента.
+ * Реализует реестр инструментов и предоставляет интерфейс для их динамического вызова.
  */
 public class McpRouter {
+
+    /**
+     * Карта зарегистрированных инструментов, где ключ — имя инструмента.
+     */
     private final Map<String, McpTool> tools = new HashMap<>();
+
+    /**
+     * Объект для манипуляции JSON узлами при формировании списков инструментов.
+     */
     private final ObjectMapper mapper;
 
+    /**
+     * Создает новый роутер с привязкой к ObjectMapper.
+     *
+     * @param mapper Объект ObjectMapper, используемый для работы с JSON.
+     */
     public McpRouter(ObjectMapper mapper) {
         this.mapper = mapper;
     }
 
     /**
-     * Регистрирует новый инструмент.
+     * Регистрирует новый инструмент в реестре сервера.
+     * После регистрации инструмент становится доступен для вызова через 'tools/call'.
+     *
+     * @param tool Объект реализации инструмента.
      */
     public void registerTool(McpTool tool) {
         tools.put(tool.getName(), tool);
     }
 
     /**
-     * Возвращает список всех доступных инструментов в формате MCP.
+     * Формирует список всех доступных инструментов в формате, соответствующем протоколу MCP.
+     * Используется для ответа на запрос 'tools/list'.
+     *
+     * @return JsonNode, содержащий массив объектов с описанием имен, описаний и схем параметров инструментов.
      */
     public JsonNode listTools() {
         ArrayNode toolsArray = mapper.createArrayNode();
@@ -45,7 +65,14 @@ public class McpRouter {
     }
 
     /**
-     * Вызывает инструмент по имени.
+     * Выполняет вызов инструмента по его уникальному имени.
+     *
+     * @param name   Имя инструмента.
+     * @param params JSON-узел с аргументами вызова.
+     *
+     * @return JSON-узел с результатом выполнения инструмента.
+     *
+     * @throws Exception Если инструмент не найден или произошла ошибка во время его выполнения.
      */
     public JsonNode callTool(String name, JsonNode params) throws Exception {
         McpTool tool = getTool(name);
@@ -56,7 +83,11 @@ public class McpRouter {
     }
 
     /**
-     * Возвращает инструмент по его имени.
+     * Возвращает объект реализации инструмента по его имени.
+     *
+     * @param name Имя инструмента.
+     *
+     * @return Реализация {@link McpTool} или null, если инструмент не зарегистрирован.
      */
     public McpTool getTool(String name) {
         return tools.get(name);

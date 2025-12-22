@@ -18,13 +18,18 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Инструмент для получения списка файлов в директории.
+ * Инструмент для исследования структуры файловой системы (Listing).
  * Особенности:
- * - Поддерживает рекурсивный просмотр на заданную глубину.
- * - Скрывает защищенные системные файлы и папки.
- * - Помечает файлы, которые уже были прочитаны LLM, маркером [READ].
+ * 1. Многоуровневость: Поддерживает рекурсивный просмотр на заданную глубину (depth).
+ * 2. Безопасность: Автоматически скрывает служебные файлы (.git, .gradle, .mcp) через PathSanitizer.
+ * 3. Контекст: Помечает файлы, которые уже были изучены моделью (маркер [READ]).
+ * 4. Навигация: Папки в списке всегда отображаются выше файлов для удобства ориентации.
  */
 public class ListDirectoryTool implements McpTool {
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -42,9 +47,11 @@ public class ListDirectoryTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
+
         props.putObject("path").put("type", "string").put("description", "Target directory path.");
+
         props.putObject("depth").put("type", "integer").put("description", "Recursion limit (default 1).");
-        
+
         schema.putArray("required").add("path");
         return schema;
     }
@@ -53,8 +60,8 @@ public class ListDirectoryTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
         int depth = params.path("depth").asInt(1);
-        
-        // Нормализация и проверка безопасности пути
+
+        // Санитарная нормализация пути
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path) || !Files.isDirectory(path)) {
@@ -62,29 +69,36 @@ public class ListDirectoryTool implements McpTool {
         }
 
         List<String> entries = new ArrayList<>();
-        // Запуск рекурсивного формирования списка
+        // Запуск рекурсивного формирования текстового представления дерева папок
         listRecursive(path, entries, 0, depth, "");
 
         ObjectNode result = mapper.createObjectNode();
         ArrayNode content = result.putArray("content");
         ObjectNode text = content.addObject();
         text.put("type", "text");
+
+        // Формирование итогового ответа
         text.put("text", entries.isEmpty() ? "(directory is empty)" : String.join("\n", entries));
-        
+
         return result;
     }
 
     /**
-     * Рекурсивно обходит дерево директорий до указанной глубины.
-     * 
-     * @param currentPath Текущий путь.
-     * @param result Результирующий список строк.
-     * @param currentDepth Текущая глубина рекурсии.
-     * @param maxDepth Максимально допустимая глубина.
-     * @param indent Строка отступа для визуализации дерева.
+     * Рекурсивно строит дерево директорий.
+     *
+     * @param currentPath  Текущая обрабатываемая директория.
+     * @param result       Результирующий список строк с отступами.
+     * @param currentDepth Текущий уровень вложенности.
+     * @param maxDepth     Лимит рекурсии из параметров.
+     * @param indent       Префикс отступа для текущего уровня.
+     *
+     * @throws IOException При ошибках чтения файловой системы.
      */
     private void listRecursive(Path currentPath, List<String> result, int currentDepth, int maxDepth, String indent) throws IOException {
-        if (currentDepth >= maxDepth) return;
+        // Остановка при достижении заданного лимита глубины
+        if (currentDepth >= maxDepth) {
+            return;
+        }
 
         List<Path> subEntries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(currentPath)) {
@@ -92,29 +106,34 @@ public class ListDirectoryTool implements McpTool {
                 subEntries.add(entry);
             }
         }
-        
-        // Сортировка: сначала папки, затем файлы, по алфавиту
+
+        // Сортировка: папки имеют приоритет, внутри категорий — по алфавиту
         Collections.sort(subEntries, (a, b) -> {
             boolean aDir = Files.isDirectory(a);
             boolean bDir = Files.isDirectory(b);
-            if (aDir != bDir) return aDir ? -1 : 1;
+            if (aDir != bDir) {
+                return aDir ? -1 : 1;
+            }
             return a.getFileName().toString().compareToIgnoreCase(b.getFileName().toString());
         });
 
         for (Path entry : subEntries) {
-            // Проверка: не является ли файл системным (скрытым для LLM)
-            if (PathSanitizer.isProtected(entry)) continue;
+            // Игнорируем защищенные объекты (скрываем их от глаз LLM)
+            if (PathSanitizer.isProtected(entry)) {
+                continue;
+            }
 
             boolean isDir = Files.isDirectory(entry);
             String name = entry.getFileName().toString();
             String type = isDir ? "[DIR]" : "[FILE]";
-            
-            // Проверка через AccessTracker: читал ли я уже этот файл?
+
+            // Проверка через AccessTracker: читал ли я уже этот файл? 
+            // Это помогает LLM понять, на какие файлы у нее уже есть права редактирования.
             String readStatus = (!isDir && AccessTracker.hasBeenRead(entry)) ? " [READ]" : "";
-            
+
             result.add(indent + type + " " + name + readStatus);
-            
-            // Если это папка — идем глубже
+
+            // Рекурсивный спуск в поддиректории
             if (isDir) {
                 listRecursive(entry, result, currentDepth + 1, maxDepth, indent + "  ");
             }

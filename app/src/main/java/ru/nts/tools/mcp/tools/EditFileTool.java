@@ -3,7 +3,6 @@ package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
@@ -22,19 +21,20 @@ import java.util.stream.Collectors;
 import java.util.zip.CRC32;
 
 /**
- * Расширенный инструмент для редактирования файлов.
- * Инновационные возможности:
- * 1. Пакетное редактирование (Batching): Применение нескольких правок за один вызов.
- * 2. Multi-file Batching: Возможность редактировать несколько файлов одновременно в одной транзакции.
- * 3. Автоматический пересчет смещений: Инструмент корректирует индексы строк последующих операций в батче.
- * 4. Контроль содержимого (expectedContent): Предотвращает ошибки, если файл изменился параллельно.
- * 5. Авто-отступ (Auto-indentation): Наследует форматирование окружающего кода.
- * 6. Нечеткий поиск (Fuzzy Match): Устойчивость к различиям в пробелах и типах переносов строк (\n vs \r\n).
- * 7. Проактивная диагностика: При ошибке контроля возвращает актуальное содержимое строк для самокоррекции.
- * 8. Транзакционность: Все изменения в батче атомарны.
- * 9. Детализированный отчет: Возвращает количество операций и итоговый CRC32.
+ * Расширенный инструмент для интеллектуального редактирования файлов.
+ * Поддерживает:
+ * 1. Пакетное редактирование (Batching): Применение множества правок за один вызов.
+ * 2. Глобальная атомарность (Multi-file): Редактирование нескольких файлов в одной транзакции.
+ * 3. Авто-коррекция индексов: Сортировка операций снизу вверх гарантирует стабильность строк.
+ * 4. Контроль целостности (expectedContent): Валидация текущего состояния перед внесением изменений.
+ * 5. Умное форматирование: Автоматическое наследование отступов (Auto-indentation).
+ * 6. Отказоустойчивость: Интеграция с TransactionManager (UNDO/REDO).
  */
 public class EditFileTool implements McpTool {
+
+    /**
+     * Объект для работы с JSON структурами.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -52,9 +52,11 @@ public class EditFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        
+
+        // Основной путь (для одиночных правок)
         props.putObject("path").put("type", "string").put("description", "Target file path.");
-        
+
+        // Структура для пакетного редактирования нескольких файлов
         var edits = props.putObject("edits");
         edits.put("type", "array");
         var editItem = edits.putObject("items");
@@ -62,13 +64,15 @@ public class EditFileTool implements McpTool {
         var editProps = editItem.putObject("properties");
         editProps.putObject("path").put("type", "string").put("description", "File to edit in batch.");
         editProps.set("operations", mapper.createObjectNode().put("type", "array").put("description", "Atomic operations list."));
-        
+
+        // Вспомогательные поля для каждого элемента в батче
         editProps.putObject("oldText").put("type", "string").put("description", "Literal text to replace.");
         editProps.putObject("newText").put("type", "string").put("description", "Replacement text.");
         editProps.putObject("startLine").put("type", "integer").put("description", "1-based start line.");
         editProps.putObject("endLine").put("type", "integer").put("description", "1-based end line.");
         editProps.putObject("expectedContent").put("type", "string").put("description", "Validation string (exact match required).");
 
+        // Поля корневого уровня для одиночных правок (обратная совместимость)
         props.putObject("oldText").put("type", "string").put("description", "Fuzzy text replace (escapes special chars).");
         props.putObject("newText").put("type", "string");
         props.putObject("startLine").put("type", "integer").put("description", "Range start.");
@@ -76,16 +80,17 @@ public class EditFileTool implements McpTool {
         props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
         props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line indexing.");
 
+        // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
         ops.put("type", "array").put("description", "Atomic steps for a single file.");
-        
+
         schema.putArray("required").add("path");
         return schema;
     }
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        // Определяем режим работы: несколько файлов или один
+        // Выбор режима: мульти-файловое или одиночное редактирование
         if (params.has("edits")) {
             return executeMultiFileEdit(params.get("edits"));
         } else if (params.has("path")) {
@@ -96,31 +101,32 @@ public class EditFileTool implements McpTool {
     }
 
     /**
-     * Выполняет редактирование нескольких файлов в рамках одной транзакции.
-     * 
-     * @param editsArray Массив объектов с описанием правок для каждого файла.
-     * @return Ответ с детализированной статистикой по каждому файлу.
+     * Выполняет пакетное редактирование нескольких файлов в рамках единой транзакции.
+     * Если хотя бы одна правка в любом файле не пройдет валидацию, откатываются ВСЕ файлы.
+     *
+     * @param editsArray JSON-массив правок для файлов.
+     *
+     * @return Текстовый отчет об успешном завершении батча.
      */
     private JsonNode executeMultiFileEdit(JsonNode editsArray) throws Exception {
-        // Открываем одну глобальную транзакцию на весь батч файлов
         TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)");
         try {
             StringBuilder statusMsg = new StringBuilder();
-            statusMsg.append("Multi-file batch edit successful (" + editsArray.size() + " files):\n\n");
-            
+            statusMsg.append("Multi-file batch edit successful (").append(editsArray.size()).append(" files):\n\n");
+
             for (JsonNode editNode : editsArray) {
+                // Применяем правки к каждому файлу и собираем статистику
                 FileEditStats stats = applyFileEdits(editNode);
                 String gitStatus = GitUtils.getFileStatus(stats.path);
-                
+
                 statusMsg.append(String.format("- %s [Git: %s]\n", stats.path.getFileName(), gitStatus.isEmpty() ? "Unchanged" : gitStatus));
-                statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", 
-                        stats.total(), stats.inserts, stats.deletes, stats.replaces));
+                statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
                 statusMsg.append(String.format("  New CRC32: %X\n\n", stats.crc32));
             }
             TransactionManager.commit();
             return createResponse(statusMsg.toString().trim());
         } catch (Exception e) {
-            // При ошибке в ЛЮБОМ файле откатываем изменения во ВСЕХ файлах транзакции
+            // Глобальный откат при любом сбое
             TransactionManager.rollback();
             throw e;
         }
@@ -128,25 +134,27 @@ public class EditFileTool implements McpTool {
 
     /**
      * Выполняет редактирование одиночного файла.
-     * 
-     * @param params Параметры запроса для одного файла.
-     * @return Ответ сервера с краткой статистикой.
+     *
+     * @param params Параметры запроса.
+     *
+     * @return Текстовый отчет с Git-статусом и CRC32.
      */
     private JsonNode executeSingleFileEdit(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
-        // Транзакция для одного файла
         TransactionManager.startTransaction("Edit file: " + pathStr);
         try {
             FileEditStats stats = applyFileEdits(params);
             TransactionManager.commit();
-            
+
             String gitStatus = GitUtils.getFileStatus(stats.path);
             StringBuilder sb = new StringBuilder();
             sb.append("Edits successfully applied to file: ").append(pathStr);
-            if (!gitStatus.isEmpty()) sb.append(" [Git: ").append(gitStatus).append("]");
+            if (!gitStatus.isEmpty()) {
+                sb.append(" [Git: ").append(gitStatus).append("]");
+            }
             sb.append("\nOperations: ").append(stats.total());
             sb.append("\nNew CRC32: ").append(Long.toHexString(stats.crc32).toUpperCase());
-            
+
             return createResponse(sb.toString());
         } catch (Exception e) {
             TransactionManager.rollback();
@@ -155,11 +163,12 @@ public class EditFileTool implements McpTool {
     }
 
     /**
-     * Применяет набор правок к конкретному файлу.
-     * Выполняет чтение, бэкап и последовательное применение операций.
-     * 
-     * @param fileParams Параметры правок для конкретного файла (path + operations/text).
-     * @return Статистика правок по файлу.
+     * Логика применения правок к конкретному файлу.
+     * Выполняет чтение, проверку прав, бэкап и последовательную обработку операций.
+     *
+     * @param fileParams Параметры (путь и действия).
+     *
+     * @return Объект со статистикой изменений.
      */
     private FileEditStats applyFileEdits(JsonNode fileParams) throws Exception {
         String pathStr = fileParams.get("path").asText();
@@ -169,31 +178,34 @@ public class EditFileTool implements McpTool {
             throw new IllegalArgumentException("File not found: " + pathStr);
         }
 
-        // Проверка предохранителя: файл должен быть прочитан перед модификацией
+        // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
         if (!AccessTracker.hasBeenRead(path)) {
             throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
         }
 
-        // Защита от OOM
+        // Предотвращение загрузки гигантских файлов (OOM Protection)
         PathSanitizer.checkFileSize(path);
 
+        // Чтение файла и определение кодировки за один проход
         EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
         Charset charset = fileData.charset();
         String content = fileData.content();
-        
-        // Разделяем контент на строки для корректной работы батчинга по индексам
+
+        // Представление контента в виде списка строк для корректной манипуляции
         List<String> currentLines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
-        
-        // Создаем резервную копию файла внутри текущей транзакции
+
+        // Регистрация состояния файла "ДО" в текущей транзакции
         TransactionManager.backup(path);
 
         FileEditStats stats = new FileEditStats(path);
 
         if (fileParams.has("operations")) {
-            // Выполнение пакета правок для файла.
-            // Сортируем операции по убыванию номера строки, чтобы индексы вышестоящих строк оставались стабильными.
+            // Обработка списка типизированных операций
             List<JsonNode> sortedOps = new ArrayList<>();
             fileParams.get("operations").forEach(sortedOps::add);
+
+            // Сортировка по убыванию индекса (снизу вверх). 
+            // Это критически важно: изменения в конце файла не влияют на номера строк в его начале.
             sortedOps.sort((a, b) -> {
                 int lineA = a.path("startLine").asInt(a.path("line").asInt(0));
                 int lineB = b.path("startLine").asInt(b.path("line").asInt(0));
@@ -204,31 +216,30 @@ public class EditFileTool implements McpTool {
                 applyTypedOperation(currentLines, opNode, 0, stats);
             }
         } else if (fileParams.has("oldText") && fileParams.has("newText")) {
-            // Режим нечеткой замены текста (fuzzy match)
+            // Режим нечеткой (fuzzy) замены текста по содержимому
             String newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
             Files.writeString(path, newContent, charset);
             stats.replaces++;
         } else if (fileParams.has("startLine") && (fileParams.has("newText") || fileParams.has("content"))) {
-            // Одиночная правка диапазона (для совместимости)
+            // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
 
-        // Сохраняем итоговый результат на диск
+        // Сохранение итогового состояния на диск (только для строковых операций)
         if (!fileParams.has("oldText")) {
             Files.writeString(path, String.join("\n", currentLines), charset);
         }
-        
-        // Вычисляем итоговый CRC32
+
+        // Вычисление итоговой контрольной суммы для подтверждения целостности
         stats.crc32 = calculateCRC32(path);
         return stats;
     }
 
     /**
-     * Выполняет конкретную типизированную операцию над списком строк.
-     * 
-     * @param stats Объект для сбора статистики.
+     * Применяет одну типизированную операцию (replace, insert, delete) к списку строк.
+     * Реализует поиск якоря, валидацию содержимого и автоматический отступ.
      */
     private void applyTypedOperation(List<String> lines, JsonNode op, int cumulativeOffset, FileEditStats stats) {
         String type = op.path("operation").asText("replace");
@@ -238,7 +249,7 @@ public class EditFileTool implements McpTool {
         String expected = op.path("expectedContent").asText(null);
         String contextPattern = op.path("contextStartPattern").asText(null);
 
-        // 1. Контекстная адресация (поиск якоря)
+        // 1. Поиск якоря для относительной адресации (если указан паттерн)
         int anchorLine = 0;
         if (contextPattern != null) {
             anchorLine = findAnchorLine(lines, contextPattern);
@@ -247,58 +258,56 @@ public class EditFileTool implements McpTool {
             }
         }
 
-        // 2. Расчет итоговых индексов
+        // 2. Расчет абсолютных индексов (1-based)
         int start = anchorLine + requestedStart + cumulativeOffset;
         int end = anchorLine + requestedEnd + cumulativeOffset;
 
-        // 3. Корректировка индексов под специфику операций и обновление статистики
+        // 3. Адаптация индексов под специфику типа операции
         if ("insert_before".equals(type)) {
-            end = start - 1;
+            end = start - 1; // Пустой диапазон перед строкой
             stats.inserts++;
         } else if ("insert_after".equals(type)) {
             start++;
-            end = start - 1;
+            end = start - 1; // Пустой диапазон после строки
             stats.inserts++;
         } else if ("delete".equals(type)) {
-            newText = null;
+            newText = null; // Маркер удаления
             stats.deletes++;
         } else {
             stats.replaces++;
         }
 
-        // 4. Валидация границ
+        // 4. Валидация границ в текущем состоянии файла
         if (start < 1 || (start > lines.size() + 1) || (end < start - 1) || (end > lines.size())) {
             throw new IllegalArgumentException("Addressing error: " + start + "-" + end + " (file size: " + lines.size() + ")");
         }
 
-        // 5. Контроль содержимого с проактивной диагностикой
+        // 5. Контроль ожидаемого содержимого (expectedContent) с диагностикой
         if (expected != null && end >= start) {
-            String actual = lines.subList(start - 1, end).stream()
-                    .map(l -> l.replace("\r", ""))
-                    .collect(Collectors.joining("\n"));
-            
+            String actual = lines.subList(start - 1, end).stream().map(l -> l.replace("\r", "")).collect(Collectors.joining("\n"));
+
             String normActual = actual.replace("\r", "");
             String normExpected = expected.replace("\r", "");
-            
+
             if (!normActual.equals(normExpected)) {
-                throw new IllegalStateException("Content validation failed!\n" +
-                        "EXPECTED:\n[" + normExpected + "]\n" +
-                        "ACTUAL CONTENT IN RANGE " + start + "-" + end + ":\n[" + normActual + "]\n" +
-                        "Please adjust your request using the actual text.");
+                // Если не совпало — выбрасываем ошибку с подробным дампом текущих строк
+                throw new IllegalStateException("Content validation failed!\n" + "EXPECTED:\n[" + normExpected + "]\n" + "ACTUAL CONTENT IN RANGE " + start + "-" + end + ":\n[" + normActual + "]\n" + "Please adjust your request using the actual text.");
             }
         }
 
-        // 6. Реализация auto-indentation
+        // 6. Определение отступа для вставляемого кода (Auto-indentation)
         int oldLineCount = (end >= start) ? (end - start + 1) : 0;
+        // Берем отступ либо от строки выше, либо от текущей первой строки диапазона
         int indentLineIdx = (start > 1) ? (start - 2) : (start - 1);
         String indentation = (indentLineIdx >= 0 && indentLineIdx < lines.size()) ? getIndentation(lines.get(indentLineIdx)) : "";
-        
-        // 7. Манипуляция строками
+
+        // 7. Манипуляция списком строк
         for (int i = 0; i < oldLineCount; i++) {
             lines.remove(start - 1);
         }
-        
+
         if (newText != null) {
+            // Применяем отступ к каждой строке нового текста
             String indentedText = applyIndentation(newText, indentation);
             String[] newLines = indentedText.split("\n", -1);
             for (int i = 0; i < newLines.length; i++) {
@@ -307,39 +316,66 @@ public class EditFileTool implements McpTool {
         }
     }
 
+    /**
+     * Создает стандартный MCP ответ с текстовым содержимым.
+     */
     private JsonNode createResponse(String msg) {
         ObjectNode res = mapper.createObjectNode();
         res.putArray("content").addObject().put("type", "text").put("text", msg);
         return res;
     }
 
+    /**
+     * Извлекает последовательность пробельных символов в начале строки.
+     */
     private String getIndentation(String line) {
         int i = 0;
-        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) i++;
+        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) {
+            i++;
+        }
         return line.substring(0, i);
     }
 
+    /**
+     * Добавляет указанный отступ ко всем строкам текста.
+     */
     private String applyIndentation(String text, String indentation) {
-        if (indentation.isEmpty()) return text;
-        return Arrays.stream(text.split("\n", -1))
-                .map(line -> line.isEmpty() ? line : indentation + line)
-                .collect(Collectors.joining("\n"));
+        if (indentation.isEmpty()) {
+            return text;
+        }
+        return Arrays.stream(text.split("\n", -1)).map(line -> line.isEmpty() ? line : indentation + line).collect(Collectors.joining("\n"));
     }
 
+    /**
+     * Находит индекс строки (0-based), содержащей указанный паттерн.
+     */
     private int findAnchorLine(List<String> lines, String patternStr) {
         Pattern pattern = Pattern.compile(patternStr);
         for (int i = 0; i < lines.size(); i++) {
-            if (pattern.matcher(lines.get(i)).find()) return i;
+            if (pattern.matcher(lines.get(i)).find()) {
+                return i;
+            }
         }
         return -1;
     }
 
+    /**
+     * Выполняет замену текста, игнорируя различия в количестве пробелов и типах переносов строк.
+     */
     private String performSmartReplace(String content, String oldText, String newText) {
-        if (content.contains(oldText)) return content.replace(oldText, newText);
+        // Точное совпадение
+        if (content.contains(oldText)) {
+            return content.replace(oldText, newText);
+        }
+
+        // Совпадение с нормализованными переносами (\r\n -> \n)
         String normContent = content.replace("\r\n", "\n");
         String normOld = oldText.replace("\r\n", "\n");
-        if (normContent.contains(normOld)) return normContent.replace(normOld, newText);
+        if (normContent.contains(normOld)) {
+            return normContent.replace(normOld, newText);
+        }
 
+        // Нечеткий поиск: превращаем пробелы в \s+
         String escapedOld = escapeRegexExceptWhitespace(normOld);
         String regex = escapedOld.replaceAll("\\s+", "\\\\s+");
         Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
@@ -352,9 +388,12 @@ public class EditFileTool implements McpTool {
             }
             return normContent.substring(0, start) + newText + normContent.substring(end);
         }
-        throw new IllegalArgumentException("Text not found.");
+        throw new IllegalArgumentException("Text not found. Use line-based editing with expectedContent.");
     }
 
+    /**
+     * Экранирует метасимволы регулярных выражений, не затрагивая пробелы.
+     */
     private String escapeRegexExceptWhitespace(String input) {
         StringBuilder sb = new StringBuilder();
         String specials = "<([{\\^-=$!|]})?*+.>";
@@ -371,6 +410,9 @@ public class EditFileTool implements McpTool {
         return sb.toString();
     }
 
+    /**
+     * Вычисляет CRC32 хеш-сумму файла для отчетов.
+     */
     private long calculateCRC32(Path path) throws IOException {
         CRC32 crc = new CRC32();
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
@@ -384,7 +426,7 @@ public class EditFileTool implements McpTool {
     }
 
     /**
-     * Вспомогательный класс для сбора статистики правок.
+     * Вспомогательный объект для агрегации статистики изменений по файлу.
      */
     private static class FileEditStats {
         final Path path;
@@ -393,7 +435,12 @@ public class EditFileTool implements McpTool {
         int deletes = 0;
         long crc32 = 0;
 
-        FileEditStats(Path path) { this.path = path; }
-        int total() { return replaces + inserts + deletes; }
+        FileEditStats(Path path) {
+            this.path = path;
+        }
+
+        int total() {
+            return replaces + inserts + deletes;
+        }
     }
 }

@@ -11,14 +11,30 @@ import ru.nts.tools.mcp.core.PathSanitizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Тесты для инструмента чтения файлов (ReadFileTool).
+ * Проверяют корректность извлечения содержимого, формирование заголовка метаданных,
+ * поддержку диапазонов строк и умного чтения вокруг контекста.
+ */
 class ReadFileToolTest {
+
+    /**
+     * Тестируемый инструмент чтения.
+     */
     private final ReadFileTool tool = new ReadFileTool();
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /**
+     * Тестирует полное чтение файла.
+     * Проверяет наличие всех полей метаданных (SIZE, CHARS, LINES, CRC32) в ответе.
+     */
     @Test
     void testReadFull(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
@@ -29,15 +45,19 @@ class ReadFileToolTest {
         JsonNode params = mapper.createObjectNode().put("path", file.toString());
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        
-        assertTrue(text.contains("[FILE: test.txt"));
-        assertTrue(text.contains("SIZE:"));
-        assertTrue(text.contains("CHARS:"));
-        assertTrue(text.contains("LINES:"));
-        assertTrue(text.contains("CRC32:"));
-        assertTrue(text.endsWith(content));
+
+        // Верификация формата заголовка
+        assertTrue(text.contains("[FILE: test.txt"), "Заголовок должен содержать имя файла");
+        assertTrue(text.contains("SIZE:"), "Заголовок должен содержать размер");
+        assertTrue(text.contains("CHARS:"), "Заголовок должен содержать кол-во символов");
+        assertTrue(text.contains("LINES:"), "Заголовок должен содержать кол-во строк");
+        assertTrue(text.contains("CRC32:"), "Заголовок должен содержать контрольную сумму");
+        assertTrue(text.endsWith(content), "Тело ответа должно содержать контент файла");
     }
 
+    /**
+     * Тестирует чтение одной конкретной строки.
+     */
     @Test
     void testReadLine(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
@@ -50,9 +70,12 @@ class ReadFileToolTest {
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.endsWith("Line 2"));
+        assertTrue(text.endsWith("Line 2"), "Должна быть возвращена только вторая строка");
     }
 
+    /**
+     * Тестирует чтение заданного диапазона строк (inclusive).
+     */
     @Test
     void testReadRange(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
@@ -62,13 +85,17 @@ class ReadFileToolTest {
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
         params.put("startLine", 2);
-        params.put("endLine", 3); // Читаем 2 и 3
+        params.put("endLine", 3);
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.endsWith("Line 2\nLine 3"));
+        assertTrue(text.endsWith("Line 2\nLine 3"), "Диапазон строк должен быть извлечен верно");
     }
 
+    /**
+     * Тестирует умное чтение вокруг найденного паттерна.
+     * Проверяет захват окружающего контекста (range).
+     */
     @Test
     void testReadContext(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
@@ -83,9 +110,14 @@ class ReadFileToolTest {
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.endsWith("2\n3\nTARGET\n5\n6"));
+        // Ожидаем TARGET и по 2 строки сверху и снизу
+        assertTrue(text.endsWith("2\n3\nTARGET\n5\n6"), "Окружающий контекст должен быть захвачен верно");
     }
 
+    /**
+     * Тестирует поведение при чтении контекста на границах файла.
+     * Проверяет, что система не падает при выходе за пределы 1-й строки или конца файла.
+     */
     @Test
     void testReadContextBoundaries(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
@@ -100,6 +132,7 @@ class ReadFileToolTest {
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.endsWith("TOP\n2\n3"));
+        // Ожидаем всё содержимое от начала до конца
+        assertTrue(text.endsWith("TOP\n2\n3"), "Границы файла должны обрабатываться корректно");
     }
 }

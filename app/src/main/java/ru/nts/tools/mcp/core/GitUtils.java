@@ -5,63 +5,83 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Утилита для взаимодействия с Git.
- * Используется для обогащения ответов инструментов информацией о состоянии репозитория.
+ * Утилита для взаимодействия с системой контроля версий Git.
+ * Используется для обогащения ответов инструментов MCP актуальной информацией о состоянии репозитория.
+ * Позволяет LLM мгновенно видеть, как её действия (правка, создание, перемещение) отражаются на статусе файлов в Git.
  */
 public class GitUtils {
 
     /**
-     * Возвращает краткий статус файла в Git (Modified, Added, Untracked и т.д.).
-     * Использует команду git status --porcelain.
-     * 
-     * @param path Путь к файлу.
-     * @return Строка со статусом или пустая строка, если файл не в репозитории или произошла ошибка.
+     * Возвращает краткое описание статуса файла в Git.
+     * Использует команду 'git status --porcelain' для получения машиночитаемого и стабильного вывода.
+     *
+     * @param path Абсолютный или относительный путь к файлу.
+     *
+     * @return Человекочитаемая строка статуса (например, "Modified (unstaged)", "Untracked")
+     * или пустая строка, если файл не является частью Git-репозитория или произошла ошибка.
      */
     public static String getFileStatus(Path path) {
         try {
-            // Используем относительный путь от корня для Git
+            // Вычисляем путь относительно корня проекта для корректной передачи в команду Git
             Path root = PathSanitizer.getRoot();
             Path relativePath = root.relativize(path.toAbsolutePath().normalize());
-            
-            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(
-                List.of("git", "status", "--porcelain", relativePath.toString())
-            );
+
+            // Выполнение команды получения статуса только для конкретного файла
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(List.of("git", "status", "--porcelain", relativePath.toString()));
 
             if (result.exitCode() == 0 && !result.output().isBlank()) {
                 String out = result.output().trim();
-                // Парсим вывод porcelain: "XY path"
-                // X - статус в индексе, Y - статус в рабочем дереве
+                // Парсинг формата porcelain: "XY path"
+                // X - статус в индексе (staged), Y - статус в рабочем дереве (unstaged)
                 if (out.length() >= 2) {
                     char x = out.charAt(0);
                     char y = out.charAt(1);
                     return translateStatus(x, y);
                 }
             }
-            
-            // Проверяем, отслеживается ли файл вообще
-            ProcessExecutor.ExecutionResult trackCheck = ProcessExecutor.execute(
-                List.of("git", "ls-files", "--error-unmatch", relativePath.toString())
-            );
+
+            // Если porcelain пуст, файл может быть либо неизмененным (Unchanged), либо вообще не отслеживаться (Untracked)
+            // Выполняем проверку на отслеживаемость через ls-files
+            ProcessExecutor.ExecutionResult trackCheck = ProcessExecutor.execute(List.of("git", "ls-files", "--error-unmatch", relativePath.toString()));
             if (trackCheck.exitCode() != 0) {
                 return "Untracked";
             }
 
             return "Unchanged";
         } catch (Exception e) {
-            return ""; // В случае ошибки просто не выводим статус
+            // В случае системных ошибок (Git не установлен, путь вне репозитория) 
+            // возвращаем пустую строку, чтобы не засорять основной вывод инструмента.
+            return "";
         }
     }
 
     /**
-     * Переводит технические символы статуса Git в человекочитаемый вид.
+     * Преобразует технические коды статуса Git (из формата porcelain) в понятные для LLM описания.
+     *
+     * @param x Код статуса в индексе.
+     * @param y Код статуса в рабочем каталоге.
+     *
+     * @return Текстовое описание состояния.
      */
     private static String translateStatus(char x, char y) {
-        if (x == '?' && y == '?') return "Untracked";
-        if (x == 'A') return "Added to index";
-        if (y == 'M') return "Modified (unstaged)";
-        if (x == 'M') return "Modified (staged)";
-        if (y == 'D') return "Deleted";
-        if (x == 'R') return "Renamed";
+        if (x == '?' && y == '?') {
+            return "Untracked";
+        }
+        if (x == 'A') {
+            return "Added to index";
+        }
+        if (y == 'M') {
+            return "Modified (unstaged)";
+        }
+        if (x == 'M') {
+            return "Modified (staged)";
+        }
+        if (y == 'D') {
+            return "Deleted";
+        }
+        if (x == 'R') {
+            return "Renamed";
+        }
         return "Changed (" + x + y + ")";
     }
 }

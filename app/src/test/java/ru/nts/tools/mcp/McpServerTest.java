@@ -9,36 +9,54 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Интеграционные тесты для MCP сервера.
+ * Проверяют корректность обработки JSON-RPC сообщений, инициализацию протокола
+ * и стабильность работы сервера при параллельных запросах.
+ */
 class McpServerTest {
+
+    /**
+     * JSON манипулятор для проверки ответов сервера.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /**
+     * Тестирует процесс инициализации MCP сервера.
+     * Проверяет, что сервер корректно отвечает на метод 'initialize' и возвращает информацию о себе.
+     */
     @Test
     void testServerInitialization() throws Exception {
+        // Формируем стандартный JSON-RPC запрос инициализации
         String initRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n";
-        
-        // Перехватываем стандартный ввод и вывод
+
+        // Перехватываем стандартные потоки ввода-вывода для симуляции взаимодействия с клиентом
         System.setIn(new ByteArrayInputStream(initRequest.getBytes(StandardCharsets.UTF_8)));
         ByteArrayOutputStream outContent = new ByteArrayOutputStream();
         System.setOut(new PrintStream(outContent));
 
-        // Запускаем сервер (он остановится, когда закончится ввод)
+        // Запускаем основной цикл сервера
         McpServer.main(new String[0]);
 
+        // Проверяем содержимое сформированного ответа
         String response = outContent.toString(StandardCharsets.UTF_8);
-        assertTrue(response.contains("\"id\":1"));
-        assertTrue(response.contains("protocolVersion"));
-        assertTrue(response.contains("L2NTS-FileSystem-MCP"));
+        assertTrue(response.contains("\"id\":1"), "Ответ должен содержать ID запроса");
+        assertTrue(response.contains("protocolVersion"), "Ответ должен содержать версию протокола");
+        assertTrue(response.contains("L2NTS-FileSystem-MCP"), "Ответ должен содержать имя сервера");
     }
 
+    /**
+     * Тестирует способность сервера обрабатывать несколько запросов подряд.
+     * Проверяет корректность работы механизма виртуальных потоков и синхронизации вывода.
+     */
     @Test
     void testParallelRequests() throws Exception {
-        // Симулируем два запроса подряд
-        String requests = 
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}\n" +
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n";
-        
+        // Симулируем поток из двух независимых запросов
+        String requests = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}\n" + "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n";
+
         System.setIn(new ByteArrayInputStream(requests.getBytes(StandardCharsets.UTF_8)));
         ByteArrayOutputStream outContent = new ByteArrayOutputStream();
         System.setOut(new PrintStream(outContent));
@@ -47,9 +65,9 @@ class McpServerTest {
 
         String out = outContent.toString(StandardCharsets.UTF_8);
         String[] lines = out.split("\n");
-        
-        // Должно быть как минимум два ответа (по одному на каждую строку ввода)
-        // В многопоточной среде они могут прийти в любом порядке, но JSON должен быть валидным
+
+        // В многопоточной среде ответы могут прийти в любом порядке, 
+        // но каждый ответ должен быть валидным JSON объектом.
         int responseCount = 0;
         for (String line : lines) {
             if (line.trim().startsWith("{")) {
@@ -59,6 +77,6 @@ class McpServerTest {
                 }
             }
         }
-        assertEquals(2, responseCount, "Сервер должен вернуть два ответа на два запроса");
+        assertEquals(2, responseCount, "Сервер должен вернуть ровно два ответа на два входных запроса");
     }
 }

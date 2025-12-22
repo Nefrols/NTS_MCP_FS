@@ -3,14 +3,11 @@ package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
-import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,16 +20,20 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Инструмент для рекурсивного поиска текста в файлах проекта.
- * Особенности:
- * - Параллельное сканирование файлов с использованием виртуальных потоков Java 21+.
- * - Поддержка регулярных выражений и многострочного поиска.
- * - Вывод найденных строк с номерами для мгновенного анализа контекста.
- * - Поддержка контекстных строк (before/after) для лучшего понимания кода.
- * - Маркировка файлов, которые уже были прочитаны LLM ( [READ] ).
- * - Игнорирование системных, защищенных и слишком больших бинарных файлов.
+ * Высокопроизводительный инструмент для рекурсивного поиска текста и регулярных выражений в проекте.
+ * Особенности реализации:
+ * 1. Многопоточность: Параллельное сканирование файлов с использованием виртуальных потоков Java 21+
+ * минимизирует время ожидания при обработке больших директорий.
+ * 2. Контекстная осведомленность: Позволяет запрашивать строки до и после совпадения (before/after context).
+ * 3. Интеллектуальный вывод: Группирует результаты по файлам, помечает прочитанные файлы ([READ])
+ * и визуально выделяет строки с совпадениями.
+ * 4. Отказоустойчивость: Игнорирует системные, защищенные, бинарные и сверхбольшие файлы для предотвращения OOM.
  */
 public class SearchFilesTool implements McpTool {
+
+    /**
+     * JSON манипулятор.
+     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -50,12 +51,17 @@ public class SearchFilesTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
+
         props.putObject("path").put("type", "string").put("description", "Base search directory.");
+
         props.putObject("query").put("type", "string").put("description", "Search string or regex.");
+
         props.putObject("isRegex").put("type", "boolean").put("description", "Treat query as regex.");
+
         props.putObject("beforeContext").put("type", "integer").put("description", "Context lines before match.");
+
         props.putObject("afterContext").put("type", "integer").put("description", "Context lines after match.");
-        
+
         schema.putArray("required").add("path").add("query");
         return schema;
     }
@@ -67,34 +73,37 @@ public class SearchFilesTool implements McpTool {
         boolean isRegex = params.path("isRegex").asBoolean(false);
         int before = params.path("beforeContext").asInt(0);
         int after = params.path("afterContext").asInt(0);
-        
+
+        // Санитарная нормализация пути
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
-        
+
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
             throw new IllegalArgumentException("Directory not found: " + pathStr);
         }
 
-        // Подготовка паттерна
+        // Подготовка регулярного выражения для поиска
         final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
+
+        // Потокобезопасная очередь для сбора результатов из параллельных виртуальных потоков
         var results = new ConcurrentLinkedQueue<FileSearchResult>();
-        
-        // Используем виртуальные потоки для высокой производительности
+
+        // Масштабируемая обработка IO операций через Virtual Threads
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             try (Stream<Path> walk = Files.walk(rootPath)) {
+                // Исключаем из поиска папки и защищенные/скрытые системные объекты
                 walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
                     executor.submit(() -> {
                         try {
-                            // Проверка размера перед чтением (защита от OOM)
+                            // Проверка лимитов размера (защита от загрузки огромных файлов)
                             PathSanitizer.checkFileSize(path);
-                            
-                            // Читаем контент и кодировку за один проход
+
+                            // Эффективное чтение с детекцией кодировки и проверкой на бинарность
                             EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
                             String content = fileData.content();
-                            Charset charset = fileData.charset();
-                            
                             String[] allLines = content.split("\n", -1);
                             List<MatchedLine> matchedLines = new ArrayList<>();
 
+                            // Выбор алгоритма поиска (литеральный или регулярное выражение)
                             if (isRegex) {
                                 Matcher m = pattern.matcher(content);
                                 while (m.find()) {
@@ -104,30 +113,33 @@ public class SearchFilesTool implements McpTool {
                                 int index = content.indexOf(query);
                                 while (index >= 0) {
                                     addMatchWithContext(content, allLines, index, before, after, matchedLines);
+                                    // Продолжаем поиск со следующего символа
                                     index = content.indexOf(query, index + 1);
                                 }
                             }
-                            
+
                             if (!matchedLines.isEmpty()) {
+                                // Если совпадения найдены — добавляем в результаты и проверяем статус [READ]
                                 boolean wasRead = AccessTracker.hasBeenRead(path);
                                 results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
                             }
                         } catch (Exception ignored) {
-                            // Пропускаем слишком большие или бинарные файлы молча при массовом поиске
+                            // Игнорируем ошибки доступа и нетекстовые файлы в процессе массового сканирования
                         }
                     });
                 });
             }
         }
 
-        // Сортировка результатов
+        // Сортировка результатов по алфавиту путей для стабильного вывода
         var sortedResults = new ArrayList<>(results);
         Collections.sort(sortedResults, (a, b) -> a.path().compareTo(b.path()));
 
         var resultNode = mapper.createObjectNode();
         var textNode = resultNode.putArray("content").addObject();
         textNode.put("type", "text");
-        
+
+        // Формирование итогового отчета
         if (sortedResults.isEmpty()) {
             textNode.put("text", "No matches found.");
         } else {
@@ -137,6 +149,7 @@ public class SearchFilesTool implements McpTool {
                 String readMarker = res.wasRead() ? " [READ]" : "";
                 sb.append(res.path()).append(readMarker).append(":\n");
                 for (var line : res.lines()) {
+                    // Визуальное различие между строкой-совпадением (|) и строкой-контекстом (:) 
                     String prefix = line.isMatch ? "  " + line.number + "| " : "  " + line.number + ": ";
                     sb.append(prefix).append(line.text).append("\n");
                 }
@@ -144,20 +157,31 @@ public class SearchFilesTool implements McpTool {
             }
             textNode.put("text", sb.toString());
         }
-        
+
         return resultNode;
     }
 
     /**
-     * Извлекает строку с совпадением и окружающий контекст.
+     * Вычисляет границы контекста вокруг найденного вхождения и собирает строки.
+     *
+     * @param content      Полный контент файла.
+     * @param allLines     Массив всех строк файла.
+     * @param startPos     Позиция символа начала совпадения в контенте.
+     * @param before       Количество строк контекста "до".
+     * @param after        Количество строк контекста "после".
+     * @param matchedLines Список, в который будут добавлены найденные строки.
      */
     private void addMatchWithContext(String content, String[] allLines, int startPos, int before, int after, List<MatchedLine> matchedLines) {
+        // Определяем номер строки по позиции символа
         int lineNum = 1;
         for (int i = 0; i < startPos; i++) {
-            if (content.charAt(i) == '\n') lineNum++;
+            if (content.charAt(i) == '\n') {
+                lineNum++;
+            }
         }
-        
+
         int matchIdx = lineNum - 1;
+        // Расчет диапазона строк для вывода
         int startIdx = Math.max(0, matchIdx - before);
         int endIdx = Math.min(allLines.length - 1, matchIdx + after);
 
@@ -165,11 +189,13 @@ public class SearchFilesTool implements McpTool {
             int currentNum = i + 1;
             boolean isMatch = (currentNum == lineNum);
             String text = allLines[i].replace("\r", "");
-            
+
+            // Защита от дублирования строк при перекрывающихся результатах поиска
             int finalI = i;
             if (matchedLines.stream().noneMatch(l -> l.number == (finalI + 1))) {
                 matchedLines.add(new MatchedLine(currentNum, text, isMatch));
             } else if (isMatch) {
+                // Если строка уже добавлена как контекст, помечаем её как основное совпадение
                 for (int j = 0; j < matchedLines.size(); j++) {
                     if (matchedLines.get(j).number == currentNum) {
                         matchedLines.set(j, new MatchedLine(currentNum, text, true));
@@ -180,6 +206,15 @@ public class SearchFilesTool implements McpTool {
         }
     }
 
-    private record MatchedLine(int number, String text, boolean isMatch) {}
-    private record FileSearchResult(String path, List<MatchedLine> lines, boolean wasRead) {}
+    /**
+     * Представление одной найденной или контекстной строки.
+     */
+    private record MatchedLine(int number, String text, boolean isMatch) {
+    }
+
+    /**
+     * Агрегатор результатов поиска по конкретному файлу.
+     */
+    private record FileSearchResult(String path, List<MatchedLine> lines, boolean wasRead) {
+    }
 }
