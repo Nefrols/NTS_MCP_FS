@@ -37,7 +37,7 @@ public class MoveFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Moves a file or directory. Supports undo and returns the updated listing of the destination folder.";
+        return "Move file/directory. Creates subfolders. Returns listing. Atomic move.";
     }
 
     @Override
@@ -45,8 +45,8 @@ public class MoveFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("sourcePath").put("type", "string").put("description", "Current path to the object.");
-        props.putObject("targetPath").put("type", "string").put("description", "New path for the object.");
+        props.putObject("sourcePath").put("type", "string").put("description", "Current path.");
+        props.putObject("targetPath").put("type", "string").put("description", "Destination path.");
         
         schema.putArray("required").add("sourcePath").add("targetPath");
         return schema;

@@ -31,7 +31,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Returns detailed information about a file: size, line count, encoding, modification date, and CRC32.";
+        return "Get file metadata: size, lines, encoding, CRC32.";
     }
 
     @Override
@@ -39,7 +39,7 @@ public class FileInfoTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Path to the file.");
+        props.putObject("path").put("type", "string").put("description", "Target file path.");
         schema.putArray("required").add("path");
         return schema;
     }

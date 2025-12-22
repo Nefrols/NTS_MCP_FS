@@ -34,7 +34,7 @@ public class DeleteFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Deletes a file or directory. Supports recursive deletion for folders.";
+        return "Deletes file or directory. Recursive deletion for folders.";
     }
 
     @Override
@@ -42,8 +42,8 @@ public class DeleteFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Path to the object to delete.");
-        props.putObject("recursive").put("type", "boolean").put("description", "Flag for recursive folder deletion.");
+        props.putObject("path").put("type", "string").put("description", "Path to delete.");
+        props.putObject("recursive").put("type", "boolean").put("description", "Delete non-empty folders.");
         
         schema.putArray("required").add("path");
         return schema;

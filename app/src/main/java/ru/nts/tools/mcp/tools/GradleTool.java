@@ -31,7 +31,7 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Executes a Gradle task (e.g., build, test). Automatically parses logs to highlight errors.";
+        return "Runs Gradle tasks (build, test, etc.). Auto-parses logs to highlight errors.";
     }
 
     @Override
@@ -39,8 +39,8 @@ public class GradleTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("task").put("type", "string").put("description", "Gradle task to execute (e.g., 'build').");
-        props.putObject("arguments").put("type", "string").put("description", "Optional additional arguments.");
+        props.putObject("task").put("type", "string").put("description", "Task name (e.g. 'build').");
+        props.putObject("arguments").put("type", "string").put("description", "CLI arguments.");
         
         schema.putArray("required").add("task");
         return schema;

@@ -21,7 +21,7 @@ public class UndoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Undoes the last file change. Restores the previous state and returns the updated transaction journal.";
+        return "Undo last transaction. Returns updated journal.";
     }
 
     @Override

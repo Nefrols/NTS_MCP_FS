@@ -28,7 +28,7 @@ public class BatchToolsTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Executes multiple tool calls in a single atomic transaction. If any call fails, all changes are rolled back.";
+        return "Atomic orchestrator. Executes multiple DIFFERENT tools in a single transaction (e.g. rename + edit).";
     }
 
     @Override
@@ -41,10 +41,9 @@ public class BatchToolsTool implements McpTool {
         actions.put("type", "array");
         var item = actions.putObject("items");
         item.put("type", "object");
-        item.putObject("properties")
-            .putObject("tool").put("type", "string").put("description", "Name of the tool to call.");
-        item.putObject("properties")
-            .putObject("params").put("type", "object").put("description", "Arguments for the tool.");
+        var itemProps = item.putObject("properties");
+        itemProps.putObject("tool").put("type", "string").put("description", "Tool name.");
+        itemProps.putObject("params").put("type", "object").put("description", "Tool parameters.");
         
         schema.putArray("required").add("actions");
         return schema;

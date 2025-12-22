@@ -28,7 +28,7 @@ public class GitTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Executes limited Git commands: status, diff, log, add, commit. No remote operations allowed.";
+        return "Local Git operations (status, diff, log, add, commit). NO remote push/pull.";
     }
 
     @Override
@@ -36,8 +36,8 @@ public class GitTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("command").put("type", "string").put("description", "Git subcommand (e.g., 'status').");
-        props.putObject("args").put("type", "string").put("description", "Optional arguments.");
+        props.putObject("command").put("type", "string").put("description", "Git subcommand.");
+        props.putObject("args").put("type", "string").put("description", "Command arguments.");
         
         schema.putArray("required").add("command");
         return schema;

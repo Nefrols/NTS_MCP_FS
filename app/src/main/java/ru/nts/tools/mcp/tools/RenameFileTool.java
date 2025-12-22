@@ -36,7 +36,7 @@ public class RenameFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Renames an object within the current folder. Supports undo and returns the updated directory listing.";
+        return "Rename in-place. Returns listing. Use move_file for different paths.";
     }
 
     @Override
@@ -44,8 +44,8 @@ public class RenameFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Current path to the object.");
-        props.putObject("newName").put("type", "string").put("description", "New name (name only, not a path).");
+        props.putObject("path").put("type", "string").put("description", "Target path.");
+        props.putObject("newName").put("type", "string").put("description", "New name only.");
         
         schema.putArray("required").add("path").add("newName");
         return schema;

@@ -27,7 +27,7 @@ public class TransactionJournalTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Returns a list of completed transactions and the current session context (read files).";
+        return "Shows transaction history and current session context (files unlocked for writing).";
     }
 
     @Override

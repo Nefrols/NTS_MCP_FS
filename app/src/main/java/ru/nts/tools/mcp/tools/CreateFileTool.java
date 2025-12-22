@@ -38,7 +38,7 @@ public class CreateFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Creates a new file. Supports auto-creation of directories and returns the updated directory listing.";
+        return "Create file + directories. Returns listing. REQUIRED: read_file first if overwriting.";
     }
 
     @Override
@@ -46,8 +46,8 @@ public class CreateFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Path to the new file.");
-        props.putObject("content").put("type", "string").put("description", "Text content of the file.");
+        props.putObject("path").put("type", "string").put("description", "New file path.");
+        props.putObject("content").put("type", "string").put("description", "Full file content.");
         
         schema.putArray("required").add("path").add("content");
         return schema;

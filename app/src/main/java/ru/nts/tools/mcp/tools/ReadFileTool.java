@@ -37,7 +37,7 @@ public class ReadFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Reads the content of a file. Returns metadata (size, lines, CRC32) and text. Supports ranges and context search.";
+        return "Reads file content + metadata. MANDATORY for editing. Pro tip: use 'contextStartPattern' to find code blocks.";
     }
 
     @Override
@@ -45,12 +45,12 @@ public class ReadFileTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Path to the file.");
+        props.putObject("path").put("type", "string").put("description", "File path.");
         props.putObject("startLine").put("type", "integer").put("description", "Start line (from 1).");
-        props.putObject("endLine").put("type", "integer").put("description", "End line (inclusive, from 1).");
-        props.putObject("line").put("type", "integer").put("description", "Specific line to read (from 1).");
-        props.putObject("contextStartPattern").put("type", "string").put("description", "Pattern to find the anchor line.");
-        props.putObject("contextRange").put("type", "integer").put("description", "Number of lines around the pattern (default 0).");
+        props.putObject("endLine").put("type", "integer").put("description", "End line (inclusive).");
+        props.putObject("line").put("type", "integer").put("description", "Single line to read.");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor to find context.");
+        props.putObject("contextRange").put("type", "integer").put("description", "Lines around anchor (default 0).");
         
         schema.putArray("required").add("path");
         return schema;

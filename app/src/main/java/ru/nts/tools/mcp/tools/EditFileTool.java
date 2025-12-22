@@ -44,7 +44,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Smart editing of one or multiple files. Supports batch operations, automatic indentation, and global atomicity.";
+        return "Edit file(s) atomically. Supports fuzzy replace, line ranges, auto-indent, and multi-file batches. REQUIRED: read_file first.";
     }
 
     @Override
@@ -53,36 +53,31 @@ public class EditFileTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
         
-        // Target path (для одиночного файла)
-        props.putObject("path").put("type", "string").put("description", "Path to the file (if editing a single file).");
+        props.putObject("path").put("type", "string").put("description", "Target file path.");
         
-        // Список правок для нескольких файлов (Multi-file batching)
         var edits = props.putObject("edits");
         edits.put("type", "array");
         var editItem = edits.putObject("items");
         editItem.put("type", "object");
         var editProps = editItem.putObject("properties");
-        editProps.putObject("path").put("type", "string");
-        editProps.set("operations", mapper.createObjectNode().put("type", "array"));
+        editProps.putObject("path").put("type", "string").put("description", "File to edit in batch.");
+        editProps.set("operations", mapper.createObjectNode().put("type", "array").put("description", "Atomic operations list."));
         
-        // Поля для одиночной операции (для обратной совместимости)
-        editProps.putObject("oldText").put("type", "string");
-        editProps.putObject("newText").put("type", "string");
-        editProps.putObject("startLine").put("type", "integer");
-        editProps.putObject("endLine").put("type", "integer");
-        editProps.putObject("expectedContent").put("type", "string");
+        editProps.putObject("oldText").put("type", "string").put("description", "Literal text to replace.");
+        editProps.putObject("newText").put("type", "string").put("description", "Replacement text.");
+        editProps.putObject("startLine").put("type", "integer").put("description", "1-based start line.");
+        editProps.putObject("endLine").put("type", "integer").put("description", "1-based end line.");
+        editProps.putObject("expectedContent").put("type", "string").put("description", "Validation string (exact match required).");
 
-        // Поля для обратной совместимости корневого уровня
-        props.putObject("oldText").put("type", "string");
+        props.putObject("oldText").put("type", "string").put("description", "Fuzzy text replace (escapes special chars).");
         props.putObject("newText").put("type", "string");
-        props.putObject("startLine").put("type", "integer");
-        props.putObject("endLine").put("type", "integer");
-        props.putObject("expectedContent").put("type", "string");
-        props.putObject("contextStartPattern").put("type", "string");
+        props.putObject("startLine").put("type", "integer").put("description", "Range start.");
+        props.putObject("endLine").put("type", "integer").put("description", "Range end.");
+        props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line indexing.");
 
-        // Поддержка массива операций для одиночного файла
         var ops = props.putObject("operations");
-        ops.put("type", "array");
+        ops.put("type", "array").put("description", "Atomic steps for a single file.");
         
         schema.putArray("required").add("path");
         return schema;

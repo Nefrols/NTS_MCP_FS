@@ -42,7 +42,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Parallel recursive search for text or regex in project files. Returns matching lines with numbers and optional context.";
+        return "Recursive text/regex search. Shows matching lines with [READ] markers and context.";
     }
 
     @Override
@@ -50,11 +50,11 @@ public class SearchFilesTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Base directory for search.");
-        props.putObject("query").put("type", "string").put("description", "Search query (string or regex).");
-        props.putObject("isRegex").put("type", "boolean").put("description", "Whether to treat the query as a regular expression.");
-        props.putObject("beforeContext").put("type", "integer").put("description", "Number of lines to show before each match.");
-        props.putObject("afterContext").put("type", "integer").put("description", "Number of lines to show after each match.");
+        props.putObject("path").put("type", "string").put("description", "Base search directory.");
+        props.putObject("query").put("type", "string").put("description", "Search string or regex.");
+        props.putObject("isRegex").put("type", "boolean").put("description", "Treat query as regex.");
+        props.putObject("beforeContext").put("type", "integer").put("description", "Context lines before match.");
+        props.putObject("afterContext").put("type", "integer").put("description", "Context lines after match.");
         
         schema.putArray("required").add("path").add("query");
         return schema;

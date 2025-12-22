@@ -34,7 +34,7 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Returns a list of files and folders in the specified directory. Supports depth for recursion.";
+        return "List directory contents with recursion and [READ] status indicator.";
     }
 
     @Override
@@ -42,8 +42,8 @@ public class ListDirectoryTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path").put("type", "string").put("description", "Path to the directory for listing.");
-        props.putObject("depth").put("type", "integer").put("description", "Recursion depth (default is 1).");
+        props.putObject("path").put("type", "string").put("description", "Target directory path.");
+        props.putObject("depth").put("type", "integer").put("description", "Recursion limit (default 1).");
         
         schema.putArray("required").add("path");
         return schema;
