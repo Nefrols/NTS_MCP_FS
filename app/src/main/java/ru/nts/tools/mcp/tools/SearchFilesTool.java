@@ -28,6 +28,7 @@ import java.util.stream.Stream;
  * - Параллельное сканирование файлов с использованием виртуальных потоков Java 21+.
  * - Поддержка регулярных выражений и многострочного поиска.
  * - Вывод найденных строк с номерами для мгновенного анализа контекста.
+ * - Поддержка контекстных строк (before/after) для лучшего понимания кода.
  * - Маркировка файлов, которые уже были прочитаны LLM ( [READ] ).
  * - Игнорирование системных и защищенных папок.
  */
@@ -41,7 +42,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Parallel recursive search for text or regex in project files. Returns matching lines with numbers.";
+        return "Parallel recursive search for text or regex in project files. Returns matching lines with numbers and optional context.";
     }
 
     @Override
@@ -52,6 +53,8 @@ public class SearchFilesTool implements McpTool {
         props.putObject("path").put("type", "string").put("description", "Base directory for search.");
         props.putObject("query").put("type", "string").put("description", "Search query (string or regex).");
         props.putObject("isRegex").put("type", "boolean").put("description", "Whether to treat the query as a regular expression.");
+        props.putObject("beforeContext").put("type", "integer").put("description", "Number of lines to show before each match.");
+        props.putObject("afterContext").put("type", "integer").put("description", "Number of lines to show after each match.");
         
         schema.putArray("required").add("path").add("query");
         return schema;
@@ -62,6 +65,8 @@ public class SearchFilesTool implements McpTool {
         String pathStr = params.get("path").asText();
         String query = params.get("query").asText();
         boolean isRegex = params.path("isRegex").asBoolean(false);
+        int before = params.path("beforeContext").asInt(0);
+        int after = params.path("afterContext").asInt(0);
         
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
         
@@ -69,49 +74,46 @@ public class SearchFilesTool implements McpTool {
             throw new IllegalArgumentException("Directory not found: " + pathStr);
         }
 
-        // Подготовка паттерна (MULTILINE позволяет искать по строкам, DOTALL - захватывать переводы строк если нужно)
+        // Подготовка паттерна
         final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
         var results = new ConcurrentLinkedQueue<FileSearchResult>();
         
-        // Используем виртуальные потоки для высокой производительности при массовом чтении с диска
+        // Используем виртуальные потоки для высокой производительности
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             try (Stream<Path> walk = Files.walk(rootPath)) {
-                // Фильтруем только обычные файлы и пропускаем системные/защищенные объекты
                 walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
                     executor.submit(() -> {
                         try {
-                            // Автоматическое определение кодировки для каждого файла
                             Charset charset = EncodingUtils.detectEncoding(path);
                             String content = Files.readString(path, charset);
+                            String[] allLines = content.split("\n", -1);
                             List<MatchedLine> matchedLines = new ArrayList<>();
 
                             if (isRegex) {
                                 Matcher m = pattern.matcher(content);
                                 while (m.find()) {
-                                    addMatchWithLines(content, m.start(), matchedLines);
+                                    addMatchWithContext(content, allLines, m.start(), before, after, matchedLines);
                                 }
                             } else {
                                 int index = content.indexOf(query);
                                 while (index >= 0) {
-                                    addMatchWithLines(content, index, matchedLines);
+                                    addMatchWithContext(content, allLines, index, before, after, matchedLines);
                                     index = content.indexOf(query, index + 1);
                                 }
                             }
                             
                             if (!matchedLines.isEmpty()) {
-                                // Помечаем, видел ли я уже этот файл целиком
                                 boolean wasRead = AccessTracker.hasBeenRead(path);
                                 results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
                             }
                         } catch (Exception ignored) {
-                            // Ошибки доступа или бинарные данные игнорируем
                         }
                     });
                 });
             }
         }
 
-        // Сортировка результатов для стабильного вывода
+        // Сортировка результатов
         var sortedResults = new ArrayList<>(results);
         Collections.sort(sortedResults, (a, b) -> a.path().compareTo(b.path()));
 
@@ -128,7 +130,8 @@ public class SearchFilesTool implements McpTool {
                 String readMarker = res.wasRead() ? " [READ]" : "";
                 sb.append(res.path()).append(readMarker).append(":\n");
                 for (var line : res.lines()) {
-                    sb.append("  ").append(line.number()).append("| ").append(line.text()).append("\n");
+                    String prefix = line.isMatch ? "  " + line.number + "| " : "  " + line.number + ": ";
+                    sb.append(prefix).append(line.text).append("\n");
                 }
                 sb.append("\n");
             }
@@ -139,30 +142,40 @@ public class SearchFilesTool implements McpTool {
     }
 
     /**
-     * Извлекает полную строку, в которой произошло совпадение, и определяет её номер.
+     * Извлекает строку с совпадением и окружающий контекст.
      */
-    private void addMatchWithLines(String content, int start, List<MatchedLine> matchedLines) {
+    private void addMatchWithContext(String content, String[] allLines, int startPos, int before, int after, List<MatchedLine> matchedLines) {
+        // Определяем номер строки совпадения
         int lineNum = 1;
-        int lastNewLine = -1;
-        for (int i = 0; i < start; i++) {
-            if (content.charAt(i) == '\n') {
-                lineNum++;
-                lastNewLine = i;
-            }
+        for (int i = 0; i < startPos; i++) {
+            if (content.charAt(i) == '\n') lineNum++;
         }
         
-        int nextNewLine = content.indexOf('\n', start);
-        if (nextNewLine == -1) nextNewLine = content.length();
-        
-        // Очищаем строку от CR для консистентного вывода
-        String lineText = content.substring(lastNewLine + 1, nextNewLine).replace("\r", "");
-        
-        int finalLineNum = lineNum;
-        if (matchedLines.stream().noneMatch(l -> l.number() == finalLineNum)) {
-            matchedLines.add(new MatchedLine(lineNum, lineText));
+        int matchIdx = lineNum - 1;
+        int startIdx = Math.max(0, matchIdx - before);
+        int endIdx = Math.min(allLines.length - 1, matchIdx + after);
+
+        for (int i = startIdx; i <= endIdx; i++) {
+            int currentNum = i + 1;
+            boolean isMatch = (currentNum == lineNum);
+            String text = allLines[i].replace("\r", "");
+            
+            // Избегаем дублей при перекрывающемся контексте
+            int finalI = i;
+            if (matchedLines.stream().noneMatch(l -> l.number == (finalI + 1))) {
+                matchedLines.add(new MatchedLine(currentNum, text, isMatch));
+            } else if (isMatch) {
+                // Если строка уже есть как контекст, помечаем её как совпадение
+                for (int j = 0; j < matchedLines.size(); j++) {
+                    if (matchedLines.get(j).number == currentNum) {
+                        matchedLines.set(j, new MatchedLine(currentNum, text, true));
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    private record MatchedLine(int number, String text) {}
+    private record MatchedLine(int number, String text, boolean isMatch) {}
     private record FileSearchResult(String path, List<MatchedLine> lines, boolean wasRead) {}
 }

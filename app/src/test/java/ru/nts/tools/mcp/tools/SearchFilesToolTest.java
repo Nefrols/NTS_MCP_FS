@@ -21,13 +21,10 @@ class SearchFilesToolTest {
     @Test
     void testSearch(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path subDir = Files.createDirectory(tempDir.resolve("sub"));
-        Files.writeString(tempDir.resolve("file1.txt"), "    indented string\nanother target here");
-        Files.writeString(subDir.resolve("file2.txt"), "also target here");
-        Files.writeString(tempDir.resolve("file3.txt"), "no match");
+        Files.writeString(tempDir.resolve("file1.txt"), "    indented string");
 
         ObjectNode params = mapper.createObjectNode();
-        params.put("path", tempDir.toString());
+        params.put("path", ".");
         params.put("query", "indented");
 
         JsonNode result = tool.execute(params);
@@ -35,6 +32,27 @@ class SearchFilesToolTest {
         
         assertTrue(text.contains("file1.txt:"));
         assertTrue(text.contains("1|     indented string"));
+    }
+
+    @Test
+    void testSearchWithContext(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Files.writeString(tempDir.resolve("context.txt"), "line 1\nline 2\nTARGET\nline 4\nline 5");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", ".");
+        params.put("query", "TARGET");
+        params.put("beforeContext", 1);
+        params.put("afterContext", 1);
+
+        JsonNode result = tool.execute(params);
+        String text = result.get("content").get(0).get("text").asText();
+        
+        assertTrue(text.contains("2: line 2"));
+        assertTrue(text.contains("3| TARGET"));
+        assertTrue(text.contains("4: line 4"));
+        assertFalse(text.contains("1: line 1"));
+        assertFalse(text.contains("5: line 5"));
     }
 
     @Test
@@ -53,7 +71,6 @@ class SearchFilesToolTest {
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
         
-        // Должно быть 10 совпадений (0, 10, 20... 90)
         assertTrue(text.contains("(10)"), "Should find 10 matches");
         for (int i = 0; i < 100; i += 10) {
             assertTrue(text.contains("file" + i + ".txt"));
