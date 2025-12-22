@@ -104,19 +104,46 @@ class EditFileToolTest {
     }
 
     @Test
-    void testContextNotFound(@TempDir Path tempDir) throws Exception {
+    void testAutoIndentation(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.txt");
-        Files.writeString(file, "Some content");
+        Path file = tempDir.resolve("test.java");
+        Files.write(file, List.of(
+            "public class Test {",
+            "    public void method() {",
+            "    }"
+        ));
         AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("contextStartPattern", "NON_EXISTENT");
-        params.put("startLine", 1);
-        params.put("endLine", 1);
-        params.put("newText", "XXX");
+        params.put("startLine", 3); // Вставляем перед закрывающей скобкой
+        params.put("endLine", 2);   // По сути вставка между 2 и 3
+        params.put("newText", "System.out.println(\"Hi\");\nreturn;");
 
-        assertThrows(IllegalArgumentException.class, () -> tool.execute(params));
+        tool.execute(params);
+        
+        List<String> actualLines = Files.readAllLines(file);
+        // Ожидаем, что новые строки получили отступ в 4 пробела от строки 2
+        assertEquals("    System.out.println(\"Hi\");", actualLines.get(2));
+        assertEquals("    return;", actualLines.get(3));
+    }
+
+    @Test
+    void testAutoIndentationWithTabs(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("test.java");
+        Files.writeString(file, "class T {\n\tvoid m() {\n\t}");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 3);
+        params.put("endLine", 2);
+        params.put("newText", "int x;");
+
+        tool.execute(params);
+        
+        String content = Files.readString(file);
+        assertTrue(content.contains("\tvoid m() {\n\tint x;\n\t}"));
     }
 }
