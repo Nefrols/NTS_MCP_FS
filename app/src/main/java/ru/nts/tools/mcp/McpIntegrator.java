@@ -76,25 +76,25 @@ public class McpIntegrator {
                 }
 
                 System.out.println("\nActions:");
-                System.out.println("1-4. Install/Uninstall for specific client");
-                System.out.println("5.   Build and Create local mcp-config.json in project root");
-                System.out.println("6.   Build project only (installDist)");
-                System.out.println("7.   Exit");
+                System.out.println("1-5. Install/Uninstall for specific client");
+                System.out.println("6.   Build and Create local mcp-config.json in project root");
+                System.out.println("7.   Build project only (installDist)");
+                System.out.println("8.   Exit");
                 System.out.print("> ");
 
                 if (!scanner.hasNextLine()) break;
                 String choiceStr = scanner.nextLine();
 
-                if ("7".equals(choiceStr)) {
+                if ("8".equals(choiceStr)) {
                     System.out.println("Exiting...");
                     break;
                 }
 
-                if ("5".equals(choiceStr)) {
+                if ("6".equals(choiceStr)) {
                     if (buildProject(projectRoot)) createLocalConfig(projectRoot);
                     continue;
                 }
-                if ("6".equals(choiceStr)) {
+                if ("7".equals(choiceStr)) {
                     buildProject(projectRoot);
                     continue;
                 }
@@ -134,25 +134,21 @@ public class McpIntegrator {
     private static List<ClientInfo> discoverClients() {
         List<ClientInfo> clients = new ArrayList<>();
         String userHome = System.getProperty("user.home");
-        String appData = System.getenv("APPDATA");
-        
+
         // Gemini
-        clients.add(new ClientInfo("Gemini", Paths.get(userHome, ".gemini", "settings.json")));
+        clients.add(new ClientInfo("Gemini CLI", Paths.get(userHome, ".gemini", "settings.json")));
+
+        // Claude Code
+        clients.add(new ClientInfo("Claude Code", Paths.get(userHome, ".claude.json")));
+
+        // Qwen
+        clients.add(new ClientInfo("Qwen CLI", Paths.get(userHome, ".qwen", "settings.json")));
+
+        // Cursor
+        clients.add(new ClientInfo("Cursor", Paths.get(userHome, ".cursor", "mcp.json")));
         
         // LM Studio
         clients.add(new ClientInfo("LM Studio", Paths.get(userHome, ".lmstudio", "mcp.json")));
-        
-        // Claude Desktop
-        Path claudePath;
-        if (appData != null) { // Windows
-            claudePath = Paths.get(appData, "Claude", "claude_desktop_config.json");
-        } else { // macOS/Linux
-            claudePath = Paths.get(userHome, "Library", "Application Support", "Claude", "claude_desktop_config.json");
-        }
-        clients.add(new ClientInfo("Claude", claudePath));
-        
-        // Cursor
-        clients.add(new ClientInfo("Cursor", Paths.get(userHome, ".cursor", "mcp.json")));
 
         return clients;
     }
