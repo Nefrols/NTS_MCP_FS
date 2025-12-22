@@ -35,6 +35,8 @@ public class McpServer {
         router.registerTool(new UndoTool());
         router.registerTool(new RedoTool());
         router.registerTool(new TransactionJournalTool());
+        router.registerTool(new GradleTool());
+        router.registerTool(new GitTool());
     }
 
     public static void main(String[] args) {
