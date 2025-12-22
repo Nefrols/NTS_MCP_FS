@@ -39,6 +39,10 @@ application {
     mainClass = "ru.nts.tools.mcp.McpServer"
 }
 
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+}
+
 tasks.named<Test>("test") {
     // Use JUnit Platform for unit tests.
     useJUnitPlatform()

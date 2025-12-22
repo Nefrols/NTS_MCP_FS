@@ -54,6 +54,7 @@ public class McpServer {
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskLogTool());
         router.registerTool(new TaskKillTool());
+        router.registerTool(new ProjectStructureTool());
     }
 
     /**
