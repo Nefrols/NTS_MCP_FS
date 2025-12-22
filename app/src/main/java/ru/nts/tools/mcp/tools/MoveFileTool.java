@@ -8,12 +8,18 @@ import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Инструмент для перемещения файлов и директорий.
+ * После перемещения возвращает листинг целевой директории.
  */
 public class MoveFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -25,7 +31,7 @@ public class MoveFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Перемещает файл или директорию в новое местоположение. Создает промежуточные директории если нужно.";
+        return "Перемещает файл или директорию в новое местоположение. Возвращает листинг новой директории.";
     }
 
     @Override
@@ -63,8 +69,28 @@ public class MoveFileTool implements McpTool {
         Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
         AccessTracker.moveRecord(source, target);
 
-        ObjectNode result = mapper.createObjectNode();
-        result.putArray("content").addObject().put("type", "text").put("text", "Успешно перемещено из " + sourceStr + " в " + targetStr);
+        var result = mapper.createObjectNode();
+        var contentArray = result.putArray("content");
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("Успешно перемещено из ").append(sourceStr).append(" в ").append(targetStr).append("\n\n");
+        sb.append("Содержимое директории ").append(target.getParent()).append(":\n");
+        sb.append(getDirectoryListing(target.getParent()));
+        
+        contentArray.addObject().put("type", "text").put("text", sb.toString());
         return result;
+    }
+
+    private String getDirectoryListing(Path dir) throws IOException {
+        if (dir == null || !Files.exists(dir)) return "(пусто)";
+        List<String> entries = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path entry : stream) {
+                String type = Files.isDirectory(entry) ? "[DIR]" : "[FILE]";
+                entries.add(type + " " + entry.getFileName().toString());
+            }
+        }
+        Collections.sort(entries);
+        return entries.isEmpty() ? "(пусто)" : String.join("\n", entries);
     }
 }

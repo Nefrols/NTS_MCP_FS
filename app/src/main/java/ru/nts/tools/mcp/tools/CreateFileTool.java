@@ -9,12 +9,18 @@ import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Инструмент для создания новых файлов.
+ * После создания возвращает листинг директории для подтверждения структуры.
  */
 public class CreateFileTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -62,7 +68,29 @@ public class CreateFileTool implements McpTool {
 
         var result = mapper.createObjectNode();
         var contentArray = result.putArray("content");
-        contentArray.addObject().put("type", "text").put("text", "Файл успешно создан: " + pathStr);
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("Файл успешно создан: ").append(pathStr).append("\n\n");
+        sb.append("Содержимое директории ").append(path.getParent()).append(":\n");
+        sb.append(getDirectoryListing(path.getParent()));
+        
+        contentArray.addObject().put("type", "text").put("text", sb.toString());
         return result;
+    }
+
+    /**
+     * Формирует простой листинг директории.
+     */
+    private String getDirectoryListing(Path dir) throws IOException {
+        if (dir == null || !Files.exists(dir)) return "(пусто)";
+        List<String> entries = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path entry : stream) {
+                String type = Files.isDirectory(entry) ? "[DIR]" : "[FILE]";
+                entries.add(type + " " + entry.getFileName().toString());
+            }
+        }
+        Collections.sort(entries);
+        return entries.isEmpty() ? "(пусто)" : String.join("\n", entries);
     }
 }
