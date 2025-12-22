@@ -10,6 +10,7 @@ import java.util.*;
 
 /**
  * Менеджер транзакций для обеспечения атомарности и функций UNDO/REDO.
+ * Поддерживает вложенные транзакции: изменения фиксируются на диск только при завершении внешней транзакции.
  */
 public class TransactionManager {
     
@@ -18,6 +19,7 @@ public class TransactionManager {
     private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss");
     
     private static Transaction currentTransaction = null;
+    private static int nestingLevel = 0;
 
     /**
      * Возвращает путь к директории снимков, создавая её при необходимости.
@@ -31,13 +33,16 @@ public class TransactionManager {
     }
 
     /**
-     * Начинает новую транзакцию.
+     * Начинает новую транзакцию. 
+     * Если транзакция уже активна, увеличивает уровень вложенности.
      * 
      * @param description Описание операции для журнала.
      */
     public static void startTransaction(String description) {
-        if (currentTransaction != null) return;
-        currentTransaction = new Transaction(description, LocalDateTime.now());
+        if (currentTransaction == null) {
+            currentTransaction = new Transaction(description, LocalDateTime.now());
+        }
+        nestingLevel++;
     }
 
     /**
@@ -51,19 +56,26 @@ public class TransactionManager {
     }
 
     /**
-     * Завершает текущую транзакцию и сохраняет её в историю для возможности отмены.
+     * Завершает текущую транзакцию. 
+     * Изменения фиксируются в истории UNDO только при выходе из самой внешней транзакции.
      */
     public static void commit() {
         if (currentTransaction == null) return;
-        if (!currentTransaction.isEmpty()) {
-            undoStack.add(currentTransaction);
-            redoStack.clear(); // Новая правка делает невозможным REDO старых отмененных правок
+        
+        nestingLevel--;
+        if (nestingLevel <= 0) {
+            if (!currentTransaction.isEmpty()) {
+                undoStack.add(currentTransaction);
+                redoStack.clear(); 
+            }
+            currentTransaction = null;
+            nestingLevel = 0;
         }
-        currentTransaction = null;
     }
 
     /**
      * Откатывает текущую незавершенную транзакцию (вызывается при ошибках).
+     * Сбрасывает уровень вложенности до нуля.
      */
     public static void rollback() {
         if (currentTransaction == null) return;
@@ -73,6 +85,7 @@ public class TransactionManager {
             System.err.println("Rollback failed: " + e.getMessage());
         }
         currentTransaction = null;
+        nestingLevel = 0;
     }
 
     /**
@@ -147,6 +160,7 @@ public class TransactionManager {
         undoStack.clear();
         redoStack.clear();
         currentTransaction = null;
+        nestingLevel = 0;
     }
 
     /**

@@ -48,10 +48,17 @@ public class McpRouter {
      * Вызывает инструмент по имени.
      */
     public JsonNode callTool(String name, JsonNode params) throws Exception {
-        McpTool tool = tools.get(name);
+        McpTool tool = getTool(name);
         if (tool == null) {
             throw new IllegalArgumentException("Tool not found: " + name);
         }
         return tool.execute(params);
+    }
+
+    /**
+     * Возвращает инструмент по его имени.
+     */
+    public McpTool getTool(String name) {
+        return tools.get(name);
     }
 }

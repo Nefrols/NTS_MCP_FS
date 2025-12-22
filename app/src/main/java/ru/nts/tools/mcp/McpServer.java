@@ -37,6 +37,7 @@ public class McpServer {
         router.registerTool(new TransactionJournalTool());
         router.registerTool(new GradleTool());
         router.registerTool(new GitTool());
+        router.registerTool(new BatchToolsTool(router));
     }
 
     public static void main(String[] args) {
