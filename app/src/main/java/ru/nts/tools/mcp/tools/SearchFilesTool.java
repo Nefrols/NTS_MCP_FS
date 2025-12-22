@@ -16,10 +16,13 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Инструмент для рекурсивного поиска текста, оптимизированный с помощью виртуальных потоков.
+ * Инструмент для рекурсивного поиска текста.
+ * Возвращает пути к файлам, номера строк и фрагменты текста для мгновенного анализа.
  */
 public class SearchFilesTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -31,7 +34,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Параллельный рекурсивный поиск строки в файлах с использованием виртуальных потоков.";
+        return "Параллельный рекурсивный поиск в файлах. Возвращает пути, номера строк и содержимое найденных строк.";
     }
 
     @Override
@@ -40,7 +43,8 @@ public class SearchFilesTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
         props.putObject("path").put("type", "string").put("description", "Путь к базовой директории");
-        props.putObject("query").put("type", "string").put("description", "Строка для поиска");
+        props.putObject("query").put("type", "string").put("description", "Строка или регулярное выражение для поиска");
+        props.putObject("isRegex").put("type", "boolean").put("description", "Если true, то query трактуется как регулярное выражение");
         
         schema.putArray("required").add("path").add("query");
         return schema;
@@ -50,12 +54,14 @@ public class SearchFilesTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         Path rootPath = Path.of(params.get("path").asText());
         String query = params.get("query").asText();
+        boolean isRegex = params.path("isRegex").asBoolean(false);
         
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
             throw new IllegalArgumentException("Директория не найдена: " + rootPath);
         }
 
-        var matches = new ConcurrentLinkedQueue<String>();
+        final Pattern pattern = isRegex ? Pattern.compile(query) : null;
+        var results = new ConcurrentLinkedQueue<FileSearchResult>();
         
         // Используем виртуальные потоки для параллельного сканирования файлов
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -64,30 +70,59 @@ public class SearchFilesTool implements McpTool {
                     executor.submit(() -> {
                         try {
                             Charset charset = EncodingUtils.detectEncoding(path);
+                            List<MatchedLine> matchedLines = new ArrayList<>();
+                            AtomicInteger currentLineNum = new AtomicInteger(1);
+                            
                             try (Stream<String> lines = Files.lines(path, charset)) {
-                                if (lines.anyMatch(line -> line.contains(query))) {
-                                    matches.add(path.toAbsolutePath().toString());
-                                }
+                                lines.forEach(line -> {
+                                    boolean matched = isRegex 
+                                        ? pattern.matcher(line).find()
+                                        : line.contains(query);
+                                    
+                                    if (matched) {
+                                        // Сохраняем номер строки и обрезанный текст (без лишних пробелов по краям)
+                                        matchedLines.add(new MatchedLine(currentLineNum.get(), line.trim()));
+                                    }
+                                    currentLineNum.incrementAndGet();
+                                });
+                            }
+                            
+                            if (!matchedLines.isEmpty()) {
+                                results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines));
                             }
                         } catch (Exception ignored) {
-                            // Ошибки доступа или кодировки игнорируем при массовом поиске
                         }
                     });
                 });
             }
-            // Executor автоматически дождется завершения всех задач при закрытии (try-with-resources)
         }
 
-        var sortedMatches = new ArrayList<>(matches);
-        Collections.sort(sortedMatches);
+        var sortedResults = new ArrayList<>(results);
+        Collections.sort(sortedResults, (a, b) -> a.path().compareTo(b.path()));
 
-        var result = mapper.createObjectNode();
-        var content = result.putArray("content");
-        var textNode = content.addObject();
+        var resultNode = mapper.createObjectNode();
+        var contentArray = resultNode.putArray("content");
+        var textNode = contentArray.addObject();
         textNode.put("type", "text");
-        textNode.put("text", sortedMatches.isEmpty() ? "Совпадений не найдено." : 
-                "Найдены совпадения в файлах (" + sortedMatches.size() + "):\n" + String.join("\n", sortedMatches));
         
-        return result;
+        if (sortedResults.isEmpty()) {
+            textNode.put("text", "Совпадений не найдено.");
+        } else {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Найдены совпадения в файлах (").append(sortedResults.size()).append("):\n\n");
+            for (var res : sortedResults) {
+                sb.append(res.path()).append(":\n");
+                for (var line : res.lines()) {
+                    sb.append("  ").append(line.number()).append(": ").append(line.text()).append("\n");
+                }
+                sb.append("\n");
+            }
+            textNode.put("text", sb.toString());
+        }
+        
+        return resultNode;
     }
+
+    private record MatchedLine(int number, String text) {}
+    private record FileSearchResult(String path, List<MatchedLine> lines) {}
 }
