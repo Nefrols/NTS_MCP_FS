@@ -19,13 +19,13 @@ import java.util.Arrays;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.util.zip.CRC32;
+import java.util.zip.CRC32C;
 
 /**
  * Инструмент для чтения содержимого файлов проекта.
  * Особенности:
  * 1. Умное чтение: Поддержка выборки по диапазонам строк и поиска контекста вокруг паттернов.
- * 2. Метаданные: Каждый ответ содержит технический заголовок (размер, строки, кодировка, CRC32).
+ * 2. Метаданные: Каждый ответ содержит технический заголовок (размер, строки, кодировка, CRC32C).
  * 3. Безопасность: Автоматическая детекция и блокировка бинарных файлов, а также лимиты на размер (OOM Protection).
  * 4. Контроль доступа: Регистрация факта чтения в трекере доступа (AccessTracker) для последующего разрешения правок.
  */
@@ -146,7 +146,7 @@ public class ReadFileTool implements McpTool {
         int charCount = content.length();
         int lineCount = content.isEmpty() ? 0 : lines.length;
 
-        String header = String.format("[FILE: %s | SIZE: %d bytes | CHARS: %d | LINES: %d | ENCODING: %s | CRC32: %X]\n", path.getFileName(), size, charCount, lineCount, charset.name(), crc32);
+        String header = String.format("[FILE: %s | SIZE: %d bytes | CHARS: %d | LINES: %d | ENCODING: %s | CRC32C: %X]\n", path.getFileName(), size, charCount, lineCount, charset.name(), crc32);
 
         ObjectNode result = mapper.createObjectNode();
         result.putArray("content").addObject().put("type", "text").put("text", header + resultText);
@@ -154,17 +154,17 @@ public class ReadFileTool implements McpTool {
     }
 
     /**
-     * Вычисляет контрольную сумму файла CRC32.
+     * Вычисляет контрольную сумму файла CRC32C.
      * Используется моделью для верификации локального кэша и отслеживания изменений.
      *
      * @param path Путь к файлу.
      *
-     * @return Значение CRC32.
+     * @return Значение CRC32C.
      *
      * @throws IOException При ошибках чтения.
      */
     private long calculateCRC32(Path path) throws IOException {
-        CRC32 crc = new CRC32();
+        CRC32C crc = new CRC32C();
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
             byte[] buffer = new byte[8192];
             int len;

@@ -318,4 +318,96 @@ class EditFileToolTest {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> tool.execute(params));
         assertTrue(ex.getMessage().contains("Multiple matches"), "Должно быть выброшено исключение о множественных совпадениях");
     }
+
+    /**
+     * Проверяет, что предоставление правильного expectedChecksum позволяет редактировать файл без предварительного чтения.
+     */
+    @Test
+    void testEditWithValidChecksumBypass(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        TransactionManager.reset();
+        AccessTracker.reset(); // Убеждаемся, что трекер пуст
+
+        Path file = tempDir.resolve("bypass.txt");
+        Files.writeString(file, "Original Content");
+
+        // Вычисляем CRC32, который должен быть известен LLM
+        long crc = calculateCRC32(file);
+        String crcHex = Long.toHexString(crc).toUpperCase();
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("oldText", "Original").put("newText", "Modified");
+        params.put("expectedChecksum", crcHex);
+
+        // Должно пройти успешно, несмотря на то, что AccessTracker пуст
+        tool.execute(params);
+
+        assertEquals("Modified Content", Files.readString(file));
+        assertTrue(AccessTracker.hasBeenRead(file), "Файл должен быть автоматически зарегистрирован как прочитанный");
+    }
+
+    /**
+     * Проверяет, что неверный expectedChecksum блокирует редактирование, даже если файл не был прочитан.
+     */
+    @Test
+    void testEditWithInvalidChecksum(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        TransactionManager.reset();
+        AccessTracker.reset();
+
+        Path file = tempDir.resolve("invalid_sum.txt");
+        Files.writeString(file, "Content");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("oldText", "Content").put("newText", "New");
+        params.put("expectedChecksum", "DEADBEEF"); // Неверный хеш
+
+        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("Checksum mismatch"), "Должно быть сообщение о несовпадении хеша");
+    }
+
+    /**
+     * Проверяет Optimistic Locking: если файл был прочитан, но изменился на диске (хеш не совпадает),
+     * операция должна быть отклонена.
+     */
+    @Test
+    void testOptimisticLocking(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("opt_lock.txt");
+        Files.writeString(file, "Version 1");
+        AccessTracker.registerRead(file); // Файл "прочитан"
+
+        // Имитируем внешнее изменение файла
+        Files.writeString(file, "Version 2");
+
+        // Пытаемся редактировать, думая, что там Version 1 (вычисляем хеш от Version 1)
+        Path v1Tmp = tempDir.resolve("v1.tmp");
+        Files.writeString(v1Tmp, "Version 1");
+        long v1Crc = calculateCRC32(v1Tmp);
+        
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("oldText", "Version 1").put("newText", "Version 3");
+        params.put("expectedChecksum", Long.toHexString(v1Crc).toUpperCase());
+
+        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("Checksum mismatch"), "Операция должна быть отклонена из-за изменения файла");
+    }
+
+    /**
+     * Вспомогательный метод для расчета CRC32.
+     */
+    private long calculateCRC32(Path path) throws Exception {
+        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
+    }
 }

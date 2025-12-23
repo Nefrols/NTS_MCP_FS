@@ -33,7 +33,7 @@ class ReadFileToolTest {
 
     /**
      * Тестирует полное чтение файла.
-     * Проверяет наличие всех полей метаданных (SIZE, CHARS, LINES, CRC32) в ответе.
+     * Проверяет наличие всех полей метаданных (SIZE, CHARS, LINES, CRC32C) в ответе.
      */
     @Test
     void testReadFull(@TempDir Path tempDir) throws Exception {
@@ -51,7 +51,7 @@ class ReadFileToolTest {
         assertTrue(text.contains("SIZE:"), "Заголовок должен содержать размер");
         assertTrue(text.contains("CHARS:"), "Заголовок должен содержать кол-во символов");
         assertTrue(text.contains("LINES:"), "Заголовок должен содержать кол-во строк");
-        assertTrue(text.contains("CRC32:"), "Заголовок должен содержать контрольную сумму");
+        assertTrue(text.contains("CRC32C:"), "Заголовок должен содержать контрольную сумму");
         assertTrue(text.endsWith(content), "Тело ответа должно содержать контент файла");
     }
 

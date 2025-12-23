@@ -49,7 +49,7 @@ class FileInfoToolTest {
         // Верификация ключевых полей отчета
         assertTrue(text.contains("Size: " + expectedSize + " bytes"), "Отчет должен содержать верный размер");
         assertTrue(text.contains("Lines: 2"), "Отчет должен содержать верное количество строк");
-        assertTrue(text.contains("CRC32:"), "Отчет должен содержать контрольную сумму");
+        assertTrue(text.contains("CRC32C:"), "Отчет должен содержать контрольную сумму");
     }
 
     /**

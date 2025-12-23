@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.zip.CRC32;
+import java.util.zip.CRC32C;
 
 /**
  * Расширенный инструмент для интеллектуального редактирования файлов.
@@ -79,6 +79,7 @@ public class EditFileTool implements McpTool {
         props.putObject("endLine").put("type", "integer").put("description", "Range end.");
         props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
         props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line indexing.");
+        props.putObject("expectedChecksum").put("type", "string").put("description", "CRC32C hex of file before edit. Bypasses read_file requirement if correct.");
 
         // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
@@ -121,7 +122,7 @@ public class EditFileTool implements McpTool {
 
                 statusMsg.append(String.format("- %s [Git: %s]\n", stats.path.getFileName(), gitStatus.isEmpty() ? "Unchanged" : gitStatus));
                 statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
-                statusMsg.append(String.format("  New CRC32: %X\n", stats.crc32));
+                statusMsg.append(String.format("  New CRC32C: %X\n", stats.crc32));
 
                 if (stats.diff != null && !stats.diff.isEmpty()) {
                     statusMsg.append("\n```diff\n").append(stats.diff).append("\n```\n");
@@ -158,7 +159,7 @@ public class EditFileTool implements McpTool {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
             sb.append("\nOperations: ").append(stats.total());
-            sb.append("\nNew CRC32: ").append(Long.toHexString(stats.crc32).toUpperCase());
+            sb.append("\nNew CRC32C: ").append(Long.toHexString(stats.crc32).toUpperCase());
 
             if (stats.diff != null && !stats.diff.isEmpty()) {
                 sb.append("\n\n```diff\n").append(stats.diff).append("\n```");
@@ -187,11 +188,6 @@ public class EditFileTool implements McpTool {
             throw new IllegalArgumentException("File not found: " + pathStr);
         }
 
-        // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
-        if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
-        }
-
         // Предотвращение загрузки гигантских файлов (OOM Protection)
         PathSanitizer.checkFileSize(path);
 
@@ -199,6 +195,29 @@ public class EditFileTool implements McpTool {
         EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
         Charset charset = fileData.charset();
         String content = fileData.content();
+
+        // Валидация checksum для bypass проверки AccessTracker
+        if (fileParams.has("expectedChecksum")) {
+            String expectedHex = fileParams.get("expectedChecksum").asText();
+            long currentCrc = calculateCRC32(path);
+            long expectedCrc;
+            try {
+                expectedCrc = Long.parseUnsignedLong(expectedHex, 16);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid expectedChecksum format: " + expectedHex);
+            }
+
+            if (currentCrc != expectedCrc) {
+                throw new SecurityException("Checksum mismatch! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". File modified or context lost. Please read_file again.");
+            }
+            // Хеш совпал — значит LLM знает актуальное состояние файла.
+            AccessTracker.registerRead(path);
+        }
+
+        // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
+        if (!AccessTracker.hasBeenRead(path)) {
+            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
+        }
 
         // Представление контента в виде списка строк для корректной манипуляции
         List<String> currentLines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
@@ -451,7 +470,7 @@ public class EditFileTool implements McpTool {
      * Вычисляет CRC32 хеш-сумму файла для отчетов.
      */
     private long calculateCRC32(Path path) throws IOException {
-        CRC32 crc = new CRC32();
+        CRC32C crc = new CRC32C();
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
             byte[] buffer = new byte[8192];
             int len;

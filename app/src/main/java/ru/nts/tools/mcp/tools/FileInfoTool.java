@@ -15,13 +15,13 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.zip.CRC32;
+import java.util.zip.CRC32C;
 
 /**
  * Инструмент для получения детальной технической информации о файле.
  * Позволяет LLM оценить размер, структуру и актуальность файла без полной вычитки его содержимого.
  * Информация включает: размер на диске, количество строк (для текстовых файлов),
- * кодировку, дату последнего изменения и контрольную сумму CRC32.
+ * кодировку, дату последнего изменения и контрольную сумму CRC32C.
  */
 public class FileInfoTool implements McpTool {
 
@@ -37,7 +37,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Get file metadata: size, lines, encoding, CRC32.";
+        return "Get file metadata: size, lines, encoding, CRC32C.";
     }
 
     @Override
@@ -93,24 +93,24 @@ public class FileInfoTool implements McpTool {
             sb.append("Lines: ").append(lineCount).append("\n");
         }
         sb.append("Last modified: ").append(attrs.lastModifiedTime()).append("\n");
-        sb.append("CRC32: ").append(Long.toHexString(crc32).toUpperCase());
+        sb.append("CRC32C: ").append(Long.toHexString(crc32).toUpperCase());
 
         text.put("text", sb.toString());
         return result;
     }
 
     /**
-     * Вычисляет CRC32 контрольную сумму файла.
+     * Вычисляет CRC32C контрольную сумму файла.
      * Использует буферизированное чтение для минимизации нагрузки на диск.
      *
      * @param path Путь к файлу.
      *
-     * @return Значение CRC32.
+     * @return Значение CRC32C.
      *
      * @throws Exception При ошибках чтения файла.
      */
     private long calculateCRC32(Path path) throws Exception {
-        CRC32 crc = new CRC32();
+        CRC32C crc = new CRC32C();
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
             byte[] buffer = new byte[8192];
             int len;
