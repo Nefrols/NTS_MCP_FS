@@ -9,22 +9,23 @@ import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
- * Инструмент для получения детальной технической информации о файле.
- * Позволяет LLM оценить размер, структуру и актуальность файла без полной вычитки его содержимого.
- * Информация включает: размер на диске, количество строк (для текстовых файлов),
- * кодировку и дату последнего изменения.
+ * Инструмент для получения детальной технической информации о файле с превью (Peeking).
+ * Информация включает: размер, количество строк, кодировку, дату изменения и первые/последние строки.
  */
 public class FileInfoTool implements McpTool {
 
-    /**
-     * JSON манипулятор.
-     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -34,7 +35,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Get file metadata: size, lines, encoding.";
+        return "Get file metadata and intelligent preview (Head/Tail).";
     }
 
     @Override
@@ -50,27 +51,35 @@ public class FileInfoTool implements McpTool {
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
-        // Разрешаем получение информации даже о защищенных файлах (например, .git/config) для анализа окружения
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path) || !Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("File not found or is not a regular file: '" + pathStr + "'. Information can only be retrieved for regular files.");
+            throw new IllegalArgumentException("File not found or is not a regular file: '" + pathStr + "'.");
         }
 
-        // Чтение атрибутов файловой системы
         BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
         long size = attrs.size();
-
-        // Быстрая проверка кодировки
         Charset charset = EncodingUtils.detectEncoding(path);
 
-        // Попытка подсчета количества строк (эффективно только для текстовых файлов)
+        // 1. Подсчет строк и Head (первые 5 строк)
+        List<String> head = new ArrayList<>();
         long lineCount = 0;
-        try {
-            lineCount = Files.lines(path, charset).count();
+        try (var lines = Files.lines(path, charset)) {
+            var allLines = lines.peek(l -> {
+                if (head.size() < 5) head.add(l);
+            }).iterator();
+            while (allLines.hasNext()) {
+                allLines.next();
+                lineCount++;
+            }
         } catch (Exception e) {
-            // Если файл бинарный или кодировка несовместима — помечаем как неопределенное количество
             lineCount = -1;
+        }
+
+        // 2. Tail (последние 5 строк) через RandomAccessFile
+        List<String> tail = new ArrayList<>();
+        if (lineCount > 5) {
+            tail = readTail(path, 5, charset);
         }
 
         ObjectNode result = mapper.createObjectNode();
@@ -78,7 +87,6 @@ public class FileInfoTool implements McpTool {
         ObjectNode text = content.addObject();
         text.put("type", "text");
 
-        // Формирование итогового текстового отчета для LLM
         StringBuilder sb = new StringBuilder();
         sb.append("File: ").append(path.toAbsolutePath()).append("\n");
         sb.append("Size: ").append(size).append(" bytes\n");
@@ -86,9 +94,70 @@ public class FileInfoTool implements McpTool {
         if (lineCount >= 0) {
             sb.append("Lines: ").append(lineCount).append("\n");
         }
-        sb.append("Last modified: ").append(attrs.lastModifiedTime());
+        sb.append("Last modified: ").append(attrs.lastModifiedTime()).append("\n\n");
 
-        text.put("text", sb.toString());
+        if (!head.isEmpty()) {
+            sb.append("### Head (First 5 lines):\n```\n");
+            for (String line : head) sb.append(line).append("\n");
+            sb.append("```\n");
+        }
+
+        if (!tail.isEmpty()) {
+            sb.append("\n### Tail (Last 5 lines):\n```\n");
+            for (String line : tail) sb.append(line).append("\n");
+            sb.append("```\n");
+        }
+
+        text.put("text", sb.toString().trim());
         return result;
+    }
+
+    /**
+     * Эффективно читает последние N строк файла без загрузки всего содержимого в память.
+     */
+    private List<String> readTail(Path path, int maxLines, Charset charset) {
+        List<byte[]> lineBytes = new ArrayList<>();
+        try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r")) {
+            long fileLength = raf.length();
+            if (fileLength == 0) return List.of();
+
+            long pos = fileLength - 1;
+            int linesFound = 0;
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+
+            // Идем с конца файла
+            while (pos >= 0 && linesFound < maxLines) {
+                raf.seek(pos);
+                int b = raf.read();
+                if (b == '\n') {
+                    if (buffer.size() > 0) {
+                        lineBytes.add(0, buffer.toByteArray());
+                        buffer.reset();
+                        linesFound++;
+                    }
+                } else if (b != '\r') {
+                    buffer.write(b);
+                }
+                pos--;
+            }
+            // Добавляем последнюю (самую верхнюю из прочитанных) строку
+            if (buffer.size() > 0 && linesFound < maxLines) {
+                lineBytes.add(0, buffer.toByteArray());
+            }
+        } catch (IOException e) {
+            return List.of("[Error reading tail: " + e.getMessage() + "]");
+        }
+
+        return lineBytes.stream()
+                .map(bytes -> {
+                    // Реверсируем байты, так как ByteArrayOutputStream писал их по порядку, 
+                    // но мы читали файл с конца символ за символом
+                    byte[] reversed = new byte[bytes.length];
+                    for (int i = 0; i < bytes.length; i++) {
+                        reversed[i] = bytes[bytes.length - 1 - i];
+                    }
+                    return new String(reversed, charset);
+                })
+                .collect(Collectors.toList());
     }
 }

@@ -23,12 +23,6 @@ public class FileUtils {
 
     /**
      * Выполняет IO-операцию с механизмом повторов.
-     * Обрабатывает AccessDeniedException и FileSystemException.
-     *
-     * @param action Операция для выполнения.
-     * @param <T> Тип возвращаемого значения.
-     * @return Результат операции.
-     * @throws IOException Если все попытки завершились неудачей.
      */
     public static <T> T executeWithRetry(IORunnable<T> action) throws IOException {
         IOException lastException = null;
@@ -50,104 +44,100 @@ public class FileUtils {
     }
 
     /**
+     * Гарантирует существование родительской директории для указанного пути.
+     */
+    public static void ensureParentExists(Path path) throws IOException {
+        Path parent = path.getParent();
+        if (parent != null && !Files.exists(parent)) {
+            Files.createDirectories(parent);
+        }
+    }
+
+    /**
+     * Рекурсивно удаляет пустые родительские директории, начиная от указанного пути
+     * и заканчивая корнем проекта (не включая корень).
+     */
+    public static void deleteEmptyParents(Path path, Path root) {
+        Path parent = path.getParent();
+        while (parent != null && !parent.equals(root) && Files.exists(parent)) {
+            try {
+                if (Files.isDirectory(parent)) {
+                    try (var s = Files.list(parent)) {
+                        if (s.findAny().isPresent()) return; // Папка не пуста
+                    }
+                    Files.delete(parent);
+                }
+            } catch (IOException ignored) {
+                return;
+            }
+            parent = parent.getParent();
+        }
+    }
+
+    /**
      * Безопасная запись контента в файл с использованием алгоритма Safe Swap.
-     * 1. Запись в .tmp файл.
-     * 2. Переименование оригинала в .old.
-     * 3. Переименование .tmp в оригинал.
-     * 4. Удаление .old.
-     *
-     * @param path Путь к файлу.
-     * @param content Содержимое файла.
-     * @param charset Кодировка.
-     * @throws IOException При ошибке записи.
      */
     public static void safeWrite(Path path, String content, Charset charset) throws IOException {
+        ensureParentExists(path);
         Path tempFile = path.resolveSibling(path.getFileName() + ".tmp");
         Path backupFile = path.resolveSibling(path.getFileName() + ".old");
 
         executeWithRetry(() -> {
-            // 1. Запись во временный файл
             Files.writeString(tempFile, content, charset, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-
             if (Files.exists(path)) {
-                // 2. Переименование оригинального файла в резервный
                 Files.move(path, backupFile, StandardCopyOption.REPLACE_EXISTING);
             }
-
             try {
-                // 3. Переименование временного файла в оригинал
                 Files.move(tempFile, path, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
-                // Если шаг 3 не удался, пытаемся вернуть оригинал из бэкапа
                 if (Files.exists(backupFile)) {
                     Files.move(backupFile, path, StandardCopyOption.REPLACE_EXISTING);
                 }
                 throw e;
             }
-
-            // 4. Удаление резервного файла
             Files.deleteIfExists(backupFile);
             return null;
         });
     }
 
     /**
-     * Безопасное копирование файла с использованием алгоритма Safe Swap и Retry Pattern.
-     *
-     * @param source Откуда.
-     * @param target Куда.
-     * @throws IOException При ошибке копирования.
+     * Безопасное копирование файла.
      */
     public static void safeCopy(Path source, Path target) throws IOException {
+        ensureParentExists(target);
         Path tempFile = target.resolveSibling(target.getFileName() + ".tmp");
         Path backupFile = target.resolveSibling(target.getFileName() + ".old");
 
         executeWithRetry(() -> {
-            // 1. Копирование во временный файл
             Files.copy(source, tempFile, StandardCopyOption.REPLACE_EXISTING);
-
             if (Files.exists(target)) {
-                // 2. Переименование оригинала в резервный
                 Files.move(target, backupFile, StandardCopyOption.REPLACE_EXISTING);
             }
-
             try {
-                // 3. Переименование временного файла в оригинал
                 Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
-                // Если шаг 3 не удался, пытаемся вернуть оригинал из бэкапа
                 if (Files.exists(backupFile)) {
                     Files.move(backupFile, target, StandardCopyOption.REPLACE_EXISTING);
                 }
                 throw e;
             }
-
-            // 4. Удаление резервного файла
             Files.deleteIfExists(backupFile);
             return null;
         });
     }
 
     /**
-     * Безопасное чтение всех байтов файла с использованием Retry Pattern.
-     *
-     * @param path Путь к файлу.
-     * @return Массив байтов.
-     * @throws IOException При ошибке чтения.
+     * Безопасное чтение всех байтов файла.
      */
     public static byte[] safeReadAllBytes(Path path) throws IOException {
         return executeWithRetry(() -> Files.readAllBytes(path));
     }
 
     /**
-     * Безопасное перемещение/переименование файла с использованием Retry Pattern.
-     *
-     * @param source Откуда.
-     * @param target Куда.
-     * @param options Опции перемещения.
-     * @throws IOException При ошибке перемещения.
+     * Безопасное перемещение/переименование файла.
      */
     public static void safeMove(Path source, Path target, CopyOption... options) throws IOException {
+        ensureParentExists(target);
         executeWithRetry(() -> {
             Files.move(source, target, options);
             return null;
@@ -155,10 +145,7 @@ public class FileUtils {
     }
 
     /**
-     * Безопасное удаление файла с использованием Retry Pattern.
-     *
-     * @param path Путь к файлу.
-     * @throws IOException При ошибке удаления.
+     * Безопасное удаление файла.
      */
     public static void safeDelete(Path path) throws IOException {
         executeWithRetry(() -> {
@@ -168,34 +155,23 @@ public class FileUtils {
     }
 
     /**
-     * Проверяет доступность файла на запись с использованием блокировки.
-     * Использует FileChannel.tryLock() для детерминированной проверки.
-     *
-     * @param path Путь к файлу.
-     * @throws IOException Если файл заблокирован или недоступен.
+     * Проверяет доступность файла на запись.
      */
     public static void checkFileAvailability(Path path) throws IOException {
         if (!Files.exists(path)) return;
-        
         executeWithRetry(() -> {
             try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE);
                  FileLock lock = channel.tryLock()) {
                 if (lock == null) {
                     throw new FileSystemException(path.toString(), null, "File is locked by another process");
                 }
-            } catch (NoSuchFileException ignored) {
-                // Файл исчез между проверкой и открытием - это нормально
-            }
+            } catch (NoSuchFileException ignored) {}
             return null;
         });
     }
 
     /**
-     * Вычисляет CRC32 хеш-сумму файла для отчетов и валидации.
-     *
-     * @param path Путь к файлу.
-     * @return Хеш-сумма (long).
-     * @throws IOException При ошибках чтения.
+     * Вычисляет CRC32 хеш-сумму файла.
      */
     public static long calculateCRC32(Path path) throws IOException {
         CRC32C crc = new CRC32C();
@@ -209,9 +185,6 @@ public class FileUtils {
         return crc.getValue();
     }
 
-    /**
-     * Функциональный интерфейс для IO операций, бросающих исключения.
-     */
     @FunctionalInterface
     public interface IORunnable<T> {
         T run() throws IOException;

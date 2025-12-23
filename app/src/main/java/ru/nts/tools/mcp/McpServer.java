@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -42,6 +42,7 @@ public class McpServer {
         router.registerTool(new ReadFileTool());
         router.registerTool(new EditFileTool());
         router.registerTool(new SearchFilesTool());
+        router.registerTool(new FindFileTool());
         router.registerTool(new CreateFileTool());
         router.registerTool(new DeleteFileTool());
         router.registerTool(new MoveFileTool());
