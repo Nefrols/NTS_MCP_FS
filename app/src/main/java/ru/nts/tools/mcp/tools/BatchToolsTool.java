@@ -88,9 +88,14 @@ public class BatchToolsTool implements McpTool {
                 // внутри этих инструментов не приведут к фиксации на диск до завершения батча.
                 try {
                     JsonNode result = router.callTool(toolName, toolParams);
+                    // Проверяем, не вернул ли инструмент ошибку через executeWithFeedback
+                    if (result.has("isError") && result.get("isError").asBoolean()) {
+                        String errorMsg = result.path("content").get(0).path("text").asText("Unknown error");
+                        throw new IllegalStateException(errorMsg);
+                    }
                     results.add(result);
                 } catch (Exception e) {
-                    throw new IllegalStateException(String.format("Batch failed at action #%d ('%s'): %s", index, toolName, e.getMessage()), e);
+                    throw new IllegalStateException(String.format("Batch execution failed at action #%d ('%s'). Error: %s. All previous actions in this batch have been rolled back.", index, toolName, e.getMessage()), e);
                 }
             }
             // Успешное завершение всей цепочки — фиксируем изменения

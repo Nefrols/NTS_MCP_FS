@@ -66,7 +66,7 @@ public class GitTool implements McpTool {
 
         // Валидация подкоманды по белому списку
         if (!ALLOWED_CMDS.contains(subCmd)) {
-            throw new SecurityException("Command 'git " + subCmd + "' is not allowed for security reasons.");
+            throw new SecurityException("Git subcommand '" + subCmd + "' is forbidden. Only local, informational commands are allowed: " + ALLOWED_CMDS);
         }
 
         List<String> command = new ArrayList<>();

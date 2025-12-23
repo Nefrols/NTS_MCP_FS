@@ -59,7 +59,7 @@ public class DeleteFileTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("Object not found: " + pathStr);
+            throw new IllegalArgumentException("Object not found at path: '" + pathStr + "'. Ensure the path is correct (use nts_list_directory to verify).");
         }
 
         // Запуск транзакции удаления

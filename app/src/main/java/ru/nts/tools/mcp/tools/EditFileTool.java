@@ -93,7 +93,17 @@ public class EditFileTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         // Выбор режима: мульти-файловое или одиночное редактирование
         if (params.has("edits")) {
-            return executeMultiFileEdit(params.get("edits"));
+            JsonNode editsNode = params.get("edits");
+            // Поддержка наследования пути: если path указан в корне, но отсутствует в элементе edits, копируем его.
+            if (params.has("path") && editsNode.isArray()) {
+                String rootPath = params.get("path").asText();
+                for (JsonNode edit : editsNode) {
+                    if (!edit.has("path") && edit instanceof ObjectNode) {
+                        ((ObjectNode) edit).put("path", rootPath);
+                    }
+                }
+            }
+            return executeMultiFileEdit(editsNode);
         } else if (params.has("path")) {
             return executeSingleFileEdit(params);
         } else {
@@ -185,7 +195,7 @@ public class EditFileTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("File not found: " + pathStr);
+            throw new IllegalArgumentException("File not found: '" + pathStr + "'. Verify the path using nts_list_directory.");
         }
 
         // Предотвращение загрузки гигантских файлов (OOM Protection)
@@ -204,11 +214,11 @@ public class EditFileTool implements McpTool {
             try {
                 expectedCrc = Long.parseUnsignedLong(expectedHex, 16);
             } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("Invalid expectedChecksum format: " + expectedHex);
+                throw new IllegalArgumentException("Invalid expectedChecksum format: '" + expectedHex + "'. Expected a hexadecimal value.");
             }
 
             if (currentCrc != expectedCrc) {
-                throw new SecurityException("Checksum mismatch! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". File modified or context lost. Please read_file again.");
+                throw new IllegalStateException("Checksum mismatch (Optimistic Locking)! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". The file was modified externally. Please perform nts_read_file again.");
             }
             // Хеш совпал — значит LLM знает актуальное состояние файла.
             AccessTracker.registerRead(path);
@@ -216,7 +226,7 @@ public class EditFileTool implements McpTool {
 
         // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session. Please read the file OR provide the known 'expectedChecksum' from a previous operation to bypass reading.");
+            throw new SecurityException("Access denied: file '" + pathStr + "' has not been read in the current session. You must read the file (nts_read_file) before making edits to ensure context consistency.");
         }
 
         // Представление контента в виде списка строк для корректной манипуляции
@@ -313,7 +323,7 @@ public class EditFileTool implements McpTool {
 
         // 4. Валидация границ в текущем состоянии файла
         if (start < 1 || (start > lines.size() + 1) || (end < start - 1) || (end > lines.size())) {
-            throw new IllegalArgumentException("Addressing error: " + start + "-" + end + " (file size: " + lines.size() + ")");
+            throw new IllegalArgumentException("Addressing error: range " + start + "-" + end + " is out of bounds for file with " + lines.size() + " lines.");
         }
 
         // 5. Контроль ожидаемого содержимого (expectedContent) с диагностикой
@@ -325,7 +335,10 @@ public class EditFileTool implements McpTool {
 
             if (!normActual.equals(normExpected)) {
                 // Если не совпало — выбрасываем ошибку с подробным дампом текущих строк
-                throw new IllegalStateException("Content validation failed!\n" + "EXPECTED:\n[" + normExpected + "]\n" + "ACTUAL CONTENT IN RANGE " + start + "-" + end + ":\n[" + normActual + "]\n" + "Please adjust your request using the actual text.");
+                throw new IllegalStateException("Content validation failed for range " + start + "-" + end + "!\n" +
+                        "EXPECTED:\n[" + normExpected + "]\n" +
+                        "ACTUAL CONTENT IN FILE:\n[" + normActual + "]\n" +
+                        "Please adjust your request using the actual text from the file.");
             }
         }
 

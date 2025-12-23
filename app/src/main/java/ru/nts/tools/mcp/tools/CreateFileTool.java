@@ -64,7 +64,8 @@ public class CreateFileTool implements McpTool {
 
         // Проверка политики перезаписи: нельзя менять то, что не видел
         if (Files.exists(path) && !AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file already exists and has not been read. Use read_file before overwriting.");
+            throw new SecurityException("File '" + pathStr + "' already exists and has not been read in the current session. " +
+                    "Overwriting is prohibited to prevent data loss. Please use nts_read_file before overwriting.");
         }
 
         // Открытие транзакции для обеспечения атомарности операции

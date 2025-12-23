@@ -136,7 +136,7 @@ class EditFileToolTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
         // Убеждаемся, что в ошибке есть информация о реальном содержимом
-        assertTrue(ex.getMessage().contains("ACTUAL CONTENT IN RANGE 2-2:"), "Ошибка должна содержать диагностику");
+        assertTrue(ex.getMessage().contains("ACTUAL CONTENT IN FILE:"), "Ошибка должна содержать диагностику");
         assertTrue(ex.getMessage().contains("[BBB]"), "Ошибка должна содержать актуальную строку");
     }
 
@@ -364,7 +364,7 @@ class EditFileToolTest {
         params.put("oldText", "Content").put("newText", "New");
         params.put("expectedChecksum", "DEADBEEF"); // Неверный хеш
 
-        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
         assertTrue(ex.getMessage().contains("Checksum mismatch"), "Должно быть сообщение о несовпадении хеша");
     }
 
@@ -392,8 +392,33 @@ class EditFileToolTest {
         params.put("oldText", "Version 1").put("newText", "Version 3");
         params.put("expectedChecksum", Long.toHexString(v1Crc).toUpperCase());
 
-        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
         assertTrue(ex.getMessage().contains("Checksum mismatch"), "Операция должна быть отклонена из-за изменения файла");
+    }
+
+    /**
+     * Regression test: Ensures that when 'edits' array is used with a root 'path',
+     * but items inside 'edits' do not specify 'path', the root path is inherited.
+     */
+    @Test
+    void testRootPathWithEditsArrayMissingPath(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        TransactionManager.reset();
+
+        Path file = tempDir.resolve("repro.txt");
+        Files.writeString(file, "Original Content");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        ArrayNode edits = params.putArray("edits");
+        edits.addObject().put("oldText", "Original").put("newText", "Modified");
+
+        tool.execute(params);
+
+        String content = Files.readString(file);
+        assertTrue(content.contains("Modified"), "Content should be modified to include 'Modified'");
+        assertFalse(content.contains("Original"), "Original content should be replaced");
     }
 
     /**

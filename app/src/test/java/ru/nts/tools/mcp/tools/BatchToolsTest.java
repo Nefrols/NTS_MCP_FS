@@ -154,7 +154,7 @@ class BatchToolsTest {
 
         // Проверяем, что сообщение об ошибке содержит контекст
         String msg = ex.getMessage();
-        assertTrue(msg.contains("Batch failed at action #2"), "Ошибка должна указывать индекс действия");
+        assertTrue(msg.contains("Batch execution failed at action #2"), "Ошибка должна указывать индекс действия");
         assertTrue(msg.contains("nts_edit_file"), "Ошибка должна указывать имя инструмента");
 
         // Проверяем, что первый файл вернулся к исходному состоянию

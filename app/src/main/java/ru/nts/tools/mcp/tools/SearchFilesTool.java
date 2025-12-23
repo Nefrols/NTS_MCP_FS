@@ -78,7 +78,7 @@ public class SearchFilesTool implements McpTool {
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
-            throw new IllegalArgumentException("Directory not found: " + pathStr);
+            throw new IllegalArgumentException("Search directory not found or is not a folder: '" + pathStr + "'. Verify the path.");
         }
 
         // Подготовка регулярного выражения для поиска

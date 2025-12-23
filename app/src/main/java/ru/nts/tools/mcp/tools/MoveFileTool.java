@@ -63,11 +63,11 @@ public class MoveFileTool implements McpTool {
         Path target = PathSanitizer.sanitize(targetStr, false);
 
         if (!Files.exists(source)) {
-            throw new IllegalArgumentException("Source object not found: " + sourceStr);
+            throw new IllegalArgumentException("Source object not found: '" + sourceStr + "'. Verify the source path.");
         }
 
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Target object already exists: " + targetStr);
+            throw new IllegalArgumentException("Target object already exists: '" + targetStr + "'. Overwriting via move is not allowed.");
         }
 
         // Открытие транзакции перемещения

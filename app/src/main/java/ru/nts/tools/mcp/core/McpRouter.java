@@ -79,7 +79,7 @@ public class McpRouter {
         if (tool == null) {
             throw new IllegalArgumentException("Tool not found: " + name);
         }
-        return tool.execute(params);
+        return tool.executeWithFeedback(params);
     }
 
     /**

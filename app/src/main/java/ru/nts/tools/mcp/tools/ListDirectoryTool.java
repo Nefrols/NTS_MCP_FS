@@ -71,7 +71,7 @@ public class ListDirectoryTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path) || !Files.isDirectory(path)) {
-            throw new IllegalArgumentException("Directory not found or is not a folder: " + pathStr);
+            throw new IllegalArgumentException("Directory not found or is not a folder: '" + pathStr + "'. Please provide a valid directory path.");
         }
 
         // Сбор игнорируемых путей

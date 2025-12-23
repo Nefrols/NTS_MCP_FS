@@ -75,7 +75,7 @@ public class ReadFileTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("File not found: " + pathStr);
+            throw new IllegalArgumentException("File not found: '" + pathStr + "'. Ensure the path is correct and the file exists.");
         }
 
         // Предотвращение загрузки гигантских файлов (OOM Protection)
@@ -109,7 +109,7 @@ public class ReadFileTool implements McpTool {
             }
 
             if (anchorIdx == -1) {
-                throw new IllegalArgumentException("Pattern not found: " + patternStr);
+                throw new IllegalArgumentException("Context pattern not found: '" + patternStr + "'. Please check the pattern or read the whole file to find correct context.");
             }
 
             // Вычисление границ окна чтения

@@ -62,19 +62,19 @@ public class RenameFileTool implements McpTool {
         Path source = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(source)) {
-            throw new IllegalArgumentException("Object not found: " + pathStr);
+            throw new IllegalArgumentException("Object not found: '" + pathStr + "'. Verify the path.");
         }
 
         // Запрещаем наличие разделителей пути в новом имени для соблюдения принципа локальности переименования
         if (newName.contains("/") || newName.contains("\\")) {
-            throw new IllegalArgumentException("New name must not contain path components. Use move_file for moving objects.");
+            throw new IllegalArgumentException("New name must not contain path components (slashes). Use nts_move_file for moving objects to different directories.");
         }
 
         // Вычисление целевого пути в той же директории
         Path target = source.resolveSibling(newName);
 
         if (Files.exists(target)) {
-            throw new IllegalArgumentException("Object with name " + newName + " already exists.");
+            throw new IllegalArgumentException("Object with name '" + newName + "' already exists in the same directory.");
         }
 
         // Открытие транзакции переименования

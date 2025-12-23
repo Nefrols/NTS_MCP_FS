@@ -68,7 +68,7 @@ public class GradleTool implements McpTool {
         // Поиск файла враппера относительно текущего корня "песочницы"
         File wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
         if (!wrapperFile.exists()) {
-            throw new IllegalStateException("Gradle wrapper not found at " + wrapperFile.getAbsolutePath());
+            throw new IllegalStateException("Gradle wrapper not found at '" + wrapperFile.getAbsolutePath() + "'. Make sure you are in a Gradle project root.");
         }
 
         // Формирование команды для ProcessExecutor

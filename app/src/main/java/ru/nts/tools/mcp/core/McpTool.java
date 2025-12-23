@@ -47,4 +47,51 @@ public interface McpTool {
      * @throws Exception Если выполнение невозможно из-за ошибок валидации, прав доступа или системных сбоев.
      */
     JsonNode execute(JsonNode params) throws Exception;
+
+    /**
+     * Обертка над execute для обеспечения информативной обратной связи при ошибках.
+     * Перехватывает исключения и преобразует их в понятные для LLM сообщения.
+     * 
+     * @param params Аргументы вызова.
+     * @return JSON-узел с результатом или описанием ошибки для LLM.
+     */
+    default JsonNode executeWithFeedback(JsonNode params) {
+        try {
+            return execute(params);
+        } catch (IllegalArgumentException e) {
+            return createErrorResponse("INVALID_ARGUMENTS", 
+                "Invalid request parameters: " + e.getMessage() + 
+                "\nPlease check the tool schema and correct your arguments.");
+        } catch (SecurityException e) {
+            return createErrorResponse("SECURITY_VIOLATION", 
+                "Security policy violation: " + e.getMessage() + 
+                "\nYou might be trying to access a protected file or modify a file without reading it first.");
+        } catch (IllegalStateException e) {
+            return createErrorResponse("VALIDATION_FAILED", 
+                "State validation failed: " + e.getMessage() + 
+                "\nThe file might have changed on disk, or you used incorrect expectations (expectedContent/checksum).");
+        } catch (java.io.IOException e) {
+            return createErrorResponse("SYSTEM_ERROR", 
+                "System I/O error: " + e.getMessage() + 
+                "\nThis could be a server-side issue (file locked by OS) or an invalid path.");
+        } catch (Exception e) {
+            return createErrorResponse("INTERNAL_BUG", 
+                "Internal server error: " + e.toString() + 
+                "\nPlease report this bug to the developer.");
+        }
+    }
+
+    /**
+     * Вспомогательный метод для формирования JSON-ответа с ошибкой.
+     */
+    private JsonNode createErrorResponse(String type, String message) {
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode res = mapper.createObjectNode();
+        com.fasterxml.jackson.databind.node.ArrayNode content = res.putArray("content");
+        com.fasterxml.jackson.databind.node.ObjectNode text = content.addObject();
+        text.put("type", "text");
+        text.put("text", "Error [" + type + "]: " + message);
+        res.put("isError", true);
+        return res;
+    }
 }

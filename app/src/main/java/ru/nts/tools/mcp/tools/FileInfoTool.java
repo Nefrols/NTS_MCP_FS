@@ -57,7 +57,7 @@ public class FileInfoTool implements McpTool {
         Path path = PathSanitizer.sanitize(pathStr, true);
 
         if (!Files.exists(path) || !Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("File not found or is not a regular file: " + pathStr);
+            throw new IllegalArgumentException("File not found or is not a regular file: '" + pathStr + "'. Information can only be retrieved for regular files.");
         }
 
         // Чтение атрибутов файловой системы

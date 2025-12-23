@@ -73,7 +73,7 @@ public class ProjectStructureTool implements McpTool {
         // Санитизация пути
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
         if (!Files.isDirectory(rootPath)) {
-            throw new IllegalArgumentException("Path is not a directory: " + pathStr);
+            throw new IllegalArgumentException("Path is not a directory or does not exist: '" + pathStr + "'. Please provide a valid directory path.");
         }
 
         // Сбор игнорируемых путей
