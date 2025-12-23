@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.tools.ReadFileTool;
+import ru.nts.tools.mcp.tools.fs.ReadFileTool;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;

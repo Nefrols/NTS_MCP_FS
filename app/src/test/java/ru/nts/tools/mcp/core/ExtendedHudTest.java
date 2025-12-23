@@ -2,7 +2,7 @@ package ru.nts.tools.mcp.core;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.tools.EditFileTool;
+import ru.nts.tools.mcp.tools.editing.EditFileTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;

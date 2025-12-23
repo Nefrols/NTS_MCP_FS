@@ -1,5 +1,12 @@
 package ru.nts.tools.mcp.tools;
 
+import ru.nts.tools.mcp.tools.fs.*;
+import ru.nts.tools.mcp.tools.editing.*;
+import ru.nts.tools.mcp.tools.session.*;
+import ru.nts.tools.mcp.tools.external.*;
+import ru.nts.tools.mcp.tools.planning.*;
+import ru.nts.tools.mcp.tools.system.*;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;

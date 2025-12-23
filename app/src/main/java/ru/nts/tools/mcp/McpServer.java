@@ -5,7 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpRouter;
-import ru.nts.tools.mcp.tools.*;
+import ru.nts.tools.mcp.tools.fs.*;
+import ru.nts.tools.mcp.tools.editing.*;
+import ru.nts.tools.mcp.tools.session.*;
+import ru.nts.tools.mcp.tools.external.*;
+import ru.nts.tools.mcp.tools.planning.*;
+import ru.nts.tools.mcp.tools.system.*;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -63,6 +68,7 @@ public class McpServer {
         router.registerTool(new GitCommitSessionTool());
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskKillTool());
+        router.registerTool(new TaskLogTool());
         router.registerTool(new ProjectStructureTool());
         router.registerTool(new ProjectReplaceTool());
         router.registerTool(new TodoCreateTool());

@@ -3,7 +3,7 @@ package ru.nts.tools.mcp.core;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.tools.ReadFileTool;
+import ru.nts.tools.mcp.tools.fs.ReadFileTool;
 
 import java.io.FileOutputStream;
 import java.nio.file.Files;

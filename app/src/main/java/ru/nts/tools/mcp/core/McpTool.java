@@ -12,6 +12,7 @@ public interface McpTool {
 
     String getName();
     String getDescription();
+    String getCategory();
     JsonNode getInputSchema();
     JsonNode execute(JsonNode params) throws Exception;
 

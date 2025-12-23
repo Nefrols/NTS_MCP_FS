@@ -55,7 +55,10 @@ public class McpRouter {
         for (McpTool tool : tools.values()) {
             ObjectNode toolNode = mapper.createObjectNode();
             toolNode.put("name", tool.getName());
-            toolNode.put("description", tool.getDescription());
+            // Добавляем префикс категории в описание для лучшей визуализации в UI клиентов
+            String description = "[" + tool.getCategory().toUpperCase() + "] " + tool.getDescription();
+            toolNode.put("description", description);
+            toolNode.put("category", tool.getCategory());
             toolNode.set("inputSchema", tool.getInputSchema());
             toolsArray.add(toolNode);
         }
