@@ -6,13 +6,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.ProcessExecutor;
+import ru.nts.tools.mcp.core.TodoManager;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Инструмент для автоматического формирования коммита на основе семантических меток сессии.
+ * Инструмент для автоматического формирования коммита на основе семантических меток и выполненных задач из плана.
  */
 public class GitCommitSessionTool implements McpTool {
 
@@ -22,7 +23,7 @@ public class GitCommitSessionTool implements McpTool {
     public String getName() { return "nts_git_commit_session"; }
 
     @Override
-    public String getDescription() { return "Auto-commit current changes with message generated from session instructions."; }
+    public String getDescription() { return "Auto-commit current changes with message generated from session instructions and TODO status."; }
 
     @Override
     public JsonNode getInputSchema() {
@@ -38,23 +39,24 @@ public class GitCommitSessionTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String header = params.get("header").asText();
         List<String> instructions = TransactionManager.getSessionInstructions();
+        List<String> completedTasks = TodoManager.getCompletedTasks();
 
         StringBuilder body = new StringBuilder();
+        
+        if (!completedTasks.isEmpty()) {
+            body.append("\n\nCompleted tasks:\n");
+            for (String task : completedTasks) body.append("- ").append(task).append("\n");
+        }
+
         if (!instructions.isEmpty()) {
-            body.append("\n\nChanges in this session:\n");
-            // Убираем дубликаты и форматируем
+            body.append("\nTechnical changes:\n");
             List<String> unique = instructions.stream().distinct().collect(Collectors.toList());
-            for (String ins : unique) {
-                body.append("- ").append(ins).append("\n");
-            }
+            for (String ins : unique) body.append("- ").append(ins).append("\n");
         }
 
         String fullMessage = header + body.toString();
 
-        // 1. Git Add .
         ProcessExecutor.execute(List.of("git", "add", "."), 10);
-        
-        // 2. Git Commit
         ProcessExecutor.ExecutionResult res = ProcessExecutor.execute(List.of("git", "commit", "-m", fullMessage), 10);
 
         ObjectNode response = mapper.createObjectNode();
