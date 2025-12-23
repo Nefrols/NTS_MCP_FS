@@ -133,14 +133,50 @@ public class McpServer {
                 // Диспетчеризация методов MCP протокола
                 switch (method) {
                     case "initialize" -> {
+                        if (DEBUG) {
+                            var clientInfo = request.path("params").path("clientInfo");
+                            System.err.println("Client info: " + clientInfo.path("name").asText() + " (" + clientInfo.path("version").asText() + ")");
+                            System.err.println("Client protocol version: " + request.path("params").path("protocolVersion").asText());
+                        }
+
                         var result = mapper.createObjectNode();
                         result.put("protocolVersion", "2024-11-05");
                         var capabilities = result.putObject("capabilities");
-                        capabilities.putObject("tools"); // Объявляем поддержку инструментов
+                        
+                        // Объявляем поддержку инструментов с возможностью уведомлений об изменениях
+                        var toolsCap = capabilities.putObject("tools");
+                        toolsCap.put("listChanged", false);
+                        
+                        capabilities.putObject("resources").put("listChanged", false).put("subscribe", false);
+                        capabilities.putObject("prompts").put("listChanged", false);
+                        capabilities.putObject("logging");
+
                         var serverInfo = result.putObject("serverInfo");
                         serverInfo.put("name", "NTS-FileSystem-MCP");
-                        serverInfo.put("version", "1.0.0");
+                        serverInfo.put("version", "1.1.0");
                         response.set("result", result);
+                    }
+                    case "notifications/initialized" -> {
+                        // Уведомление об успешной инициализации клиентом. 
+                        // По стандарту ответ на уведомление не отправляется.
+                        if (DEBUG) {
+                            System.err.println("Client initialized connection.");
+                        }
+                        return;
+                    }
+                    case "ping" -> {
+                        // Обязательный метод для проверки активности сервера
+                        response.set("result", mapper.createObjectNode());
+                    }
+                    case "resources/list" -> {
+                        var res = mapper.createObjectNode();
+                        res.putArray("resources");
+                        response.set("result", res);
+                    }
+                    case "prompts/list" -> {
+                        var res = mapper.createObjectNode();
+                        res.putArray("prompts");
+                        response.set("result", res);
                     }
                     case "tools/list" -> response.set("result", router.listTools());
                     case "tools/call" -> {
@@ -148,9 +184,9 @@ public class McpServer {
                         JsonNode params = request.path("params").path("arguments");
                         response.set("result", router.callTool(toolName, params));
                     }
-                    case "notifications/initialized" -> {
-                        // Уведомление об успешной инициализации клиентом
-                        return;
+                    case "logging/setLevel" -> {
+                        // Заглушка для установки уровня логирования
+                        response.set("result", mapper.createObjectNode());
                     }
                     default -> {
                         if (id != null) {
@@ -161,11 +197,19 @@ public class McpServer {
                         }
                     }
                 }
+            } catch (IllegalArgumentException e) {
+                // Ошибка неверных параметров
+                if (id != null) {
+                    var error = mapper.createObjectNode();
+                    error.put("code", -32602);
+                    error.put("message", "Invalid params: " + e.getMessage());
+                    response.set("error", error);
+                }
             } catch (Exception e) {
                 // Обработка внутренних ошибок инструментов
                 if (id != null) {
                     var error = mapper.createObjectNode();
-                    error.put("code", -32000);
+                    error.put("code", -32603); // Internal error
                     error.put("message", "Internal error: " + e.getMessage());
                     response.set("error", error);
                 }

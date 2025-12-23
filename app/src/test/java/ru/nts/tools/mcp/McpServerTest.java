@@ -46,6 +46,31 @@ class McpServerTest {
         assertTrue(response.contains("\"id\":1"), "Ответ должен содержать ID запроса");
         assertTrue(response.contains("protocolVersion"), "Ответ должен содержать версию протокола");
         assertTrue(response.contains("NTS-FileSystem-MCP"), "Ответ должен содержать имя сервера");
+        assertTrue(response.contains("capabilities"), "Ответ должен содержать capabilities");
+        assertTrue(response.contains("tools"), "Ответ должен содержать поддержку инструментов");
+        assertTrue(response.contains("listChanged"), "Должен поддерживаться listChanged для инструментов");
+    }
+
+    /**
+     * Тестирует выполнение метода 'ping'.
+     * Ожидается пустой результат в ответе.
+     */
+    @Test
+    void testPing() throws Exception {
+        String pingRequest = "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"ping\"}\n";
+
+        System.setIn(new ByteArrayInputStream(pingRequest.getBytes(StandardCharsets.UTF_8)));
+        ByteArrayOutputStream outContent = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(outContent));
+
+        McpServer.main(new String[0]);
+
+        String out = outContent.toString(StandardCharsets.UTF_8);
+        var json = mapper.readTree(out);
+        assertEquals(42, json.get("id").asInt());
+        assertTrue(json.has("result"));
+        assertTrue(json.get("result").isObject());
+        assertEquals(0, json.get("result").size());
     }
 
     /**
