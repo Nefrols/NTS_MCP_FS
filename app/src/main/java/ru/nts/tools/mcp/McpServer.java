@@ -40,6 +40,7 @@ public class McpServer {
         router.registerTool(new FileInfoTool());
         router.registerTool(new ListDirectoryTool());
         router.registerTool(new ReadFileTool());
+        router.registerTool(new ReadFileRangesTool());
         router.registerTool(new EditFileTool());
         router.registerTool(new SearchFilesTool());
         router.registerTool(new FindFileTool());
@@ -49,15 +50,19 @@ public class McpServer {
         router.registerTool(new RenameFileTool());
         router.registerTool(new UndoTool());
         router.registerTool(new RedoTool());
+        router.registerTool(new CheckpointTool());
         router.registerTool(new TransactionJournalTool());
         router.registerTool(new GradleTool());
         router.registerTool(new GitTool());
         router.registerTool(new GitDiffTool());
-        router.registerTool(new ProjectReplaceTool());
+        router.registerTool(new GitCommitSessionTool());
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskLogTool());
         router.registerTool(new TaskKillTool());
         router.registerTool(new ProjectStructureTool());
+        router.registerTool(new TodoCreateTool());
+        router.registerTool(new TodoUpdateTool());
+        router.registerTool(new TodoStatusTool());
     }
 
     /**
