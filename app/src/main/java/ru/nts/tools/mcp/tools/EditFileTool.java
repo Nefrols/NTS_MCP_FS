@@ -216,7 +216,7 @@ public class EditFileTool implements McpTool {
 
         // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session.");
+            throw new SecurityException("Access denied: file " + pathStr + " has not been read in current session. Please read the file OR provide the known 'expectedChecksum' from a previous operation to bypass reading.");
         }
 
         // Представление контента в виде списка строк для корректной манипуляции
