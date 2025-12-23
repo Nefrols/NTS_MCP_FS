@@ -19,12 +19,14 @@ public class TodoManager {
 
     private static final Pattern TODO_ITEM_PATTERN = Pattern.compile("(?m)^\\s*([-*]|\\d+\\.)\\s+\\[([ xX])]\\s+(.*)$");
 
+
     public record HudInfo(String title, int done, int total, String nextTask) {
         @Override
         public String toString() {
-            if (title == null) return "[HUD] No active plan.";
-            return String.format("[HUD] Plan: %s | Progress: %d/%d | Next: %s", 
-                title, done, total, nextTask != null ? nextTask : "All done!");
+            String stats = TransactionManager.getSessionStats();
+            if (title == null) return "[HUD] No active plan. | " + stats;
+            return String.format("[HUD] Plan: %s | Progress: %d/%d | Next: %s | %s", 
+                title, done, total, nextTask != null ? nextTask : "All done!", stats);
         }
     }
 

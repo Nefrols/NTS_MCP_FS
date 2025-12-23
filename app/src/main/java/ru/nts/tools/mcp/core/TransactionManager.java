@@ -24,6 +24,10 @@ public class TransactionManager {
     private static final ThreadLocal<Transaction> currentTransaction = new ThreadLocal<>();
     private static final ThreadLocal<Integer> nestingLevel = ThreadLocal.withInitial(() -> 0);
     
+    // Счетчики для статистики
+    private static int totalEdits = 0;
+    private static int totalUndos = 0;
+
     // Ссылка на активный TODO файл
     private static String activeTodoPath = null;
 
@@ -61,6 +65,7 @@ public class TransactionManager {
                 tx.updateStats();
                 undoStack.add(tx);
                 redoStack.clear();
+                totalEdits++;
                 if (undoStack.size() > MAX_HISTORY_SIZE) {
                     TransactionEntry old = undoStack.remove(0);
                     if (old instanceof Transaction t) t.deleteSnapshots();
@@ -133,6 +138,7 @@ public class TransactionManager {
             for (Path path : tx.getAffectedPaths()) redoTx.addFile(path);
             tx.restore();
             redoStack.add(redoTx);
+            totalUndos++;
             return "Undone: " + (tx.instruction != null ? tx.instruction : tx.description);
         } catch (IOException e) {
             tx.setStatus(Status.STUCK);
@@ -156,6 +162,32 @@ public class TransactionManager {
             tx.setStatus(Status.STUCK);
             throw new IOException("Redo failed: " + tx.description + ". Marked as STUCK. " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Собирает историю изменений для конкретного файла.
+     */
+    public static List<String> getFileHistory(Path path) {
+        List<String> history = new ArrayList<>();
+        Path absPath = path.toAbsolutePath().normalize();
+        
+        for (TransactionEntry entry : undoStack) {
+            if (entry instanceof Transaction tx && tx.getAffectedPaths().contains(absPath)) {
+                String label = tx.instruction != null ? tx.instruction : tx.description;
+                FileDiffStats s = tx.stats.get(absPath);
+                String lines = s != null ? String.format(" (+%d/-%d lines)", s.added, s.deleted) : " (structural)";
+                history.add(String.format("[%s] %s%s", tx.timestamp.format(formatter), label, lines));
+            }
+        }
+        return history;
+    }
+
+    /**
+     * Возвращает статистику текущей сессии.
+     */
+    public static String getSessionStats() {
+        int unlocked = AccessTracker.getReadFiles().size();
+        return String.format("Session: %d edits, %d undos | Unlocked: %d files", totalEdits, totalUndos, unlocked);
     }
 
     /**
@@ -185,9 +217,10 @@ public class TransactionManager {
     }
 
     private static void appendEntryInfo(StringBuilder sb, TransactionEntry entry) {
-        if (entry instanceof Checkpoint cp) {
-            sb.append(String.format("  [%s] [CHECKPOINT] >>> %s <<<\n", cp.timestamp.format(formatter), cp.name));
-        } else if (entry instanceof Transaction tx) {
+            if (entry instanceof Checkpoint cp) {
+                sb.append(String.format("  [%s] [CHECKPOINT] >>> %s <<<\n", cp.timestamp.format(formatter), cp.name));
+            } else if (entry instanceof Transaction tx) {
+
             String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
             String label = tx.instruction != null ? tx.instruction + ": " : "";
             sb.append(String.format("  [%s]%s %s%s (%d files)\n", tx.timestamp.format(formatter), status, label, tx.description, tx.snapshots.size()));
@@ -212,6 +245,7 @@ public class TransactionManager {
         for (TransactionEntry entry : undoStack) if (entry instanceof Transaction t) t.deleteSnapshots();
         for (TransactionEntry entry : redoStack) if (entry instanceof Transaction t) t.deleteSnapshots();
         undoStack.clear(); redoStack.clear();
+        totalEdits = 0; totalUndos = 0;
         Transaction tx = currentTransaction.get();
         if (tx != null) tx.deleteSnapshots();
         currentTransaction.remove();
@@ -297,7 +331,7 @@ public class TransactionManager {
             Path projectRoot = PathSanitizer.getRoot();
             for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
                 Path original = entry.getKey(); Path backup = entry.getValue();
-                if (backup != null) { Files.createDirectories(original.getParent()); FileUtils.safeCopy(backup, original); }
+                if (backup != null) { Files.createDirectories(original.getParent()); FileUtils.safeCopy(backup, original); } 
                 else { FileUtils.safeDelete(original); FileUtils.deleteEmptyParents(original, projectRoot); }
             }
         }

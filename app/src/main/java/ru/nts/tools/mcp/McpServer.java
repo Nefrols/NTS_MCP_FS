@@ -38,6 +38,7 @@ public class McpServer {
     static {
         // Регистрация всех доступных инструментов сервера
         router.registerTool(new FileInfoTool());
+        router.registerTool(new FileExistsTool());
         router.registerTool(new ListDirectoryTool());
         router.registerTool(new ReadFileTool());
         router.registerTool(new ReadFileRangesTool());
@@ -48,9 +49,13 @@ public class McpServer {
         router.registerTool(new DeleteFileTool());
         router.registerTool(new MoveFileTool());
         router.registerTool(new RenameFileTool());
+        router.registerTool(new FileHistoryTool());
+        router.registerTool(new CompareFilesTool());
         router.registerTool(new UndoTool());
         router.registerTool(new RedoTool());
         router.registerTool(new CheckpointTool());
+
+
         router.registerTool(new TransactionJournalTool());
         router.registerTool(new GradleTool());
         router.registerTool(new GitTool());
