@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тесты для инструмента получения информации о файле (FileInfoTool).
- * Проверяют корректность извлечения метаданных: размера, количества строк и контрольной суммы.
+ * Проверяют корректность извлечения метаданных: размера и количества строк.
  */
 class FileInfoToolTest {
 
@@ -49,7 +49,6 @@ class FileInfoToolTest {
         // Верификация ключевых полей отчета
         assertTrue(text.contains("Size: " + expectedSize + " bytes"), "Отчет должен содержать верный размер");
         assertTrue(text.contains("Lines: 2"), "Отчет должен содержать верное количество строк");
-        assertTrue(text.contains("CRC32C:"), "Отчет должен содержать контрольную сумму");
     }
 
     /**

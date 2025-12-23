@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,19 +9,16 @@ import ru.nts.tools.mcp.core.EncodingUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.zip.CRC32C;
 
 /**
  * Инструмент для получения детальной технической информации о файле.
  * Позволяет LLM оценить размер, структуру и актуальность файла без полной вычитки его содержимого.
  * Информация включает: размер на диске, количество строк (для текстовых файлов),
- * кодировку, дату последнего изменения и контрольную сумму CRC32C.
+ * кодировку и дату последнего изменения.
  */
 public class FileInfoTool implements McpTool {
 
@@ -37,7 +34,7 @@ public class FileInfoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Get file metadata: size, lines, encoding, CRC32C.";
+        return "Get file metadata: size, lines, encoding.";
     }
 
     @Override
@@ -76,9 +73,6 @@ public class FileInfoTool implements McpTool {
             lineCount = -1;
         }
 
-        // Расчет контрольной суммы
-        long crc32 = calculateCRC32(path);
-
         ObjectNode result = mapper.createObjectNode();
         ArrayNode content = result.putArray("content");
         ObjectNode text = content.addObject();
@@ -92,32 +86,9 @@ public class FileInfoTool implements McpTool {
         if (lineCount >= 0) {
             sb.append("Lines: ").append(lineCount).append("\n");
         }
-        sb.append("Last modified: ").append(attrs.lastModifiedTime()).append("\n");
-        sb.append("CRC32C: ").append(Long.toHexString(crc32).toUpperCase());
+        sb.append("Last modified: ").append(attrs.lastModifiedTime());
 
         text.put("text", sb.toString());
         return result;
-    }
-
-    /**
-     * Вычисляет CRC32C контрольную сумму файла.
-     * Использует буферизированное чтение для минимизации нагрузки на диск.
-     *
-     * @param path Путь к файлу.
-     *
-     * @return Значение CRC32C.
-     *
-     * @throws Exception При ошибках чтения файла.
-     */
-    private long calculateCRC32(Path path) throws Exception {
-        CRC32C crc = new CRC32C();
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
-        }
-        return crc.getValue();
     }
 }

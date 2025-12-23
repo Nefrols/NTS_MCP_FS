@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,17 +17,13 @@ import java.util.regex.Pattern;
 /**
  * Инструмент для выполнения задач автоматизации сборки через Gradle.
  * Особенности:
- * 1. Использование Wrapper: Автоматически находит и использует gradlew (Unix) или gradlew.bat (Windows) в корне проекта.
- * 2. Интеллектуальный парсинг (Smart Error Parser): В случае ошибки выполнения (например, сбой компиляции или тестов),
- * инструмент анализирует лог и выводит краткую сводку (ERROR SUMMARY) для быстрой навигации LLM.
- * 3. Безопасность: Выполняет задачи только в рамках текущего проекта.
- * 4. Управление задачами: Поддерживает контроль таймаутов и асинхронное накопление логов.
+ * 1. Использование Wrapper: Автоматически находит и использует gradlew (Unix) или gradlew.bat (Windows).
+ * 2. Интеллектуальный парсинг: В случае ошибки анализирует лог и выводит краткую сводку (ERROR SUMMARY).
+ * 3. Динамический контроль: При таймауте возвращает текущий статус [IN_PROGRESS] и taskId для отслеживания.
+ * 4. Индикация прогресса: Пытается извлечь процент выполнения из вывода Gradle.
  */
 public class GradleTool implements McpTool {
 
-    /**
-     * JSON манипулятор.
-     */
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -37,7 +33,7 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Runs Gradle tasks (build, test, etc.). Auto-parses logs to highlight errors.";
+        return "Runs Gradle tasks (build, test, etc.). Auto-parses logs to highlight errors. Supports [IN_PROGRESS] status on timeouts.";
     }
 
     @Override
@@ -47,9 +43,7 @@ public class GradleTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("task").put("type", "string").put("description", "Task name (e.g. 'build').");
-
         props.putObject("arguments").put("type", "string").put("description", "CLI arguments.");
-
         props.putObject("timeout").put("type", "integer").put("description", "Timeout in seconds (REQUIRED).");
 
         schema.putArray("required").add("task").add("timeout");
@@ -62,30 +56,25 @@ public class GradleTool implements McpTool {
         String extraArgs = params.path("arguments").asText("");
         long timeout = params.get("timeout").asLong();
 
-        // Детекция операционной системы для выбора правильного скрипта враппера
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
-
-        // Поиск файла враппера относительно текущего корня "песочницы"
         File wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
+        
         if (!wrapperFile.exists()) {
-            throw new IllegalStateException("Gradle wrapper not found at '" + wrapperFile.getAbsolutePath() + "'. Make sure you are in a Gradle project root.");
+            throw new IllegalStateException("Gradle wrapper not found. Make sure you are in a Gradle project root.");
         }
 
-        // Формирование команды для ProcessExecutor
         List<String> command = new ArrayList<>();
         command.add(wrapperFile.getAbsolutePath());
+        // Добавляем --console=plain для более предсказуемого парсинга логов, 
+        // но оставляем прогресс если возможно.
         command.add(task);
 
         if (!extraArgs.isEmpty()) {
-            // Безопасное разделение аргументов по пробелам
             for (String arg : extraArgs.split("\\s+")) {
-                if (!arg.isEmpty()) {
-                    command.add(arg);
-                }
+                if (!arg.isEmpty()) command.add(arg);
             }
         }
 
-        // Выполнение Gradle задачи с контролем времени и идентификацией задачи
         ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
 
         ObjectNode response = mapper.createObjectNode();
@@ -93,14 +82,19 @@ public class GradleTool implements McpTool {
         content.put("type", "text");
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Gradle task [").append(result.taskId()).append("] ");
+        
+        // Извлечение прогресса
+        String progress = extractProgress(result.output());
+        String progressMark = progress != null ? " [" + progress + "]" : "";
+
         if (result.isRunning()) {
-            sb.append("STILL RUNNING IN BACKGROUND\n");
+            sb.append("### Gradle task [").append(result.taskId()).append("] [IN_PROGRESS]").append(progressMark).append("\n");
+            sb.append("The task is still running in the background. Use nts_task_log with taskId to poll for more output later.\n");
         } else {
-            sb.append("finished with exit code: ").append(result.exitCode()).append("\n");
+            sb.append("### Gradle task [").append(result.taskId()).append("] FINISHED (code: ").append(result.exitCode()).append(")\n");
         }
 
-        // Если задача завершилась ошибкой (и не таймаутом), пытаемся выделить самое важное из логов
+        // Анализ ошибок
         if (!result.isRunning()) {
             String smartSummary = parseSmartSummary(result.output());
             if (!smartSummary.isEmpty()) {
@@ -108,10 +102,10 @@ public class GradleTool implements McpTool {
             }
         }
 
-        // Если вывод слишком большой и есть summary, сокращаем лог
+        // Вывод лога
         String output = result.output();
-        if (output.length() > 5000 && sb.indexOf("=== SMART SUMMARY ===") != -1) {
-            sb.append("\nFull output truncated due to size. Showing last 50 lines:\n");
+        if (output.length() > 5000) {
+            sb.append("\nOutput (truncated):\n...\n");
             String[] lines = output.split("\n");
             int start = Math.max(0, lines.length - 50);
             for (int i = start; i < lines.length; i++) {
@@ -126,54 +120,53 @@ public class GradleTool implements McpTool {
     }
 
     /**
-     * Выполняет глубокий анализ текста лога сборки.
-     * Извлекает:
-     * 1. Статистику тестов (Total, Failed, Skipped).
-     * 2. Ошибки компиляции.
-     * 3. Критические сбои Gradle.
-     *
-     * @param output Полный текстовый вывод Gradle.
-     *
-     * @return Структурированная сводка.
+     * Пытается найти процент выполнения в последних строках вывода.
      */
+    private String extractProgress(String output) {
+        // Формат: > :app:compileJava [45%]
+        Pattern progressPattern = Pattern.compile("> .*\\[(\\d+%)\\]");
+        String[] lines = output.split("\n");
+        // Ищем с конца
+        for (int i = lines.length - 1; i >= 0; i--) {
+            Matcher m = progressPattern.matcher(lines[i]);
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
+        return null;
+    }
+
     private String parseSmartSummary(String output) {
         StringBuilder summary = new StringBuilder();
 
-        // 1. Поиск статистики тестов
         Pattern testSummary = Pattern.compile("(\\d+) tests completed, (\\d+) failed, (\\d+) skipped");
         Matcher ms = testSummary.matcher(output);
         if (ms.find()) {
             summary.append(String.format("[TESTS] Total: %s, Failed: %s, Skipped: %s\n", ms.group(1), ms.group(2), ms.group(3)));
         }
 
-        // 2. Поиск конкретных падений тестов
-        Pattern testFailure = Pattern.compile("(?m)^> Task .* FAILED$");
         Pattern javaError = Pattern.compile("([^\\s]+\\.java):(\\d+): error: (.*)");
         Pattern detailedTestFailure = Pattern.compile("([^\\s]+ > [^\\s]+ FAILED)");
 
         String[] lines = output.split("\\n");
-        int compilationErrors = 0;
-        int testFailures = 0;
+        int compErrors = 0;
+        int testFails = 0;
 
         for (String line : lines) {
             Matcher mj = javaError.matcher(line);
-            if (mj.find() && compilationErrors < 10) {
+            if (mj.find() && compErrors < 10) {
                 summary.append(String.format("[ERROR] %s:%s - %s\n", mj.group(1), mj.group(2), mj.group(3)));
-                compilationErrors++;
+                compErrors++;
                 continue;
             }
 
             Matcher mt = detailedTestFailure.matcher(line);
-            if (mt.find() && testFailures < 10) {
+            if (mt.find() && testFails < 10) {
                 summary.append(String.format("[FAIL] %s\n", mt.group(1)));
-                testFailures++;
+                testFails++;
             }
         }
 
-        if (compilationErrors >= 10) summary.append("... and more compilation errors\n");
-        if (testFailures >= 10) summary.append("... and more test failures\n");
-
-        // 3. Общий статус билда
         if (output.contains("BUILD FAILED")) {
             summary.append("[STATUS] BUILD FAILED\n");
         } else if (output.contains("BUILD SUCCESSFUL")) {

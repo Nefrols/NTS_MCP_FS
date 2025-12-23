@@ -1,12 +1,9 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import ru.nts.tools.mcp.core.AccessTracker;
-import ru.nts.tools.mcp.core.EncodingUtils;
-import ru.nts.tools.mcp.core.McpTool;
-import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +25,7 @@ import java.util.stream.Stream;
  * 3. Интеллектуальный вывод: Группирует результаты по файлам, помечает прочитанные файлы ([READ])
  * и визуально выделяет строки с совпадениями.
  * 4. Отказоустойчивость: Игнорирует системные, защищенные, бинарные и сверхбольшие файлы для предотвращения OOM.
+ * 5. Интеграция: Результаты поиска кэшируются в SearchTracker для отображения в nts_list_directory.
  */
 public class SearchFilesTool implements McpTool {
 
@@ -43,7 +41,7 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Recursive text/regex search. Shows matching lines with [READ] markers and context.";
+        return "Recursive text/regex search. Shows matching lines with [READ] markers and context. Results are cached for nts_list_directory.";
     }
 
     @Override
@@ -53,14 +51,11 @@ public class SearchFilesTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("path").put("type", "string").put("description", "Base search directory.");
-
         props.putObject("query").put("type", "string").put("description", "Search string or regex.");
-
         props.putObject("isRegex").put("type", "boolean").put("description", "Treat query as regex.");
-
         props.putObject("beforeContext").put("type", "integer").put("description", "Context lines before match.");
-
         props.putObject("afterContext").put("type", "integer").put("description", "Context lines after match.");
+        props.putObject("resetCache").put("type", "boolean").put("description", "If true, only clear search cache without performing new search.");
 
         schema.putArray("required").add("path").add("query");
         return schema;
@@ -68,6 +63,13 @@ public class SearchFilesTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
+        if (params.path("resetCache").asBoolean(false)) {
+            SearchTracker.clear();
+            var res = mapper.createObjectNode();
+            res.putArray("content").addObject().put("type", "text").put("text", "Search cache cleared.");
+            return res;
+        }
+
         String pathStr = params.get("path").asText();
         String query = params.get("query").asText();
         boolean isRegex = params.path("isRegex").asBoolean(false);
@@ -80,6 +82,9 @@ public class SearchFilesTool implements McpTool {
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
             throw new IllegalArgumentException("Search directory not found or is not a folder: '" + pathStr + "'. Verify the path.");
         }
+
+        // Очистка старых результатов перед новым поиском
+        SearchTracker.clear();
 
         // Подготовка регулярного выражения для поиска
         final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
@@ -119,6 +124,10 @@ public class SearchFilesTool implements McpTool {
                             }
 
                             if (!matchedLines.isEmpty()) {
+                                // Подсчет уникальных строк-совпадений для трекера
+                                long matchCount = matchedLines.stream().filter(l -> l.isMatch).count();
+                                SearchTracker.registerMatches(path, (int) matchCount);
+
                                 // Если совпадения найдены — добавляем в результаты и проверяем статус [READ]
                                 boolean wasRead = AccessTracker.hasBeenRead(path);
                                 results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, wasRead));
@@ -155,6 +164,7 @@ public class SearchFilesTool implements McpTool {
                 }
                 sb.append("\n");
             }
+            sb.append("(Tip: These matches are now visible in nts_list_directory output.)");
             textNode.put("text", sb.toString());
         }
 

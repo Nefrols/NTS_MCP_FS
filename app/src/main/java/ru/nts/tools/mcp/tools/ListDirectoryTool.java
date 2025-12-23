@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,6 +9,7 @@ import ru.nts.tools.mcp.core.AccessTracker;
 import ru.nts.tools.mcp.core.GitUtils;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SearchTracker;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -27,6 +28,7 @@ import java.util.Set;
  * 2. Безопасность: Автоматически скрывает служебные файлы (.git, .gradle, .mcp) через PathSanitizer.
  * 3. Контекст: Помечает файлы, которые уже были изучены моделью (маркер [READ]).
  * 4. Навигация: Папки в списке всегда отображаются выше файлов для удобства ориентации.
+ * 5. Интеграция: Показывает количество совпадений из последнего поиска (маркер [MATCHES: X]).
  */
 public class ListDirectoryTool implements McpTool {
 
@@ -42,7 +44,7 @@ public class ListDirectoryTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "List directory contents with recursion and [READ] status indicator.";
+        return "List directory contents with recursion, [READ] status indicator and [MATCHES] from search cache.";
     }
 
     @Override
@@ -52,9 +54,7 @@ public class ListDirectoryTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("path").put("type", "string").put("description", "Target directory path.");
-
         props.putObject("depth").put("type", "integer").put("description", "Recursion limit (default 1).");
-
         props.putObject("autoIgnore").put("type", "boolean").put("description", "Automatically ignore files from .gitignore and standard artifact folders (build, .gradle, .idea).");
 
         schema.putArray("required").add("path");
@@ -154,10 +154,13 @@ public class ListDirectoryTool implements McpTool {
             String type = isDir ? "[DIR]" : "[FILE]";
 
             // Проверка через AccessTracker: читал ли я уже этот файл? 
-            // Это помогает LLM понять, на какие файлы у нее уже есть права редактирования.
             String readStatus = (!isDir && AccessTracker.hasBeenRead(entry)) ? " [READ]" : "";
+            
+            // Проверка через SearchTracker: были ли совпадения в этом файле?
+            int matchCount = (!isDir) ? SearchTracker.getMatchCount(entry) : 0;
+            String matchStatus = (matchCount > 0) ? String.format(" [MATCHES: %d]", matchCount) : "";
 
-            result.add(indent + type + " " + name + readStatus);
+            result.add(indent + type + " " + name + readStatus + matchStatus);
 
             // Рекурсивный спуск в поддиректории
             if (isDir) {
