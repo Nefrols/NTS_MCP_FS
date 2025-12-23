@@ -39,7 +39,7 @@ class SecurityTest {
 
     /**
      * Тестирует защиту служебных файлов проекта (Infrastructure Protection).
-     * Проверяет блокировку попыток модификации или удаления конфигураций Git, Gradle и MCP.
+     * Проверяет блокировку попыток модификации или удаления конфигураций Git, Gradle и NTS.
      */
     @Test
     void testProtectedFilesProtection() {

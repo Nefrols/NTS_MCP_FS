@@ -34,7 +34,7 @@ public class TodoStatusTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
-        Path todoDir = PathSanitizer.getRoot().resolve(".mcp/todos");
+        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
         if (!Files.exists(todoDir)) return createResponse("No TODOs found.");
 
         Path targetFile;

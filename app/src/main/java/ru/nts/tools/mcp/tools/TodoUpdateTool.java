@@ -43,7 +43,7 @@ public class TodoUpdateTool implements McpTool {
         String content = params.get("content").asText();
         String fileName = params.path("fileName").asText(null);
 
-        Path todoDir = PathSanitizer.getRoot().resolve(".mcp/todos");
+        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
         if (!Files.exists(todoDir)) throw new IllegalStateException("No TODOs found. Use nts_todo_create first.");
 
         Path targetFile;

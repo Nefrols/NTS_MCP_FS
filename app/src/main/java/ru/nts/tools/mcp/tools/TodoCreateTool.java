@@ -43,7 +43,7 @@ public class TodoCreateTool implements McpTool {
         String title = params.get("title").asText();
         String content = params.get("content").asText();
 
-        Path todoDir = PathSanitizer.getRoot().resolve(".mcp/todos");
+        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
         if (!Files.exists(todoDir)) Files.createDirectories(todoDir);
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));

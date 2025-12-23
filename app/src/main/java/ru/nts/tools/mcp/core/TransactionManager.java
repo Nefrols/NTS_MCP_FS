@@ -30,7 +30,7 @@ public class TransactionManager {
     public static void setActiveTodo(String path) { activeTodoPath = path; }
 
     private static Path getSnapshotDir() throws IOException {
-        Path dir = PathSanitizer.getRoot().resolve(".mcp/snapshots");
+        Path dir = PathSanitizer.getRoot().resolve(".nts/snapshots");
         if (!Files.exists(dir)) Files.createDirectories(dir);
         return dir;
     }

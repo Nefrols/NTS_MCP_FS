@@ -11,7 +11,7 @@ import java.util.Set;
  * Утилита для проверки, нормализации и защиты путей файловой системы (Path Sanitizer).
  * Реализует механизм "песочницы" (sandboxing), предотвращая:
  * 1. Выход за пределы рабочей директории проекта (Path Traversal).
- * 2. Доступ к скрытым системным файлам и папкам инфраструктуры (.git, .gradle, .mcp).
+ * 2. Доступ к скрытым системным файлам и папкам инфраструктуры (.git, .gradle, .nts).
  * 3. Попытки загрузки сверхбольших файлов, способных вызвать переполнение памяти (OOM).
  */
 public class PathSanitizer {
@@ -31,7 +31,7 @@ public class PathSanitizer {
      * Набор имен файлов и папок, доступ к которым для LLM заблокирован или ограничен.
      * Включает инфраструктурные компоненты (Git, Gradle) и служебную директорию транзакций MCP.
      */
-    private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".mcp");
+    private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".nts");
 
     /**
      * Переопределяет корень проекта.

@@ -55,7 +55,7 @@ public class DeleteFileTool implements McpTool {
         String pathStr = params.get("path").asText();
         boolean recursive = params.path("recursive").asBoolean(false);
 
-        // Санитарная проверка пути (блокирует удаление .git, .mcp и т.д.)
+        // Санитарная проверка пути (блокирует удаление .git, .nts и т.д.)
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {

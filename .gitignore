@@ -16,5 +16,5 @@ build
 .DS_Store
 Thumbs.db
 
-# MCP Snapshots
-.mcp/
+# NTS Service Directory
+.nts/
