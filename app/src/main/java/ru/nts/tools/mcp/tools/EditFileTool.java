@@ -44,7 +44,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Edit file(s) atomically. Supports fuzzy replace, line ranges, auto-indent, and multi-file batches. REQUIRED: read_file first.";
+        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first.";
     }
 
     @Override
@@ -73,8 +73,8 @@ public class EditFileTool implements McpTool {
         editProps.putObject("expectedContent").put("type", "string").put("description", "Validation string (exact match required).");
 
         // Поля корневого уровня для одиночных правок (обратная совместимость)
-        props.putObject("oldText").put("type", "string").put("description", "Fuzzy text replace (escapes special chars).");
-        props.putObject("newText").put("type", "string");
+        props.putObject("oldText").put("type", "string").put("description", "Exact text to replace. If not unique, throws error. If not found, attempts fuzzy match. PREFERRED: Use 'operations'.");
+        props.putObject("newText").put("type", "string").put("description", "Replacement text.");
         props.putObject("startLine").put("type", "integer").put("description", "Range start.");
         props.putObject("endLine").put("type", "integer").put("description", "Range end.");
         props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
@@ -82,7 +82,7 @@ public class EditFileTool implements McpTool {
 
         // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
-        ops.put("type", "array").put("description", "Atomic steps for a single file.");
+        ops.put("type", "array").put("description", "Atomic steps for a single file. PREFERRED method for code editing.");
 
         schema.putArray("required").add("path");
         return schema;
@@ -380,6 +380,10 @@ public class EditFileTool implements McpTool {
     private String performSmartReplace(String content, String oldText, String newText) {
         // Точное совпадение
         if (content.contains(oldText)) {
+            int count = countOccurrences(content, oldText);
+            if (count > 1) {
+                throw new IllegalArgumentException("Multiple matches (" + count + ") found for 'oldText'. Use 'operations' with line numbers for precise editing, or provide more context in 'oldText' to make it unique.");
+            }
             return content.replace(oldText, newText);
         }
 
@@ -387,6 +391,10 @@ public class EditFileTool implements McpTool {
         String normContent = content.replace("\r\n", "\n");
         String normOld = oldText.replace("\r\n", "\n");
         if (normContent.contains(normOld)) {
+            int count = countOccurrences(normContent, normOld);
+            if (count > 1) {
+                throw new IllegalArgumentException("Multiple matches (" + count + ") found for 'oldText' (after newline normalization). Use 'operations' with line numbers for precise editing.");
+            }
             return normContent.replace(normOld, newText);
         }
 
@@ -423,6 +431,20 @@ public class EditFileTool implements McpTool {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * Подсчитывает количество непересекающихся вхождений подстроки.
+     */
+    private int countOccurrences(String text, String str) {
+        if (str.isEmpty()) return 0;
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(str, idx)) != -1) {
+            count++;
+            idx += str.length();
+        }
+        return count;
     }
 
     /**

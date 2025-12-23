@@ -150,7 +150,12 @@ class BatchToolsTest {
         a2.putObject("params").put("path", "missing.txt").put("oldText", "any").put("newText", "fail");
 
         // Ожидаем исключение
-        assertThrows(Exception.class, () -> batchTool.execute(params), "Батч должен выбросить исключение при ошибке в любом действии");
+        Exception ex = assertThrows(Exception.class, () -> batchTool.execute(params), "Батч должен выбросить исключение при ошибке в любом действии");
+
+        // Проверяем, что сообщение об ошибке содержит контекст
+        String msg = ex.getMessage();
+        assertTrue(msg.contains("Batch failed at action #2"), "Ошибка должна указывать индекс действия");
+        assertTrue(msg.contains("nts_edit_file"), "Ошибка должна указывать имя инструмента");
 
         // Проверяем, что первый файл вернулся к исходному состоянию
         assertEquals("Untouched", Files.readString(file), "Изменения первого файла должны быть откатаны из-за ошибки во втором");

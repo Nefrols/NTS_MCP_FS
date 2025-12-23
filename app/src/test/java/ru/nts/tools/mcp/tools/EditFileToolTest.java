@@ -299,4 +299,23 @@ class EditFileToolTest {
         assertThrows(SecurityException.class, () -> tool.execute(params));
         assertEquals("Content 1", Files.readString(f1), "Первый файл должен быть откатан");
     }
+
+    /**
+     * Проверяет, что нечеткая замена (oldText) выбрасывает исключение, если найдено более одного совпадения.
+     */
+    @Test
+    void testAmbiguousOldText(@TempDir Path tempDir) throws Exception {
+        PathSanitizer.setRoot(tempDir);
+        Path file = tempDir.resolve("ambiguous.txt");
+        Files.writeString(file, "Line A\nLine A\nLine B");
+        AccessTracker.registerRead(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("oldText", "Line A");
+        params.put("newText", "Line X");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("Multiple matches"), "Должно быть выброшено исключение о множественных совпадениях");
+    }
 }

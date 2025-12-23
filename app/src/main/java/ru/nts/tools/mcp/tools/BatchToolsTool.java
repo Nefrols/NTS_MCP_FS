@@ -77,15 +77,21 @@ public class BatchToolsTool implements McpTool {
         TransactionManager.startTransaction("Batch Tools (" + actions.size() + " actions)");
         try {
             ArrayNode results = mapper.createArrayNode();
+            int index = 0;
             for (JsonNode action : actions) {
+                index++;
                 String toolName = action.path("tool").asText();
                 JsonNode toolParams = action.path("params");
 
                 // Вызываем целевой инструмент через роутер.
                 // Благодаря поддержке вложенности в TransactionManager, вызовы commit() 
                 // внутри этих инструментов не приведут к фиксации на диск до завершения батча.
-                JsonNode result = router.callTool(toolName, toolParams);
-                results.add(result);
+                try {
+                    JsonNode result = router.callTool(toolName, toolParams);
+                    results.add(result);
+                } catch (Exception e) {
+                    throw new IllegalStateException(String.format("Batch failed at action #%d ('%s'): %s", index, toolName, e.getMessage()), e);
+                }
             }
             // Успешное завершение всей цепочки — фиксируем изменения
             TransactionManager.commit();
