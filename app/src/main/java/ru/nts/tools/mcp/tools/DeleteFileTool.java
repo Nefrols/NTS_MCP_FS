@@ -43,8 +43,8 @@ public class DeleteFileTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("path").put("type", "string").put("description", "Path to delete.");
-
         props.putObject("recursive").put("type", "boolean").put("description", "Delete non-empty folders.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Cleanup: removed old logs').");
 
         schema.putArray("required").add("path");
         return schema;
@@ -63,7 +63,8 @@ public class DeleteFileTool implements McpTool {
         }
 
         // Запуск транзакции удаления
-        TransactionManager.startTransaction("Delete: " + pathStr);
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Delete: " + pathStr, instruction);
         try {
             if (Files.isDirectory(path) && recursive) {
                 // Рекурсивный обход для подготовки бэкапов всех вложенных файлов

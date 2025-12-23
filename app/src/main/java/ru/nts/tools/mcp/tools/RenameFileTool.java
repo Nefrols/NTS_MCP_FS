@@ -46,8 +46,8 @@ public class RenameFileTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("path").put("type", "string").put("description", "Current path to the object.");
-
         props.putObject("newName").put("type", "string").put("description", "New name only.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Refactor: renamed class to match naming convention').");
 
         schema.putArray("required").add("path").add("newName");
         return schema;
@@ -78,7 +78,8 @@ public class RenameFileTool implements McpTool {
         }
 
         // Открытие транзакции переименования
-        TransactionManager.startTransaction("Rename: " + pathStr + " -> " + newName);
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Rename: " + pathStr + " -> " + newName, instruction);
         try {
             // Подготовка резервных копий
             TransactionManager.backup(source);

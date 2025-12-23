@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.core;
 
 import java.io.IOException;
@@ -86,8 +86,18 @@ public class TransactionManager {
      * @param description Описание транзакции для отображения в журнале.
      */
     public static void startTransaction(String description) {
+        startTransaction(description, null);
+    }
+
+    /**
+     * Инициализирует новую транзакцию с семантической меткой.
+     *
+     * @param description Описание технического действия.
+     * @param instruction Намерение (intent) или краткая инструкция.
+     */
+    public static void startTransaction(String description, String instruction) {
         if (currentTransaction.get() == null) {
-            currentTransaction.set(new Transaction(description, LocalDateTime.now()));
+            currentTransaction.set(new Transaction(description, instruction, LocalDateTime.now()));
         }
         nestingLevel.set(nestingLevel.get() + 1);
     }
@@ -187,14 +197,14 @@ public class TransactionManager {
             undoStack.remove(undoStack.size() - 1);
 
             // Перед тем как восстановить старое состояние, бэкапим текущее (новое) для возможности REDO
-            Transaction redoTx = new Transaction("REDO: " + tx.description, LocalDateTime.now());
+            Transaction redoTx = new Transaction("REDO: " + tx.description, tx.instruction, LocalDateTime.now());
             for (Path path : tx.getAffectedPaths()) {
                 redoTx.addFile(path);
             }
 
             tx.restore();
             redoStack.add(redoTx);
-            return "Undone: " + tx.description;
+            return "Undone: " + (tx.instruction != null ? tx.instruction : tx.description);
         } catch (IOException e) {
             tx.setStatus(Status.STUCK);
             throw new IOException("Undo failed: " + tx.description + ". Transaction marked as STUCK. Error: " + e.getMessage(), e);
@@ -223,14 +233,14 @@ public class TransactionManager {
             redoStack.remove(redoStack.size() - 1);
 
             // Возможность повторного UNDO после REDO
-            Transaction undoTx = new Transaction("UNDO REDO: " + tx.description, LocalDateTime.now());
+            Transaction undoTx = new Transaction("UNDO REDO: " + tx.description, tx.instruction, LocalDateTime.now());
             for (Path path : tx.getAffectedPaths()) {
                 undoTx.addFile(path);
             }
 
             tx.restore();
             undoStack.add(undoTx);
-            return "Redone: " + tx.description;
+            return "Redone: " + (tx.instruction != null ? tx.instruction : tx.description);
         } catch (IOException e) {
             tx.setStatus(Status.STUCK);
             throw new IOException("Redo failed: " + tx.description + ". Transaction marked as STUCK. Error: " + e.getMessage(), e);
@@ -268,7 +278,8 @@ public class TransactionManager {
 
     private static void appendTransactionInfo(StringBuilder sb, Transaction tx) {
         String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
-        sb.append(String.format("  [%s]%s %s (%d files)\n", tx.timestamp.format(formatter), status, tx.description, tx.snapshots.size()));
+        String label = tx.instruction != null ? tx.instruction + ": " : "";
+        sb.append(String.format("  [%s]%s %s%s (%d files)\n", tx.timestamp.format(formatter), status, label, tx.description, tx.snapshots.size()));
         
         Path root = PathSanitizer.getRoot();
         for (Map.Entry<Path, FileDiffStats> entry : tx.stats.entrySet()) {
@@ -308,6 +319,7 @@ public class TransactionManager {
      */
     private static class Transaction {
         private final String description;
+        private final String instruction;
         private final LocalDateTime timestamp;
         private Status status = Status.COMMITTED;
         /**
@@ -321,7 +333,12 @@ public class TransactionManager {
         private final Map<Path, FileDiffStats> stats = new HashMap<>();
 
         public Transaction(String description, LocalDateTime timestamp) {
+            this(description, null, timestamp);
+        }
+
+        public Transaction(String description, String instruction, LocalDateTime timestamp) {
             this.description = description;
+            this.instruction = instruction;
             this.timestamp = timestamp;
         }
 

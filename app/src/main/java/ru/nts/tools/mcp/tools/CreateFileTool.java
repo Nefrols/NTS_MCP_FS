@@ -1,8 +1,9 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
 import java.io.IOException;
@@ -19,9 +20,9 @@ import java.util.List;
  * Реализует:
  * 1. Авто-создание структуры: Если путь содержит несуществующие папки, они будут созданы автоматически.
  * 2. Защита от случайной перезаписи: Если файл уже существует, операция блокируется,
- * пока файл не будет предварительно прочитан (валидация контекста).
+ * пока не будет предоставлен верный expectedChecksum.
  * 3. Транзакционность: В случае ошибки при записи, ФС откатывается в исходное состояние.
- * 4. Обратная связь: Возвращает список файлов в папке назначения после создания.
+ * 4. Обратная связь: Возвращает список файлов в папке назначения и новую контрольную сумму.
  */
 public class CreateFileTool implements McpTool {
 
@@ -37,7 +38,7 @@ public class CreateFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Create file + directories. Returns listing. REQUIRED: read_file first if overwriting.";
+        return "Create file + directories. Returns listing. REQUIRED: provide expectedChecksum if the file already exists.";
     }
 
     @Override
@@ -47,8 +48,9 @@ public class CreateFileTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("path").put("type", "string").put("description", "New file path.");
-
         props.putObject("content").put("type", "string").put("description", "Full file content.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Fix: added null-check').");
+        props.putObject("expectedChecksum").put("type", "string").put("description", "REQUIRED if file exists. CRC32C hex of file before overwrite. Ensures you are overwriting the correct version.");
 
         schema.putArray("required").add("path").add("content");
         return schema;
@@ -62,14 +64,33 @@ public class CreateFileTool implements McpTool {
         // Нормализация пути и проверка нахождения внутри корня проекта
         Path path = PathSanitizer.sanitize(pathStr, false);
 
-        // Проверка политики перезаписи: нельзя менять то, что не видел
-        if (Files.exists(path) && !AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("File '" + pathStr + "' already exists and has not been read in the current session. " +
-                    "Overwriting is prohibited to prevent data loss. Please use nts_read_file before overwriting.");
+        // Проверка политики перезаписи
+        if (Files.exists(path)) {
+            if (!params.has("expectedChecksum")) {
+                throw new SecurityException("File '" + pathStr + "' already exists. Overwriting via nts_create_file requires 'expectedChecksum' to prevent accidental data loss. " +
+                        "If you intend to replace the whole content, read the file first or provide its current checksum.");
+            }
+
+            String expectedHex = params.get("expectedChecksum").asText();
+            long currentCrc = FileUtils.calculateCRC32(path);
+            long expectedCrc;
+            try {
+                expectedCrc = Long.parseUnsignedLong(expectedHex, 16);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid expectedChecksum format: '" + expectedHex + "'. Expected a hexadecimal value.");
+            }
+
+            if (currentCrc != expectedCrc) {
+                throw new IllegalStateException("Checksum mismatch! File '" + pathStr + "' was modified externally. Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". Perform nts_read_file to sync state.");
+            }
+            
+            // Если хеш совпал, регистрируем чтение (LLM "видела" файл)
+            AccessTracker.registerRead(path);
         }
 
         // Открытие транзакции для обеспечения атомарности операции
-        TransactionManager.startTransaction("Create file: " + pathStr);
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Create/Overwrite file: " + pathStr, instruction);
         try {
             // Регистрация в менеджере транзакций (создает бэкап или пометку на удаление)
             TransactionManager.backup(path);
@@ -90,13 +111,18 @@ public class CreateFileTool implements McpTool {
 
             // Получение статуса в Git для информирования модели
             String gitStatus = GitUtils.getFileStatus(path);
+            long newCrc = FileUtils.calculateCRC32(path);
+            
             StringBuilder sb = new StringBuilder();
-            sb.append("File created successfully: ").append(pathStr);
+            sb.append("File created/overwritten successfully: ").append(pathStr);
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
+            
+            sb.append("\nNew CRC32C: ").append(Long.toHexString(newCrc).toUpperCase());
+            sb.append("\n(Tip: Use this checksum in your next nts_edit_file or nts_create_file call to continue working without re-reading.)");
 
-            // Генерация diff (сравнение с пустым файлом)
+            // Генерация diff
             String diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), "", content);
             if (!diff.isEmpty()) {
                 sb.append("\n\n```diff\n").append(diff).append("\n```");
@@ -118,12 +144,9 @@ public class CreateFileTool implements McpTool {
 
     /**
      * Формирует краткий текстовый список объектов в указанной директории.
-     * Помогает LLM подтвердить успешность структурных изменений.
      *
      * @param dir Путь к папке для листинга.
-     *
      * @return Многострочный текст со списком файлов или "(empty)".
-     *
      * @throws IOException При ошибке чтения директории.
      */
     private String getDirectoryListing(Path dir) throws IOException {

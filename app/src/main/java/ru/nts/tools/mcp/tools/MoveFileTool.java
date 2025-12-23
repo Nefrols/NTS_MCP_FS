@@ -46,8 +46,8 @@ public class MoveFileTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("sourcePath").put("type", "string").put("description", "Current path to the object.");
-
         props.putObject("targetPath").put("type", "string").put("description", "New path for the object.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Refactor: moved files to new package').");
 
         schema.putArray("required").add("sourcePath").add("targetPath");
         return schema;
@@ -71,7 +71,8 @@ public class MoveFileTool implements McpTool {
         }
 
         // Открытие транзакции перемещения
-        TransactionManager.startTransaction("Move: " + sourceStr + " -> " + targetStr);
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Move: " + sourceStr + " -> " + targetStr, instruction);
         try {
             // Подготовка резервных копий исходных данных перед перемещением
             if (Files.isRegularFile(source)) {

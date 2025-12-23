@@ -1,7 +1,8 @@
-// Aristo 22.12.2025
+// Aristo 23.12.2025
 package ru.nts.tools.mcp.core;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -90,6 +91,35 @@ public class GitUtils {
             // В случае системных ошибок (Git не установлен, путь вне репозитория) 
             // возвращаем пустую строку, чтобы не засорять основной вывод инструмента.
             return "";
+        }
+    }
+
+    /**
+     * Возвращает Unified Diff для изменений в рабочем дереве и индексе.
+     *
+     * @param path Опциональный путь к конкретному файлу или директории (может быть null).
+     * @param staged Если true, возвращает дифф только для подготовленных к коммиту изменений (--staged).
+     * @return Строка с выводом git diff.
+     */
+    public static String getDiff(Path path, boolean staged) {
+        try {
+            List<String> cmd = new ArrayList<>(List.of("git", "diff", "--no-color"));
+            if (staged) {
+                cmd.add("--cached");
+            }
+            if (path != null) {
+                Path root = PathSanitizer.getRoot();
+                Path relativePath = root.relativize(path.toAbsolutePath().normalize());
+                cmd.add(relativePath.toString());
+            }
+
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(cmd, 10);
+            if (result.exitCode() != 0) {
+                return "Git error (code " + result.exitCode() + "): " + result.output();
+            }
+            return result.output();
+        } catch (Exception e) {
+            return "Error getting diff: " + e.getMessage();
         }
     }
 

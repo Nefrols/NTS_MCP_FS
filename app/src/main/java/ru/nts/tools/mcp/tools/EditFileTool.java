@@ -6,8 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -18,7 +16,6 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.zip.CRC32C;
 
 /**
  * Расширенный инструмент для интеллектуального редактирования файлов.
@@ -44,7 +41,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first (OR provide valid expectedChecksum to bypass).";
+        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first (OR provide valid expectedChecksum to bypass for sequential editing).";
     }
 
     @Override
@@ -79,7 +76,9 @@ public class EditFileTool implements McpTool {
         props.putObject("endLine").put("type", "integer").put("description", "Range end.");
         props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
         props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line indexing.");
-        props.putObject("expectedChecksum").put("type", "string").put("description", "CRC32C hex of file before edit. Bypasses read_file requirement if correct.");
+        props.putObject("expectedChecksum").put("type", "string").put("description", "CRC32C hex of file before edit. Bypasses read_file requirement if correct. Use the checksum from the previous successful edit to chain operations safely.");
+        
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Fix: updated null-check logic').");
 
         // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
@@ -103,7 +102,7 @@ public class EditFileTool implements McpTool {
                     }
                 }
             }
-            return executeMultiFileEdit(editsNode);
+            return executeMultiFileEdit(params, editsNode);
         } else if (params.has("path")) {
             return executeSingleFileEdit(params);
         } else {
@@ -115,12 +114,14 @@ public class EditFileTool implements McpTool {
      * Выполняет пакетное редактирование нескольких файлов в рамках единой транзакции.
      * Если хотя бы одна правка в любом файле не пройдет валидацию, откатываются ВСЕ файлы.
      *
+     * @param params Корневые параметры запроса.
      * @param editsArray JSON-массив правок для файлов.
      *
      * @return Текстовый отчет об успешном завершении батча.
      */
-    private JsonNode executeMultiFileEdit(JsonNode editsArray) throws Exception {
-        TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)");
+    private JsonNode executeMultiFileEdit(JsonNode params, JsonNode editsArray) throws Exception {
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)", instruction);
         try {
             StringBuilder statusMsg = new StringBuilder();
             statusMsg.append("Multi-file batch edit successful (").append(editsArray.size()).append(" files):\n\n");
@@ -140,6 +141,7 @@ public class EditFileTool implements McpTool {
                 statusMsg.append("\n");
             }
             TransactionManager.commit();
+            statusMsg.append("(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
             return createResponse(statusMsg.toString().trim());
         } catch (Exception e) {
             // Глобальный откат при любом сбое
@@ -157,7 +159,8 @@ public class EditFileTool implements McpTool {
      */
     private JsonNode executeSingleFileEdit(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
-        TransactionManager.startTransaction("Edit file: " + pathStr);
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Edit file: " + pathStr, instruction);
         try {
             FileEditStats stats = applyFileEdits(params);
             TransactionManager.commit();
@@ -170,6 +173,7 @@ public class EditFileTool implements McpTool {
             }
             sb.append("\nOperations: ").append(stats.total());
             sb.append("\nNew CRC32C: ").append(Long.toHexString(stats.crc32).toUpperCase());
+            sb.append("\n(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
 
             if (stats.diff != null && !stats.diff.isEmpty()) {
                 sb.append("\n\n```diff\n").append(stats.diff).append("\n```");
@@ -209,7 +213,7 @@ public class EditFileTool implements McpTool {
         // Валидация checksum для bypass проверки AccessTracker
         if (fileParams.has("expectedChecksum")) {
             String expectedHex = fileParams.get("expectedChecksum").asText();
-            long currentCrc = calculateCRC32(path);
+            long currentCrc = FileUtils.calculateCRC32(path);
             long expectedCrc;
             try {
                 expectedCrc = Long.parseUnsignedLong(expectedHex, 16);
@@ -218,7 +222,7 @@ public class EditFileTool implements McpTool {
             }
 
             if (currentCrc != expectedCrc) {
-                throw new IllegalStateException("Checksum mismatch (Optimistic Locking)! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". The file was modified externally. Please perform nts_read_file again.");
+                throw new IllegalStateException("Checksum mismatch (Optimistic Locking)! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". The file was modified externally. Please perform nts_read_file again or use the new checksum for synchronization.");
             }
             // Хеш совпал — значит LLM знает актуальное состояние файла.
             AccessTracker.registerRead(path);
@@ -226,7 +230,7 @@ public class EditFileTool implements McpTool {
 
         // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
         if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file '" + pathStr + "' has not been read in the current session. You must read the file (nts_read_file) before making edits to ensure context consistency.");
+            throw new SecurityException("Access denied: file '" + pathStr + "' has not been read in the current session. You must read the file (nts_read_file) or provide valid expectedChecksum before making edits to ensure context consistency.");
         }
 
         // Представление контента в виде списка строк для корректной манипуляции
@@ -277,7 +281,7 @@ public class EditFileTool implements McpTool {
         stats.diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), content, newContent);
 
         // Вычисление итоговой контрольной суммы для подтверждения целостности
-        stats.crc32 = calculateCRC32(path);
+        stats.crc32 = FileUtils.calculateCRC32(path);
         return stats;
     }
 
@@ -477,21 +481,6 @@ public class EditFileTool implements McpTool {
             idx += str.length();
         }
         return count;
-    }
-
-    /**
-     * Вычисляет CRC32 хеш-сумму файла для отчетов.
-     */
-    private long calculateCRC32(Path path) throws IOException {
-        CRC32C crc = new CRC32C();
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
-        }
-        return crc.getValue();
     }
 
     /**

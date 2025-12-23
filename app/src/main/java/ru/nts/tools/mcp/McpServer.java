@@ -51,6 +51,8 @@ public class McpServer {
         router.registerTool(new TransactionJournalTool());
         router.registerTool(new GradleTool());
         router.registerTool(new GitTool());
+        router.registerTool(new GitDiffTool());
+        router.registerTool(new ProjectReplaceTool());
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskLogTool());
         router.registerTool(new TaskKillTool());

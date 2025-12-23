@@ -1,12 +1,15 @@
 // Aristo 23.12.2025
 package ru.nts.tools.mcp.core;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.Charset;
 import java.nio.file.*;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32C;
 
 /**
  * Утилиты для безопасной работы с файловой системой.
@@ -72,7 +75,7 @@ public class FileUtils {
             }
 
             try {
-                // 3. Переименование временного файла в оригинальный
+                // 3. Переименование временного файла в оригинал
                 Files.move(tempFile, path, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
                 // Если шаг 3 не удался, пытаемся вернуть оригинал из бэкапа
@@ -89,43 +92,41 @@ public class FileUtils {
     }
 
     /**
-     * Безопасное копирование файла с использованием Retry Pattern.
-         /**
-          * Безопасное копирование файла с использованием алгоритма Safe Swap и Retry Pattern.
-          *
-          * @param source Откуда.
-          * @param target Куда.
-          * @throws IOException При ошибке копирования.
-          */
-         public static void safeCopy(Path source, Path target) throws IOException {
-             Path tempFile = target.resolveSibling(target.getFileName() + ".tmp");
-             Path backupFile = target.resolveSibling(target.getFileName() + ".old");
+     * Безопасное копирование файла с использованием алгоритма Safe Swap и Retry Pattern.
+     *
+     * @param source Откуда.
+     * @param target Куда.
+     * @throws IOException При ошибке копирования.
+     */
+    public static void safeCopy(Path source, Path target) throws IOException {
+        Path tempFile = target.resolveSibling(target.getFileName() + ".tmp");
+        Path backupFile = target.resolveSibling(target.getFileName() + ".old");
 
-             executeWithRetry(() -> {
-                 // 1. Копирование во временный файл
-                 Files.copy(source, tempFile, StandardCopyOption.REPLACE_EXISTING);
+        executeWithRetry(() -> {
+            // 1. Копирование во временный файл
+            Files.copy(source, tempFile, StandardCopyOption.REPLACE_EXISTING);
 
-                 if (Files.exists(target)) {
-                     // 2. Переименование оригинала в резервный
-                     Files.move(target, backupFile, StandardCopyOption.REPLACE_EXISTING);
-                 }
+            if (Files.exists(target)) {
+                // 2. Переименование оригинала в резервный
+                Files.move(target, backupFile, StandardCopyOption.REPLACE_EXISTING);
+            }
 
-                 try {
-                     // 3. Переименование временного файла в оригинал
-                     Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
-                 } catch (IOException e) {
-                     // Если шаг 3 не удался, пытаемся вернуть оригинал из бэкапа
-                     if (Files.exists(backupFile)) {
-                         Files.move(backupFile, target, StandardCopyOption.REPLACE_EXISTING);
-                     }
-                     throw e;
-                 }
+            try {
+                // 3. Переименование временного файла в оригинал
+                Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                // Если шаг 3 не удался, пытаемся вернуть оригинал из бэкапа
+                if (Files.exists(backupFile)) {
+                    Files.move(backupFile, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                throw e;
+            }
 
-                 // 4. Удаление резервного файла
-                 Files.deleteIfExists(backupFile);
-                 return null;
-             });
-         }
+            // 4. Удаление резервного файла
+            Files.deleteIfExists(backupFile);
+            return null;
+        });
+    }
 
     /**
      * Безопасное чтение всех байтов файла с использованием Retry Pattern.
@@ -187,6 +188,25 @@ public class FileUtils {
             }
             return null;
         });
+    }
+
+    /**
+     * Вычисляет CRC32 хеш-сумму файла для отчетов и валидации.
+     *
+     * @param path Путь к файлу.
+     * @return Хеш-сумма (long).
+     * @throws IOException При ошибках чтения.
+     */
+    public static long calculateCRC32(Path path) throws IOException {
+        CRC32C crc = new CRC32C();
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 
     /**

@@ -59,8 +59,9 @@ public class BatchToolsTool implements McpTool {
         var itemProps = item.putObject("properties");
 
         itemProps.putObject("tool").put("type", "string").put("description", "Tool name.");
-
         itemProps.putObject("params").put("type", "object").put("description", "Tool parameters.");
+        
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the whole batch transaction.");
 
         schema.putArray("required").add("actions");
         return schema;
@@ -74,7 +75,8 @@ public class BatchToolsTool implements McpTool {
         }
 
         // Запуск глобальной транзакции для всей цепочки действий
-        TransactionManager.startTransaction("Batch Tools (" + actions.size() + " actions)");
+        String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
+        TransactionManager.startTransaction("Batch Tools (" + actions.size() + " actions)", instruction);
         try {
             ArrayNode results = mapper.createArrayNode();
             int index = 0;
