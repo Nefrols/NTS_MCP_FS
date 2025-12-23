@@ -48,6 +48,9 @@ public class MoveFileTool implements McpTool {
         props.putObject("sourcePath").put("type", "string").put("description", "Current path to the object.");
         props.putObject("targetPath").put("type", "string").put("description", "New path for the object.");
         props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Refactor: moved files to new package').");
+        props.putObject("dryRun").put("type", "boolean").put("description", "If true, only checks if move is possible without performing it.");
+        props.putObject("compact").put("type", "boolean").put("description", "If true, returns a compact one-line response.");
+        props.putObject("showListing").put("type", "boolean").put("description", "If true (default), shows the directory listing after moving.");
 
         schema.putArray("required").add("sourcePath").add("targetPath");
         return schema;
@@ -57,6 +60,9 @@ public class MoveFileTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String sourceStr = params.get("sourcePath").asText();
         String targetStr = params.get("targetPath").asText();
+        boolean dryRun = params.path("dryRun").asBoolean(false);
+        boolean compact = params.path("compact").asBoolean(false);
+        boolean showListing = params.path("showListing").asBoolean(true);
 
         // Санитарная проверка обоих путей
         Path source = PathSanitizer.sanitize(sourceStr, false);
@@ -68,6 +74,14 @@ public class MoveFileTool implements McpTool {
 
         if (Files.exists(target)) {
             throw new IllegalArgumentException("Target object already exists: '" + targetStr + "'. Overwriting via move is not allowed.");
+        }
+
+        if (dryRun) {
+            String type = Files.isDirectory(source) ? "directory" : "file";
+            String msg = "[DRY RUN] Would move " + type + " from " + sourceStr + " to " + targetStr;
+            var res = mapper.createObjectNode();
+            res.putArray("content").addObject().put("type", "text").put("text", msg + "\n[DRY RUN] No changes were applied.");
+            return res;
         }
 
         // Открытие транзакции перемещения
@@ -110,14 +124,24 @@ public class MoveFileTool implements McpTool {
 
             // Сбор информации о результате для LLM
             String gitStatus = GitUtils.getFileStatus(target);
+            
+            if (compact) {
+                String msg = String.format("Moved: %s -> %s | Git: %s", sourceStr, targetStr, gitStatus.isEmpty() ? "Unchanged" : gitStatus);
+                contentArray.addObject().put("type", "text").put("text", msg);
+                return result;
+            }
+
             StringBuilder sb = new StringBuilder();
             sb.append("Successfully moved from ").append(sourceStr).append(" to ").append(targetStr);
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
-            sb.append("\n\n");
-            sb.append("Directory content ").append(target.getParent()).append(":\n");
-            sb.append(getDirectoryListing(target.getParent()));
+            
+            if (showListing) {
+                sb.append("\n\n");
+                sb.append("Directory content ").append(target.getParent()).append(":\n");
+                sb.append(getDirectoryListing(target.getParent()));
+            }
 
             contentArray.addObject().put("type", "text").put("text", sb.toString());
             return result;

@@ -48,6 +48,9 @@ public class RenameFileTool implements McpTool {
         props.putObject("path").put("type", "string").put("description", "Current path to the object.");
         props.putObject("newName").put("type", "string").put("description", "New name only.");
         props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Refactor: renamed class to match naming convention').");
+        props.putObject("dryRun").put("type", "boolean").put("description", "If true, only checks if rename is possible without performing it.");
+        props.putObject("compact").put("type", "boolean").put("description", "If true, returns a compact one-line response.");
+        props.putObject("showListing").put("type", "boolean").put("description", "If true (default), shows the directory listing after renaming.");
 
         schema.putArray("required").add("path").add("newName");
         return schema;
@@ -57,6 +60,9 @@ public class RenameFileTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
         String newName = params.get("newName").asText();
+        boolean dryRun = params.path("dryRun").asBoolean(false);
+        boolean compact = params.path("compact").asBoolean(false);
+        boolean showListing = params.path("showListing").asBoolean(true);
 
         // Санитарная нормализация исходного пути
         Path source = PathSanitizer.sanitize(pathStr, false);
@@ -75,6 +81,14 @@ public class RenameFileTool implements McpTool {
 
         if (Files.exists(target)) {
             throw new IllegalArgumentException("Object with name '" + newName + "' already exists in the same directory.");
+        }
+
+        if (dryRun) {
+            String type = Files.isDirectory(source) ? "directory" : "file";
+            String msg = "[DRY RUN] Would rename " + type + " '" + pathStr + "' to '" + newName + "'";
+            var res = mapper.createObjectNode();
+            res.putArray("content").addObject().put("type", "text").put("text", msg + "\n[DRY RUN] No changes were applied.");
+            return res;
         }
 
         // Открытие транзакции переименования
@@ -99,14 +113,24 @@ public class RenameFileTool implements McpTool {
 
             // Формирование детального отчета с Git-статусом
             String gitStatus = GitUtils.getFileStatus(target);
+            
+            if (compact) {
+                String msg = String.format("Renamed: %s -> %s | Git: %s", pathStr, newName, gitStatus.isEmpty() ? "Unchanged" : gitStatus);
+                contentArray.addObject().put("type", "text").put("text", msg);
+                return result;
+            }
+
             StringBuilder sb = new StringBuilder();
             sb.append("Successfully renamed to ").append(newName);
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
-            sb.append("\n\n");
-            sb.append("Directory content ").append(target.getParent()).append(":\n");
-            sb.append(getDirectoryListing(target.getParent()));
+            
+            if (showListing) {
+                sb.append("\n\n");
+                sb.append("Directory content ").append(target.getParent()).append(":\n");
+                sb.append(getDirectoryListing(target.getParent()));
+            }
 
             contentArray.addObject().put("type", "text").put("text", sb.toString());
             return result;

@@ -51,6 +51,8 @@ public class CreateFileTool implements McpTool {
         props.putObject("content").put("type", "string").put("description", "Full file content.");
         props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Fix: added null-check').");
         props.putObject("expectedChecksum").put("type", "string").put("description", "REQUIRED if file exists. CRC32C hex of file before overwrite. Ensures you are overwriting the correct version.");
+        props.putObject("compact").put("type", "boolean").put("description", "If true, returns a compact one-line response.");
+        props.putObject("showListing").put("type", "boolean").put("description", "If true (default), shows the directory listing after creation.");
 
         schema.putArray("required").add("path").add("content");
         return schema;
@@ -60,6 +62,8 @@ public class CreateFileTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
         String content = params.get("content").asText();
+        boolean compact = params.path("compact").asBoolean(false);
+        boolean showListing = params.path("showListing").asBoolean(true);
 
         // Нормализация пути и проверка нахождения внутри корня проекта
         Path path = PathSanitizer.sanitize(pathStr, false);
@@ -113,6 +117,12 @@ public class CreateFileTool implements McpTool {
             String gitStatus = GitUtils.getFileStatus(path);
             long newCrc = FileUtils.calculateCRC32(path);
             
+            if (compact) {
+                String msg = String.format("Created: %s | CRC: %X | Git: %s", pathStr, newCrc, gitStatus.isEmpty() ? "Untracked" : gitStatus);
+                contentArray.addObject().put("type", "text").put("text", msg);
+                return result;
+            }
+
             StringBuilder sb = new StringBuilder();
             sb.append("File created/overwritten successfully: ").append(pathStr);
             if (!gitStatus.isEmpty()) {
@@ -128,9 +138,11 @@ public class CreateFileTool implements McpTool {
                 sb.append("\n\n```diff\n").append(diff).append("\n```");
             }
 
-            sb.append("\n\n");
-            sb.append("Directory content ").append(path.getParent()).append(":\n");
-            sb.append(getDirectoryListing(path.getParent()));
+            if (showListing) {
+                sb.append("\n\n");
+                sb.append("Directory content ").append(path.getParent()).append(":\n");
+                sb.append(getDirectoryListing(path.getParent()));
+            }
 
             contentArray.addObject().put("type", "text").put("text", sb.toString());
 

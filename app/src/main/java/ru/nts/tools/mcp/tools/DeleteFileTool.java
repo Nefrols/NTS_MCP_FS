@@ -45,6 +45,8 @@ public class DeleteFileTool implements McpTool {
         props.putObject("path").put("type", "string").put("description", "Path to delete.");
         props.putObject("recursive").put("type", "boolean").put("description", "Delete non-empty folders.");
         props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Cleanup: removed old logs').");
+        props.putObject("dryRun").put("type", "boolean").put("description", "If true, only checks if deletion is possible without performing it.");
+        props.putObject("compact").put("type", "boolean").put("description", "If true, returns a compact one-line response.");
 
         schema.putArray("required").add("path");
         return schema;
@@ -54,12 +56,29 @@ public class DeleteFileTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         String pathStr = params.get("path").asText();
         boolean recursive = params.path("recursive").asBoolean(false);
+        boolean dryRun = params.path("dryRun").asBoolean(false);
+        boolean compact = params.path("compact").asBoolean(false);
 
         // Санитарная проверка пути (блокирует удаление .git, .nts и т.д.)
         Path path = PathSanitizer.sanitize(pathStr, false);
 
         if (!Files.exists(path)) {
             throw new IllegalArgumentException("Object not found at path: '" + pathStr + "'. Ensure the path is correct (use nts_list_directory to verify).");
+        }
+
+        if (dryRun) {
+            String type = Files.isDirectory(path) ? "directory" : "file";
+            String msg = "[DRY RUN] Would delete " + type + ": " + pathStr;
+            if (Files.isDirectory(path) && !recursive) {
+                try (var s = Files.list(path)) {
+                    if (s.findAny().isPresent()) {
+                        throw new IllegalArgumentException("Cannot delete non-empty directory without 'recursive: true'.");
+                    }
+                }
+            }
+            var res = mapper.createObjectNode();
+            res.putArray("content").addObject().put("type", "text").put("text", msg + "\n[DRY RUN] No changes were applied.");
+            return res;
         }
 
         // Запуск транзакции удаления
@@ -103,6 +122,13 @@ public class DeleteFileTool implements McpTool {
 
         // Информируем LLM о том, как удаление повлияло на статус Git родительской папки
         String gitStatus = GitUtils.getFileStatus(path.getParent());
+        
+        if (compact) {
+            String msg = String.format("Deleted: %s | Parent Git: %s", pathStr, gitStatus.isEmpty() ? "Unchanged" : gitStatus);
+            contentArray.addObject().put("type", "text").put("text", msg);
+            return result;
+        }
+
         String msg = "Deleted successfully: " + pathStr;
         if (!gitStatus.isEmpty()) {
             msg += " [Parent Git: " + gitStatus + "]";

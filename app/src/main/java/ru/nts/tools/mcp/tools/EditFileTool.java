@@ -56,11 +56,14 @@ public class EditFileTool implements McpTool {
         // Структура для пакетного редактирования нескольких файлов
         var edits = props.putObject("edits");
         edits.put("type", "array");
+        edits.put("description", "Batch mode: apply edits to multiple files in a single transaction. Example: [{\"path\": \"file1.java\", \"operations\": [...]}, {\"path\": \"file2.java\", \"oldText\": \"foo\", \"newText\": \"bar\"}]");
         var editItem = edits.putObject("items");
         editItem.put("type", "object");
         var editProps = editItem.putObject("properties");
         editProps.putObject("path").put("type", "string").put("description", "File to edit in batch.");
-        editProps.set("operations", mapper.createObjectNode().put("type", "array").put("description", "Atomic operations list."));
+        editProps.set("operations", mapper.createObjectNode()
+                .put("type", "array")
+                .put("description", "Atomic operations list. Format: [{\"operation\": \"replace|insert_before|insert_after|delete\", \"startLine\": N, \"endLine\": M, \"content\": \"...\", \"expectedContent\": \"...\"}]"));
 
         // Вспомогательные поля для каждого элемента в батче
         editProps.putObject("oldText").put("type", "string").put("description", "Literal text to replace.");
@@ -79,10 +82,14 @@ public class EditFileTool implements McpTool {
         props.putObject("expectedChecksum").put("type", "string").put("description", "CRC32C hex of file before edit. Bypasses read_file requirement if correct. Use the checksum from the previous successful edit to chain operations safely.");
         
         props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Fix: updated null-check logic').");
+        props.putObject("dryRun").put("type", "boolean").put("description", "If true, only returns the diff of changes without applying them.");
 
         // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
-        ops.put("type", "array").put("description", "Atomic steps for a single file. PREFERRED method for code editing.");
+        ops.put("type", "array").put("description", "Atomic steps for a single file. PREFERRED method for code editing. " +
+                "Example: [{\"operation\": \"replace\", \"startLine\": 10, \"endLine\": 12, \"content\": \"new lines\", \"expectedContent\": \"old lines\"}, " +
+                "{\"operation\": \"insert_after\", \"line\": 20, \"content\": \"// comment\"}, " +
+                "{\"operation\": \"delete\", \"startLine\": 5, \"endLine\": 5}]");
 
         schema.putArray("required").add("path");
         return schema;
@@ -90,6 +97,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
+        boolean dryRun = params.path("dryRun").asBoolean(false);
         // Выбор режима: мульти-файловое или одиночное редактирование
         if (params.has("edits")) {
             JsonNode editsNode = params.get("edits");
@@ -102,9 +110,9 @@ public class EditFileTool implements McpTool {
                     }
                 }
             }
-            return executeMultiFileEdit(params, editsNode);
+            return executeMultiFileEdit(params, editsNode, dryRun);
         } else if (params.has("path")) {
-            return executeSingleFileEdit(params);
+            return executeSingleFileEdit(params, dryRun);
         } else {
             throw new IllegalArgumentException("Must specify 'path' or 'edits'.");
         }
@@ -116,36 +124,42 @@ public class EditFileTool implements McpTool {
      *
      * @param params Корневые параметры запроса.
      * @param editsArray JSON-массив правок для файлов.
+     * @param dryRun Флаг предпросмотра изменений.
      *
      * @return Текстовый отчет об успешном завершении батча.
      */
-    private JsonNode executeMultiFileEdit(JsonNode params, JsonNode editsArray) throws Exception {
+    private JsonNode executeMultiFileEdit(JsonNode params, JsonNode editsArray, boolean dryRun) throws Exception {
         String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
-        TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)", instruction);
+        if (!dryRun) TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)", instruction);
         try {
             StringBuilder statusMsg = new StringBuilder();
-            statusMsg.append("Multi-file batch edit successful (").append(editsArray.size()).append(" files):\n\n");
+            if (dryRun) statusMsg.append("[DRY RUN] Would apply batch edit to ").append(editsArray.size()).append(" files:\n\n");
+            else statusMsg.append("Multi-file batch edit successful (" + editsArray.size() + " files):\n\n");
 
             for (JsonNode editNode : editsArray) {
                 // Применяем правки к каждому файлу и собираем статистику
-                FileEditStats stats = applyFileEdits(editNode);
+                FileEditStats stats = applyFileEdits(editNode, dryRun);
                 String gitStatus = GitUtils.getFileStatus(stats.path);
 
                 statusMsg.append(String.format("- %s [Git: %s]\n", stats.path.getFileName(), gitStatus.isEmpty() ? "Unchanged" : gitStatus));
                 statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
-                statusMsg.append(String.format("  New CRC32C: %X\n", stats.crc32));
+                if (!dryRun) statusMsg.append(String.format("  New CRC32C: %X\n", stats.crc32));
 
                 if (stats.diff != null && !stats.diff.isEmpty()) {
                     statusMsg.append("\n```diff\n").append(stats.diff).append("\n```\n");
                 }
                 statusMsg.append("\n");
             }
-            TransactionManager.commit();
-            statusMsg.append("(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
+            if (!dryRun) {
+                TransactionManager.commit();
+                statusMsg.append("(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
+            } else {
+                statusMsg.append("[DRY RUN] No changes were applied.");
+            }
             return createResponse(statusMsg.toString().trim());
         } catch (Exception e) {
             // Глобальный откат при любом сбое
-            TransactionManager.rollback();
+            if (!dryRun) TransactionManager.rollback();
             throw e;
         }
     }
@@ -154,34 +168,41 @@ public class EditFileTool implements McpTool {
      * Выполняет редактирование одиночного файла.
      *
      * @param params Параметры запроса.
+     * @param dryRun Флаг предпросмотра изменений.
      *
      * @return Текстовый отчет с Git-статусом и CRC32.
      */
-    private JsonNode executeSingleFileEdit(JsonNode params) throws Exception {
+    private JsonNode executeSingleFileEdit(JsonNode params, boolean dryRun) throws Exception {
         String pathStr = params.get("path").asText();
         String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
-        TransactionManager.startTransaction("Edit file: " + pathStr, instruction);
+        if (!dryRun) TransactionManager.startTransaction("Edit file: " + pathStr, instruction);
         try {
-            FileEditStats stats = applyFileEdits(params);
-            TransactionManager.commit();
+            FileEditStats stats = applyFileEdits(params, dryRun);
+            if (!dryRun) TransactionManager.commit();
 
             String gitStatus = GitUtils.getFileStatus(stats.path);
             StringBuilder sb = new StringBuilder();
-            sb.append("Edits successfully applied to file: ").append(pathStr);
+            if (dryRun) sb.append("[DRY RUN] Would apply edits to file: ").append(pathStr);
+            else sb.append("Edits successfully applied to file: ").append(pathStr);
+            
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
             sb.append("\nOperations: ").append(stats.total());
-            sb.append("\nNew CRC32C: ").append(Long.toHexString(stats.crc32).toUpperCase());
-            sb.append("\n(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
+            if (!dryRun) {
+                sb.append("\nNew CRC32C: ").append(Long.toHexString(stats.crc32).toUpperCase());
+                sb.append("\n(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
+            }
 
             if (stats.diff != null && !stats.diff.isEmpty()) {
                 sb.append("\n\n```diff\n").append(stats.diff).append("\n```");
             }
 
+            if (dryRun) sb.append("\n\n[DRY RUN] No changes were applied.");
+
             return createResponse(sb.toString());
         } catch (Exception e) {
-            TransactionManager.rollback();
+            if (!dryRun) TransactionManager.rollback();
             throw e;
         }
     }
@@ -191,10 +212,11 @@ public class EditFileTool implements McpTool {
      * Выполняет чтение, проверку прав, бэкап и последовательную обработку операций.
      *
      * @param fileParams Параметры (путь и действия).
+     * @param dryRun Флаг предпросмотра изменений.
      *
      * @return Объект со статистикой изменений.
      */
-    private FileEditStats applyFileEdits(JsonNode fileParams) throws Exception {
+    private FileEditStats applyFileEdits(JsonNode fileParams, boolean dryRun) throws Exception {
         String pathStr = fileParams.get("path").asText();
         Path path = PathSanitizer.sanitize(pathStr, false);
 
@@ -237,7 +259,7 @@ public class EditFileTool implements McpTool {
         List<String> currentLines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
 
         // Регистрация состояния файла "ДО" в текущей транзакции
-        TransactionManager.backup(path);
+        if (!dryRun) TransactionManager.backup(path);
 
         FileEditStats stats = new FileEditStats(path);
         String newContent;
@@ -261,18 +283,18 @@ public class EditFileTool implements McpTool {
             
             newContent = String.join("\n", currentLines);
             // Сохранение итогового состояния на диск
-            FileUtils.safeWrite(path, newContent, charset);
+            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
         } else if (fileParams.has("oldText") && fileParams.has("newText")) {
             // Режим нечеткой (fuzzy) замены текста по содержимому
             newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
-            FileUtils.safeWrite(path, newContent, charset);
+            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
             stats.replaces++;
         } else if (fileParams.has("startLine") && (fileParams.has("newText") || fileParams.has("content"))) {
             // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
             newContent = String.join("\n", currentLines);
             // Сохранение итогового состояния на диск
-            FileUtils.safeWrite(path, newContent, charset);
+            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
@@ -281,7 +303,7 @@ public class EditFileTool implements McpTool {
         stats.diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), content, newContent);
 
         // Вычисление итоговой контрольной суммы для подтверждения целостности
-        stats.crc32 = FileUtils.calculateCRC32(path);
+        if (!dryRun) stats.crc32 = FileUtils.calculateCRC32(path);
         return stats;
     }
 

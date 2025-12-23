@@ -57,13 +57,14 @@ public class McpServer {
         router.registerTool(new GitDiffTool());
         router.registerTool(new GitCommitSessionTool());
         router.registerTool(new BatchToolsTool(router));
-        router.registerTool(new TaskLogTool());
         router.registerTool(new TaskKillTool());
         router.registerTool(new ProjectStructureTool());
+        router.registerTool(new ProjectReplaceTool());
         router.registerTool(new TodoCreateTool());
         router.registerTool(new TodoUpdateTool());
         router.registerTool(new TodoStatusTool());
     }
+
 
     /**
      * Точка входа в приложение. Инициализирует цикл чтения команд.

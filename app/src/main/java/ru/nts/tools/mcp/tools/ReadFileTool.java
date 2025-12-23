@@ -15,7 +15,9 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -60,9 +62,9 @@ public class ReadFileTool implements McpTool {
 
         props.putObject("line").put("type", "integer").put("description", "Single line to read.");
 
-        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor to find context.");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor to find context. Example: 'public void recordChange' or '^class .*Manager'.");
 
-        props.putObject("contextRange").put("type", "integer").put("description", "Lines around anchor (default 0).");
+        props.putObject("contextRange").put("type", "integer").put("description", "Lines around anchor (default 0). Example: 5 to see 5 lines above and 5 below.");
 
         schema.putArray("required").add("path");
         return schema;
@@ -109,7 +111,22 @@ public class ReadFileTool implements McpTool {
             }
 
             if (anchorIdx == -1) {
-                throw new IllegalArgumentException("Context pattern not found: '" + patternStr + "'. Please check the pattern or read the whole file to find correct context.");
+                // Улучшенная диагностика: поиск похожих строк для подсказки
+                List<String> suggestions = new ArrayList<>();
+                for (String line : lines) {
+                    if (line.toLowerCase().contains(patternStr.toLowerCase())) {
+                        suggestions.add(line.trim());
+                        if (suggestions.size() >= 3) break;
+                    }
+                }
+
+                String msg = "Context pattern not found: '" + patternStr + "'.";
+                if (!suggestions.isEmpty()) {
+                    msg += " Suggestions: Did you mean one of these?\n- " + String.join("\n- ", suggestions);
+                } else {
+                    msg += " Please check the pattern or read the whole file to find correct context.";
+                }
+                throw new IllegalArgumentException(msg);
             }
 
             // Вычисление границ окна чтения
