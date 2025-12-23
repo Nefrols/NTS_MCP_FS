@@ -44,7 +44,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first.";
+        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first (OR provide valid expectedChecksum to bypass).";
     }
 
     @Override
