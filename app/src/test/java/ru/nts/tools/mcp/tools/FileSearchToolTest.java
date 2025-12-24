@@ -1,18 +1,20 @@
-// Aristo 24.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.tools.fs.FileSearchTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты для инструмента поиска (FileSearchTool).
@@ -22,9 +24,20 @@ class FileSearchToolTest {
     private final FileSearchTool tool = new FileSearchTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
-    @Test
-    void testList(@TempDir Path tempDir) throws Exception {
+    @TempDir
+    Path tempDir;
+
+    @BeforeEach
+    void setUp() {
         PathSanitizer.setRoot(tempDir);
+        SessionContext ctx = SessionContext.getOrCreate("test-search-" + System.nanoTime());
+        SessionContext.setCurrent(ctx);
+    }
+
+    // ==================== Базовые операции ====================
+
+    @Test
+    void testList() throws Exception {
         Files.createFile(tempDir.resolve("file1.txt"));
         Files.createDirectory(tempDir.resolve("subdir"));
 
@@ -39,8 +52,7 @@ class FileSearchToolTest {
     }
 
     @Test
-    void testFind(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
+    void testFind() throws Exception {
         Files.createDirectories(tempDir.resolve("a/b"));
         Files.createFile(tempDir.resolve("a/b/find_me.txt"));
 
@@ -55,8 +67,7 @@ class FileSearchToolTest {
     }
 
     @Test
-    void testGrep(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
+    void testGrep() throws Exception {
         Files.writeString(tempDir.resolve("grep.txt"), "Hello World");
 
         ObjectNode params = mapper.createObjectNode();
@@ -71,8 +82,7 @@ class FileSearchToolTest {
     }
 
     @Test
-    void testStructure(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
+    void testStructure() throws Exception {
         Files.createDirectories(tempDir.resolve("src/main"));
 
         ObjectNode params = mapper.createObjectNode();
@@ -83,5 +93,167 @@ class FileSearchToolTest {
         String text = result.get("content").get(0).get("text").asText();
         assertTrue(text.contains("src"));
         assertTrue(text.contains("main"));
+    }
+
+    // ==================== Grep с maxResults ====================
+
+    @Test
+    void testGrepMaxResultsLimit() throws Exception {
+        // Создаём 10 файлов с совпадениями
+        for (int i = 1; i <= 10; i++) {
+            Files.writeString(tempDir.resolve("file" + i + ".txt"), "SearchPattern in file " + i);
+        }
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "SearchPattern");
+        params.put("maxResults", 3);
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Matches found in 3 files"));
+        assertTrue(text.contains("limit reached"));
+    }
+
+    @Test
+    void testGrepMaxResultsUnlimited() throws Exception {
+        // Создаём 5 файлов
+        for (int i = 1; i <= 5; i++) {
+            Files.writeString(tempDir.resolve("unlim" + i + ".txt"), "MatchMe");
+        }
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "MatchMe");
+        params.put("maxResults", 0); // Без ограничения
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Matches found in 5 files"));
+        assertFalse(text.contains("limit reached"));
+    }
+
+    @Test
+    void testGrepDefaultMaxResults() throws Exception {
+        // По умолчанию maxResults = 100, создаём меньше файлов
+        Files.writeString(tempDir.resolve("default.txt"), "DefaultTest");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "DefaultTest");
+        // maxResults не указан, должен быть 100 по умолчанию
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Matches found in 1 files"));
+    }
+
+    // ==================== Grep с токенами ====================
+
+    @Test
+    void testGrepReturnsTokens() throws Exception {
+        Files.writeString(tempDir.resolve("tokens.txt"), "Line 1\nSearchHere\nLine 3");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "SearchHere");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("TOKEN: LAT:"));
+        assertTrue(text.contains("Lines 2-2"));
+    }
+
+    @Test
+    void testGrepMultipleLinesGroupedIntoRanges() throws Exception {
+        Files.writeString(tempDir.resolve("ranges.txt"),
+                "FINDME1\nFINDME2\nFINDME3\nother line\nFINDME4\nFINDME5");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "FINDME");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        // Должно быть 2 диапазона: 1-3 и 5-6
+        assertTrue(text.contains("Lines 1-3"));
+        assertTrue(text.contains("Lines 5-6"));
+    }
+
+    // ==================== Grep Regex ====================
+
+    @Test
+    void testGrepRegex() throws Exception {
+        Files.writeString(tempDir.resolve("regex.txt"),
+                "error: first\nwarning: second\nERROR: third");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "(?i)error");
+        params.put("isRegex", true);
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("error: first"));
+        assertTrue(text.contains("ERROR: third"));
+    }
+
+    // ==================== Grep No Match ====================
+
+    @Test
+    void testGrepNoMatch() throws Exception {
+        Files.writeString(tempDir.resolve("nomatch.txt"), "Hello World");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "NotExisting");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("No matches found"));
+        assertTrue(text.contains("Scanned"));
+    }
+
+    // ==================== Grep в поддиректориях ====================
+
+    @Test
+    void testGrepRecursive() throws Exception {
+        Files.createDirectories(tempDir.resolve("sub1/sub2"));
+        Files.writeString(tempDir.resolve("root.txt"), "FindMe");
+        Files.writeString(tempDir.resolve("sub1/nested.txt"), "FindMe");
+        Files.writeString(tempDir.resolve("sub1/sub2/deep.txt"), "FindMe");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "FindMe");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Matches found in 3 files"));
+    }
+
+    // ==================== Кириллица ====================
+
+    @Test
+    void testGrepCyrillic() throws Exception {
+        Files.writeString(tempDir.resolve("cyrillic.txt"), "Привет мир\nПоиск работает\nКонец");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", ".");
+        params.put("pattern", "Поиск");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("cyrillic.txt"));
+        assertTrue(text.contains("Поиск работает"));
     }
 }

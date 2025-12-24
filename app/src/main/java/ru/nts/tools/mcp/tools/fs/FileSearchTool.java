@@ -6,16 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.util.*;
-import java.util.regex.Pattern;
-import java.util.zip.CRC32C;
 
 /**
  * Объединенный инструмент для поиска и навигации по проекту.
@@ -91,6 +87,10 @@ public class FileSearchTool implements McpTool {
                 "Skip .git, build/, node_modules/, and .gitignore patterns. Default: true. " +
                 "Set false to search everything including ignored paths.");
 
+        props.putObject("maxResults").put("type", "integer").put("description",
+                "Maximum number of matching files for 'grep'. Default: 100. " +
+                "Set 0 for unlimited (may be slow on large codebases).");
+
         schema.putArray("required").add("action");
         return schema;
     }
@@ -104,7 +104,9 @@ public class FileSearchTool implements McpTool {
             case "list" -> executeList(pathStr, params);
             case "find" -> executeFind(pathStr, params.get("pattern").asText());
             case "grep" ->
-                    executeGrep(pathStr, params.get("pattern").asText(), params.path("isRegex").asBoolean(false));
+                    executeGrep(pathStr, params.get("pattern").asText(),
+                            params.path("isRegex").asBoolean(false),
+                            params.path("maxResults").asInt(100));
             case "structure" ->
                     executeStructure(pathStr, params.path("depth").asInt(3), params.path("autoIgnore").asBoolean(true));
             default -> throw new IllegalArgumentException("Unknown action: " + action);
@@ -169,50 +171,69 @@ public class FileSearchTool implements McpTool {
         return createResponse("Found " + found.size() + " matches:\n" + String.join("\n", found));
     }
 
-    private JsonNode executeGrep(String pathStr, String query, boolean isRegex) throws Exception {
+    private JsonNode executeGrep(String pathStr, String query, boolean isRegex, int maxResults) throws Exception {
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
             throw new IllegalArgumentException("Search directory not found: " + pathStr);
         }
 
         SearchTracker.clear();
-        final Pattern pattern = isRegex ? Pattern.compile(query, Pattern.MULTILINE | Pattern.DOTALL) : null;
         var results = new java.util.concurrent.ConcurrentLinkedQueue<FileSearchResult>();
+        var filesProcessed = new java.util.concurrent.atomic.AtomicInteger(0);
+        var filesWithMatches = new java.util.concurrent.atomic.AtomicInteger(0);
+        final int maxFiles = maxResults > 0 ? maxResults : Integer.MAX_VALUE;
 
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             try (java.util.stream.Stream<Path> walk = Files.walk(rootPath)) {
                 walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
+                    // Ранняя остановка: не запускаем новые задачи если достигли лимита
+                    if (filesWithMatches.get() >= maxFiles) {
+                        return;
+                    }
+
                     executor.submit(() -> {
+                        // Двойная проверка внутри потока
+                        if (filesWithMatches.get() >= maxFiles) {
+                            return;
+                        }
+
                         try {
                             PathSanitizer.checkFileSize(path);
-                            EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
-                            String content = fileData.content();
-                            String[] allLines = content.split("\n", -1);
-                            int lineCount = allLines.length;
-                            List<MatchedLine> matchedLines = new ArrayList<>();
+                            filesProcessed.incrementAndGet();
 
-                            if (isRegex) {
-                                java.util.regex.Matcher m = pattern.matcher(content);
-                                while (m.find()) {
-                                    addMatchWithContext(content, allLines, m.start(), 0, 0, matchedLines);
-                                }
-                            } else {
-                                int index = content.indexOf(query);
-                                while (index >= 0) {
-                                    addMatchWithContext(content, allLines, index, 0, 0, matchedLines);
-                                    index = content.indexOf(query, index + 1);
-                                }
-                            }
+                            // Используем оптимизированный FastSearch
+                            FastSearch.SearchResult searchResult = FastSearch.search(
+                                    path, query, isRegex,
+                                    0,  // maxResults per file - без лимита
+                                    0, 0  // без контекста
+                            );
 
-                            if (!matchedLines.isEmpty()) {
-                                long matchCount = matchedLines.stream().filter(l -> l.isMatch).count();
+                            if (searchResult != null && !searchResult.matches().isEmpty()) {
+                                int matchesInFile = filesWithMatches.incrementAndGet();
+                                if (matchesInFile > maxFiles) {
+                                    return; // Превысили лимит
+                                }
+
+                                long matchCount = searchResult.matches().stream()
+                                        .filter(FastSearch.MatchedLine::isMatch).count();
                                 SearchTracker.registerMatches(path, (int) matchCount);
 
-                                // Вычисляем CRC и группируем строки в диапазоны
-                                long crc = calculateCRC32(path);
-                                List<LineRange> ranges = groupLinesIntoRanges(path, matchedLines, crc, lineCount);
+                                // Преобразуем результаты и группируем в диапазоны
+                                List<MatchedLine> matchedLines = searchResult.matches().stream()
+                                        .map(m -> new MatchedLine(m.lineNumber(), m.text(), m.isMatch()))
+                                        .toList();
 
-                                results.add(new FileSearchResult(path.toAbsolutePath().toString(), matchedLines, ranges));
+                                List<LineRange> ranges = groupLinesIntoRanges(
+                                        path, matchedLines,
+                                        searchResult.crc32c(),
+                                        searchResult.lineCount()
+                                );
+
+                                results.add(new FileSearchResult(
+                                        path.toAbsolutePath().toString(),
+                                        matchedLines,
+                                        ranges
+                                ));
                             }
                         } catch (Exception ignored) {
                         }
@@ -225,13 +246,18 @@ public class FileSearchTool implements McpTool {
         sortedResults.sort(Comparator.comparing(FileSearchResult::path));
 
         if (sortedResults.isEmpty()) {
-            return createResponse("No matches found.");
+            return createResponse("No matches found. (Scanned " + filesProcessed.get() + " files)");
         }
 
-        StringBuilder sb = new StringBuilder("Matches found in " + sortedResults.size() + " files:\n\n");
+        StringBuilder sb = new StringBuilder();
+        sb.append("Matches found in ").append(sortedResults.size()).append(" files");
+        if (sortedResults.size() >= maxFiles && maxResults > 0) {
+            sb.append(" (limit reached, use maxResults=0 for all)");
+        }
+        sb.append(":\n\n");
+
         for (var res : sortedResults) {
             sb.append(res.path()).append(":\n");
-            // Показываем выданные токены для диапазонов
             for (var range : res.ranges()) {
                 sb.append(String.format("  [Lines %d-%d | TOKEN: %s]\n", range.start(), range.end(), range.token()));
             }
@@ -279,48 +305,6 @@ public class FileSearchTool implements McpTool {
         return ranges;
     }
 
-    /**
-     * Вычисляет CRC32C для файла.
-     */
-    private long calculateCRC32(Path path) throws Exception {
-        CRC32C crc = new CRC32C();
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
-        }
-        return crc.getValue();
-    }
-
-    private void addMatchWithContext(String content, String[] allLines, int startPos, int before, int after, List<MatchedLine> matchedLines) {
-        int lineNum = 1;
-        for (int i = 0; i < startPos; i++) {
-            if (content.charAt(i) == '\n') {
-                lineNum++;
-            }
-        }
-        int matchIdx = lineNum - 1;
-        int startIdx = Math.max(0, matchIdx - before);
-        int endIdx = Math.min(allLines.length - 1, matchIdx + after);
-
-        for (int i = startIdx; i <= endIdx; i++) {
-            int currentNum = i + 1;
-            boolean isMatch = (currentNum == lineNum);
-            String text = allLines[i].replace("\r", "");
-            if (matchedLines.stream().noneMatch(l -> l.number() == currentNum)) {
-                matchedLines.add(new MatchedLine(currentNum, text, isMatch));
-            } else if (isMatch) {
-                for (int j = 0; j < matchedLines.size(); j++) {
-                    if (matchedLines.get(j).number() == currentNum) {
-                        matchedLines.set(j, new MatchedLine(currentNum, text, true));
-                        break;
-                    }
-                }
-            }
-        }
-    }
 
     private record MatchedLine(int number, String text, boolean isMatch) {
     }
