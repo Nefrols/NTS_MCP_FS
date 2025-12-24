@@ -211,6 +211,9 @@ public class FileSearchTool implements McpTool {
         var filesWithMatches = new java.util.concurrent.atomic.AtomicInteger(0);
         final int maxFiles = maxResults > 0 ? maxResults : Integer.MAX_VALUE;
 
+        // Захватываем контекст сессии для проброса в worker threads
+        final SessionContext parentContext = SessionContext.current();
+
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             try (java.util.stream.Stream<Path> walk = Files.walk(rootPath)) {
                 walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
@@ -220,12 +223,16 @@ public class FileSearchTool implements McpTool {
                     }
 
                     executor.submit(() -> {
-                        // Двойная проверка внутри потока
-                        if (filesWithMatches.get() >= maxFiles) {
-                            return;
+                        // Пробрасываем контекст сессии в worker thread
+                        if (parentContext != null) {
+                            SessionContext.setCurrent(parentContext);
                         }
-
                         try {
+                            // Двойная проверка внутри потока
+                            if (filesWithMatches.get() >= maxFiles) {
+                                return;
+                            }
+
                             PathSanitizer.checkFileSize(path);
                             filesProcessed.incrementAndGet();
 
@@ -264,6 +271,10 @@ public class FileSearchTool implements McpTool {
                                 ));
                             }
                         } catch (Exception ignored) {
+                            // Игнорируем ошибки обработки отдельных файлов
+                        } finally {
+                            // Очищаем контекст потока
+                            SessionContext.clearCurrent();
                         }
                     });
                 });
