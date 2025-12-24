@@ -91,7 +91,9 @@ public class GradleTool implements McpTool {
         File wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
         
         if (!wrapperFile.exists()) {
-            throw new IllegalStateException("Gradle wrapper not found. Make sure you are in a Gradle project root.");
+            throw new IllegalStateException(
+                "Not a Gradle project. No " + wrapperFile.getName() + " found in project root. " +
+                "This tool requires Gradle wrapper (gradlew/gradlew.bat) to be present.");
         }
 
         List<String> command = new ArrayList<>();

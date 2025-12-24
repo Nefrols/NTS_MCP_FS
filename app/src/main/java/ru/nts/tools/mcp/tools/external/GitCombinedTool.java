@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.stream.Collectors;
 public class GitCombinedTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private static final Set<String> ALLOWED_CMDS = Set.of("status", "diff", "log", "add", "commit", "rev-parse", "branch");
+    private static final Set<String> ALLOWED_CMDS = Set.of("status", "diff", "log", "add", "commit", "rev-parse", "branch", "init");
 
     @Override
     public String getName() { return "nts_git"; }
@@ -30,7 +31,7 @@ public class GitCombinedTool implements McpTool {
             Git integration hub - version control operations.
 
             ACTIONS:
-            • cmd - Execute Git commands (status, diff, log, add, commit, branch, rev-parse)
+            • cmd - Execute Git commands (status, diff, log, add, commit, branch, rev-parse, init)
                     Only safe, local operations allowed. No push/pull/fetch.
             • diff - View changes in unified diff format
                     Use staged=true for indexed changes only
@@ -100,13 +101,32 @@ public class GitCombinedTool implements McpTool {
         };
     }
 
+    /**
+     * Проверяет наличие .git директории в корне проекта.
+     * Выбрасывает понятное исключение если Git не инициализирован.
+     */
+    private void checkGitRepository() {
+        Path gitDir = PathSanitizer.getRoot().resolve(".git");
+        if (!Files.exists(gitDir)) {
+            throw new IllegalStateException(
+                "Not a Git repository. No .git directory found in project root. " +
+                "Use nts_git(action='cmd', command='init') to initialize a new repository.");
+        }
+    }
+
     private JsonNode executeCmd(JsonNode params) throws Exception {
         String subCmd = params.get("command").asText();
         String extraArgs = params.path("args").asText("");
         long timeout = params.path("timeout").asLong(30);
 
+        // Сначала проверяем безопасность команды
         if (!ALLOWED_CMDS.contains(subCmd)) {
             throw new SecurityException("Git subcommand '" + subCmd + "' is forbidden.");
+        }
+
+        // Затем проверяем наличие .git (кроме init)
+        if (!"init".equals(subCmd)) {
+            checkGitRepository();
         }
 
         List<String> command = new ArrayList<>();
@@ -120,12 +140,15 @@ public class GitCombinedTool implements McpTool {
         }
 
         ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
-        return createResponse("Git task [" + result.taskId() + "] " + 
-            (result.isRunning() ? "STILL RUNNING" : "exit: " + result.exitCode()) + 
+
+        return createResponse("Git task [" + result.taskId() + "] " +
+            (result.isRunning() ? "STILL RUNNING" : "exit: " + result.exitCode()) +
             "\n\nOutput:\n" + result.output());
     }
 
     private JsonNode executeDiff(JsonNode params) throws Exception {
+        checkGitRepository();
+
         String pathStr = params.has("path") ? params.get("path").asText() : null;
         boolean stagedOnly = params.path("staged").asBoolean(false);
 
@@ -149,6 +172,8 @@ public class GitCombinedTool implements McpTool {
     }
 
     private JsonNode executeCommitSession(JsonNode params) throws Exception {
+        checkGitRepository();
+
         String header = params.get("header").asText();
         List<String> instructions = TransactionManager.getSessionInstructions();
         List<String> completedTasks = TodoManager.getCompletedTasks();

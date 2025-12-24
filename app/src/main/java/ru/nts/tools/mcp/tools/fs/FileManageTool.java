@@ -5,13 +5,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.LineAccessTracker;
+import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.zip.CRC32C;
 
 /**
  * Инструмент для управления файловой структурой.
@@ -38,9 +42,9 @@ public class FileManageTool implements McpTool {
             • rename - Change filename in same directory. Preserves access tokens!
 
             TOKEN BEHAVIOR:
+            • create: Returns access token for immediate editing (no read needed!)
             • move/rename: Tokens automatically transferred to new path
             • delete: All tokens for the file are invalidated
-            • create: No tokens (must read first to get them)
 
             SAFETY:
             • All operations are transactional (auto-rollback on error)
@@ -102,7 +106,7 @@ public class FileManageTool implements McpTool {
         };
     }
 
-    private JsonNode executeCreate(Path path, String pathStr, String content) throws IOException {
+    private JsonNode executeCreate(Path path, String pathStr, String content) throws Exception {
         if (Files.exists(path)) {
             throw new IOException("File already exists: " + pathStr);
         }
@@ -119,7 +123,29 @@ public class FileManageTool implements McpTool {
             TransactionManager.rollback();
             throw e;
         }
-        return createResponse("File created: " + pathStr);
+
+        // Регистрируем токен доступа на весь созданный контент
+        long crc = calculateCRC32(path);
+        int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
+        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, crc, lineCount);
+
+        return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]",
+                pathStr, lineCount, crc, token.encode()));
+    }
+
+    /**
+     * Вычисляет CRC32C для файла.
+     */
+    private long calculateCRC32(Path path) throws Exception {
+        CRC32C crc = new CRC32C();
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 
     private JsonNode executeDelete(Path path, String pathStr, boolean recursive) throws IOException {
