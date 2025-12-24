@@ -1,4 +1,4 @@
-// Aristo 24.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp.tools.planning;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.TransactionManager;
+import ru.nts.tools.mcp.core.TodoManager;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -14,11 +14,9 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 /**
  * Инструмент для управления планами работ (TODO).
@@ -129,49 +127,49 @@ public class TodoTool implements McpTool {
         String fullContent = "# TODO: " + title + "\n\n" + content;
         Files.writeString(todoFile, fullContent);
 
-        TransactionManager.setActiveTodo(fileName);
+        TodoManager.setSessionTodo(fileName);
 
         return createResponse("Plan created: " + fileName + "\nThis plan is now set as ACTIVE.");
     }
 
     private JsonNode executeStatus(JsonNode params) throws IOException {
         Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
-        if (!Files.exists(todoDir)) return createResponse("No TODOs found.");
 
-        Path targetFile;
+        // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
         String fileName = params.path("fileName").asText(null);
-        if (fileName != null) {
-            targetFile = todoDir.resolve(fileName);
-        } else {
-            try (Stream<Path> s = Files.list(todoDir)) {
-                targetFile = s.filter(p -> p.getFileName().toString().startsWith("TODO_"))
-                        .max(Comparator.comparing(Path::getFileName))
-                        .orElse(null);
-            }
+        if (fileName == null) {
+            fileName = TodoManager.getSessionTodo();
         }
 
-        if (targetFile == null || !Files.exists(targetFile)) return createResponse("No active TODO found.");
+        if (fileName == null) {
+            return createResponse("No active TODO in current session. Use 'create' to start a new plan.");
+        }
+
+        Path targetFile = todoDir.resolve(fileName);
+        if (!Files.exists(targetFile)) {
+            return createResponse("TODO file not found: " + fileName);
+        }
 
         String content = Files.readString(targetFile);
-        TransactionManager.setActiveTodo(targetFile.getFileName().toString());
-
-        return createResponse("### Current Plan: " + targetFile.getFileName() + "\n\n" + content);
+        return createResponse("### Current Plan: " + fileName + "\n\n" + content);
     }
 
     private JsonNode executeUpdate(JsonNode params) throws Exception {
         Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
-        if (!Files.exists(todoDir)) throw new IllegalStateException("No TODOs found. Use 'create' action first.");
 
-        Path targetFile;
+        // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
         String fileName = params.path("fileName").asText(null);
-        if (fileName != null) {
-            targetFile = todoDir.resolve(fileName);
-        } else {
-            try (Stream<Path> s = Files.list(todoDir)) {
-                targetFile = s.filter(p -> p.getFileName().toString().startsWith("TODO_"))
-                        .max(Comparator.comparing(Path::getFileName))
-                        .orElseThrow(() -> new IllegalStateException("No active TODO found."));
-            }
+        if (fileName == null) {
+            fileName = TodoManager.getSessionTodo();
+        }
+
+        if (fileName == null) {
+            throw new IllegalStateException("No active TODO in current session. Use 'create' action first.");
+        }
+
+        Path targetFile = todoDir.resolve(fileName);
+        if (!Files.exists(targetFile)) {
+            throw new IllegalStateException("TODO file not found: " + fileName);
         }
 
         String resultMsg;
@@ -179,12 +177,11 @@ public class TodoTool implements McpTool {
             resultMsg = updateItem(targetFile, params);
         } else if (params.has("content")) {
             Files.writeString(targetFile, params.get("content").asText());
-            resultMsg = "Plan overwritten: " + targetFile.getFileName();
+            resultMsg = "Plan overwritten: " + fileName;
         } else {
             throw new IllegalArgumentException("Must provide 'content' or 'id' + 'status' for update.");
         }
 
-        TransactionManager.setActiveTodo(targetFile.getFileName().toString());
         return createResponse(resultMsg);
     }
 

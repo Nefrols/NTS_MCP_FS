@@ -31,13 +31,6 @@ public class TransactionManager {
     private static int totalEdits = 0;
     private static int totalUndos = 0;
 
-    // Ссылка на активный TODO файл
-    private static String activeTodoPath = null;
-
-    public static void setActiveTodo(String path) {
-        activeTodoPath = path;
-    }
-
     private static Path getSnapshotDir() throws IOException {
         Path dir = PathSanitizer.getRoot().resolve(".nts/snapshots");
         if (!Files.exists(dir)) {
@@ -233,8 +226,9 @@ public class TransactionManager {
     public static String getJournal() {
         StringBuilder sb = new StringBuilder();
         sb.append("=== TRANSACTION JOURNAL ===\n");
-        if (activeTodoPath != null) {
-            sb.append("Active TODO: ").append(activeTodoPath).append("\n");
+        String activeTodo = TodoManager.getSessionTodo();
+        if (activeTodo != null) {
+            sb.append("Active TODO: ").append(activeTodo).append("\n");
         }
         sb.append("\nAvailable for UNDO:\n");
         if (undoStack.isEmpty()) {
@@ -301,6 +295,8 @@ public class TransactionManager {
         }
         currentTransaction.remove();
         nestingLevel.set(0);
+        // Сброс состояния связанных менеджеров
+        TodoManager.reset();
     }
 
     private interface TransactionEntry {

@@ -1,4 +1,4 @@
-// Aristo 24.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp.core;
 
 import org.junit.jupiter.api.Test;
@@ -18,10 +18,11 @@ class ExtendedHudTest {
         TransactionManager.reset();
         LineAccessTracker.reset();
 
-        // Создаем TODO файл
+        // Создаем TODO файл и устанавливаем его как сессионный
         Path todoDir = tempDir.resolve(".nts/todos");
         Files.createDirectories(todoDir);
         Files.writeString(todoDir.resolve("TODO_1.md"), "# TODO: Test Plan\n- [x] Task 1\n- [ ] Task 2");
+        TodoManager.setSessionTodo("TODO_1.md");
 
         // Эмулируем активность - регистрируем доступ к файлу
         Path file = tempDir.resolve("work.txt");
@@ -43,10 +44,12 @@ class ExtendedHudTest {
         TodoManager.HudInfo hud = TodoManager.getHudInfo();
         String hudStr = hud.toString();
 
-        assertTrue(hudStr.contains("Plan: Test Plan"));
-        assertTrue(hudStr.contains("Progress: 1/2"));
-        assertTrue(hudStr.contains("Session: 1 edits"));
-        assertTrue(hudStr.contains("Unlocked: 1 files"));
+        // Новый формат HUD: [HUD] Test Plan [✓1 ○1] → #2: Task 2 | Session: 1 edits, 0 undos | Unlocked: 1 files
+        assertTrue(hudStr.contains("Test Plan"), "Should contain plan title");
+        assertTrue(hudStr.contains("✓1"), "Should show 1 completed task");
+        assertTrue(hudStr.contains("○1"), "Should show 1 pending task");
+        assertTrue(hudStr.contains("Session: 1 edits"), "Should show edit count");
+        assertTrue(hudStr.contains("Unlocked: 1 files"), "Should show unlocked files");
     }
 
     private long calculateCRC32(Path path) throws Exception {
