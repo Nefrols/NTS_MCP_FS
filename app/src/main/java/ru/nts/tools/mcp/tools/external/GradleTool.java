@@ -16,11 +16,6 @@ import java.util.regex.Pattern;
 
 /**
  * Инструмент для выполнения задач автоматизации сборки через Gradle.
- * Особенности:
- * 1. Использование Wrapper: Автоматически находит и использует gradlew (Unix) или gradlew.bat (Windows).
- * 2. Интеллектуальный парсинг: В случае ошибки анализирует лог и выводит краткую сводку (ERROR SUMMARY).
- * 3. Динамический контроль: При таймауте возвращает текущий статус [IN_PROGRESS] и taskId для отслеживания.
- * 4. Индикация прогресса: Пытается извлечь процент выполнения из вывода Gradle.
  */
 public class GradleTool implements McpTool {
 
@@ -33,7 +28,7 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Runs Gradle tasks (build, test, etc.). Auto-parses logs to highlight errors. Supports [IN_PROGRESS] status on timeouts.";
+        return "Runs Gradle tasks (build, test, etc.) with real-time progress monitoring and intelligent error parsing.";
     }
 
     @Override
@@ -47,9 +42,9 @@ public class GradleTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("task").put("type", "string").put("description", "Task name (e.g. 'build').");
-        props.putObject("arguments").put("type", "string").put("description", "CLI arguments.");
-        props.putObject("timeout").put("type", "integer").put("description", "Timeout in seconds (REQUIRED).");
+        props.putObject("task").put("type", "string").put("description", "Gradle task name to execute (e.g., 'build', 'test', 'clean').");
+        props.putObject("arguments").put("type", "string").put("description", "Additional command-line arguments/flags for the task.");
+        props.putObject("timeout").put("type", "integer").put("description", "Maximum execution time in seconds. MANDATORY parameter.");
 
         schema.putArray("required").add("task").add("timeout");
         return schema;
@@ -70,8 +65,6 @@ public class GradleTool implements McpTool {
 
         List<String> command = new ArrayList<>();
         command.add(wrapperFile.getAbsolutePath());
-        // Добавляем --console=plain для более предсказуемого парсинга логов, 
-        // но оставляем прогресс если возможно.
         command.add(task);
 
         if (!extraArgs.isEmpty()) {
@@ -88,7 +81,6 @@ public class GradleTool implements McpTool {
 
         StringBuilder sb = new StringBuilder();
         
-        // Извлечение прогресса
         String progress = extractProgress(result.output());
         String progressMark = progress != null ? " [" + progress + "]" : "";
 
@@ -99,7 +91,6 @@ public class GradleTool implements McpTool {
             sb.append("### Gradle task [").append(result.taskId()).append("] FINISHED (code: ").append(result.exitCode()).append(")\n");
         }
 
-        // Анализ ошибок
         if (!result.isRunning()) {
             String smartSummary = parseSmartSummary(result.output());
             if (!smartSummary.isEmpty()) {
@@ -107,7 +98,6 @@ public class GradleTool implements McpTool {
             }
         }
 
-        // Вывод лога
         String output = result.output();
         if (output.length() > 5000) {
             sb.append("\nOutput (truncated):\n...\n");
@@ -124,14 +114,10 @@ public class GradleTool implements McpTool {
         return response;
     }
 
-    /**
-     * Пытается найти процент выполнения в последних строках вывода.
-     */
     private String extractProgress(String output) {
-        // Формат: > :app:compileJava [45%]
+        // Format: > :app:compileJava [45%]
         Pattern progressPattern = Pattern.compile("> .*\\[(\\d+%)\\]");
         String[] lines = output.split("\n");
-        // Ищем с конца
         for (int i = lines.length - 1; i >= 0; i--) {
             Matcher m = progressPattern.matcher(lines[i]);
             if (m.find()) {

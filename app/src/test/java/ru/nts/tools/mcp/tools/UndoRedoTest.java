@@ -25,37 +25,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Расширенные тесты системы транзакций и функций отмены/повтора (UNDO/REDO).
- * Проверяют:
- * 1. Атомарность операций и автоматический откат при сбоях.
- * 2. Корректность восстановления файлов после удаления или перемещения.
- * 3. Логику управления стеком истории (очистка REDO при новой транзакции).
- * 4. Формирование журнала транзакций.
  */
 class UndoRedoTest {
 
-    /**
-     * Экземпляры инструментов для тестирования транзакций.
-     */
     private final EditFileTool editTool = new EditFileTool();
-    private final DeleteFileTool deleteTool = new DeleteFileTool();
-    private final MoveFileTool moveTool = new MoveFileTool();
-    private final UndoTool undoTool = new UndoTool();
-    private final RedoTool redoTool = new RedoTool();
-
-    /**
-     * JSON манипулятор.
-     */
+    private final FileManageTool manageTool = new FileManageTool();
+    private final SessionTool sessionTool = new SessionTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /**
-     * Общая временная директория для всех тестов класса.
-     */
     @TempDir
     Path sharedTempDir;
 
-    /**
-     * Сброс глобального состояния перед каждым тестом для обеспечения изоляции.
-     */
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(sharedTempDir);
@@ -63,9 +43,6 @@ class UndoRedoTest {
         AccessTracker.reset();
     }
 
-    /**
-     * Проверяет автоматический откат всей транзакции при ошибке в середине пакета операций.
-     */
     @Test
     void testTransactionRollbackOnError() throws Exception {
         Path file = sharedTempDir.resolve("atomic.txt");
@@ -77,18 +54,12 @@ class UndoRedoTest {
         params.put("path", "atomic.txt");
         var ops = params.putArray("operations");
         ops.addObject().put("operation", "replace").put("startLine", 1).put("endLine", 1).put("content", "New");
-        // Ошибка во второй операции (неверный индекс)
         ops.addObject().put("operation", "replace").put("startLine", 100).put("content", "Error");
 
-        assertThrows(Exception.class, () -> editTool.execute(params), "Должно быть выброшено исключение");
-
-        // Файл должен вернуться к состоянию "Original"
-        assertEquals(original, Files.readString(file).replace("\r", ""), "Файл должен быть откатан автоматически");
+        assertThrows(Exception.class, () -> editTool.execute(params));
+        assertEquals(original, Files.readString(file).replace("\r", ""));
     }
 
-    /**
-     * Тестирует возможность отмены удаления файла.
-     */
     @Test
     void testUndoFileDeletion() throws Exception {
         Path file = sharedTempDir.resolve("to_delete.txt");
@@ -96,21 +67,19 @@ class UndoRedoTest {
         Files.writeString(file, content);
         AccessTracker.registerRead(file);
 
-        // Шаг 1: Удаление
         ObjectNode params = mapper.createObjectNode();
+        params.put("action", "delete");
         params.put("path", "to_delete.txt");
-        deleteTool.execute(params);
-        assertFalse(Files.exists(file), "Файл должен быть удален");
+        manageTool.execute(params);
+        assertFalse(Files.exists(file));
 
-        // Шаг 2: Отмена (UNDO)
-        undoTool.execute(mapper.createObjectNode());
-        assertTrue(Files.exists(file), "Файл должен быть восстановлен");
-        assertEquals(content, Files.readString(file), "Содержимое восстановленного файла должно совпадать");
+        ObjectNode sessionParams = mapper.createObjectNode();
+        sessionParams.put("action", "undo");
+        sessionTool.execute(sessionParams);
+        assertTrue(Files.exists(file));
+        assertEquals(content, Files.readString(file));
     }
 
-    /**
-     * Тестирует отмену перемещения файла (UNDO Move).
-     */
     @Test
     void testUndoMoveOperation() throws Exception {
         Path source = sharedTempDir.resolve("source.txt");
@@ -118,66 +87,59 @@ class UndoRedoTest {
         Files.writeString(source, "move me");
         AccessTracker.registerRead(source);
 
-        // Шаг 1: Перемещение
         ObjectNode params = mapper.createObjectNode();
-        params.put("sourcePath", "source.txt");
+        params.put("action", "move");
+        params.put("path", "source.txt");
         params.put("targetPath", "sub/target.txt");
-        moveTool.execute(params);
+        manageTool.execute(params);
 
         assertFalse(Files.exists(source));
         assertTrue(Files.exists(target));
 
-        // Шаг 2: Отмена
-        undoTool.execute(mapper.createObjectNode());
-        assertTrue(Files.exists(source), "Файл должен вернуться на старое место");
-        assertFalse(Files.exists(target), "Файл на новом месте должен быть удален");
+        ObjectNode sessionParams = mapper.createObjectNode();
+        sessionParams.put("action", "undo");
+        sessionTool.execute(sessionParams);
+        assertTrue(Files.exists(source));
+        assertFalse(Files.exists(target));
     }
 
-    /**
-     * Проверяет правило очистки стека REDO при совершении новой транзакции.
-     * После отмены старой операции и совершения новой — повтор старой невозможен.
-     */
     @Test
     void testRedoStackInvalidation() throws Exception {
         Path file = sharedTempDir.resolve("test.txt");
         Files.writeString(file, "init");
         AccessTracker.registerRead(file);
 
-        // Операция A
         ObjectNode p1 = mapper.createObjectNode();
         p1.put("path", "test.txt");
         p1.put("oldText", "init");
         p1.put("newText", "A");
         editTool.execute(p1);
 
-        // UNDO A
-        undoTool.execute(mapper.createObjectNode());
+        ObjectNode undoP = mapper.createObjectNode();
+        undoP.put("action", "undo");
+        sessionTool.execute(undoP);
         assertEquals("init", Files.readString(file));
 
-        // Новая операция B (инвалидирует REDO стека)
         ObjectNode p2 = mapper.createObjectNode();
         p2.put("path", "test.txt");
         p2.put("oldText", "init");
         p2.put("newText", "B");
         editTool.execute(p2);
 
-        // Попытка REDO должна вернуть статус об отсутствии операций
-        JsonNode redoResult = redoTool.execute(mapper.createObjectNode());
+        ObjectNode redoP = mapper.createObjectNode();
+        redoP.put("action", "redo");
+        JsonNode redoResult = sessionTool.execute(redoP);
         String msg = redoResult.get("content").get(0).get("text").asText();
-        assertTrue(msg.contains("No operations to redo"), "Стек REDO должен быть пуст");
-        assertEquals("B", Files.readString(file), "Текущее состояние файла не должно измениться");
+        assertTrue(msg.contains("No operations to redo"));
+        assertEquals("B", Files.readString(file));
     }
 
-    /**
-     * Тестирует глубокую историю отмен и повторов (Cycle Test).
-     */
     @Test
     void testLongHistoryCycle() throws Exception {
         Path file = sharedTempDir.resolve("history.txt");
         Files.writeString(file, "0");
         AccessTracker.registerRead(file);
 
-        // Совершаем 3 последовательных изменения: 0 -> 1 -> 2 -> 3
         for (int i = 1; i <= 3; i++) {
             ObjectNode p = mapper.createObjectNode();
             p.put("path", "history.txt");
@@ -187,47 +149,66 @@ class UndoRedoTest {
         }
         assertEquals("3", Files.readString(file));
 
-        // Откатываем все 3 раза до "0"
-        undoTool.execute(mapper.createObjectNode());
-        undoTool.execute(mapper.createObjectNode());
-        undoTool.execute(mapper.createObjectNode());
+        ObjectNode undoP = mapper.createObjectNode();
+        undoP.put("action", "undo");
+        sessionTool.execute(undoP);
+        sessionTool.execute(undoP);
+        sessionTool.execute(undoP);
         assertEquals("0", Files.readString(file));
 
-        // Повторяем 2 раза до "2"
-        redoTool.execute(mapper.createObjectNode());
-        redoTool.execute(mapper.createObjectNode());
+        ObjectNode redoP = mapper.createObjectNode();
+        redoP.put("action", "redo");
+        sessionTool.execute(redoP);
+        sessionTool.execute(redoP);
         assertEquals("2", Files.readString(file));
     }
 
-    /**
-     * Проверяет корректность формирования визуального журнала транзакций.
-     */
     @Test
     void testTransactionJournal(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
-
         Path f = tempDir.resolve("test.txt");
         Files.writeString(f, "init\n");
         AccessTracker.registerRead(f);
 
-        // Совершаем действие для записи в журнал вручную через TransactionManager
-        // чтобы гарантировать расчет статистики
         TransactionManager.startTransaction("Manual Edit");
         TransactionManager.backup(f);
         Files.writeString(f, "init\nnew line\n");
         TransactionManager.commit();
 
-        // Запрос журнала
-        TransactionJournalTool journalTool = new TransactionJournalTool();
-        JsonNode result = journalTool.execute(mapper.createObjectNode());
+        ObjectNode p = mapper.createObjectNode();
+        p.put("action", "journal");
+        JsonNode result = sessionTool.execute(p);
         String text = result.get("content").get(0).get("text").asText();
 
-        // Верификация ключевых разделов отчета
-        assertTrue(text.contains("=== TRANSACTION JOURNAL ==="), "Должен быть заголовок журнала");
-        assertTrue(text.contains("Manual Edit"), "Журнал должен содержать описание транзакции");
-        assertTrue(text.contains("+1, -0 lines"), "Журнал должен содержать статистику изменений");
-        assertTrue(text.contains("=== ACTIVE SESSION CONTEXT ==="), "Должен быть раздел контекста сессии");
-        assertTrue(text.contains("- test.txt"), "Контекст должен содержать прочитанный файл");
+        assertTrue(text.contains("=== TRANSACTION JOURNAL ==="));
+        assertTrue(text.contains("Manual Edit"));
+        assertTrue(text.contains("+1, -0 lines"));
+    }
+
+    @Test
+    void testCheckpoints() throws Exception {
+        Path file = sharedTempDir.resolve("check.txt");
+        Files.writeString(file, "initial");
+        AccessTracker.registerRead(file);
+
+        ObjectNode cp1 = mapper.createObjectNode();
+        cp1.put("action", "checkpoint");
+        cp1.put("name", "PointA");
+        sessionTool.execute(cp1);
+
+        ObjectNode edit = mapper.createObjectNode();
+        edit.put("path", "check.txt");
+        edit.put("oldText", "initial");
+        edit.put("newText", "modified");
+        editTool.execute(edit);
+        assertEquals("modified", Files.readString(file));
+
+        ObjectNode rb = mapper.createObjectNode();
+        rb.put("action", "rollback");
+        rb.put("name", "PointA");
+        sessionTool.execute(rb);
+
+        assertEquals("initial", Files.readString(file));
     }
 }

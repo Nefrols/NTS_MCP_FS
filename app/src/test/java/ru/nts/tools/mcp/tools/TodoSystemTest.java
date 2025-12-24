@@ -25,9 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TodoSystemTest {
 
-    private final TodoCreateTool createTool = new TodoCreateTool();
-    private final TodoUpdateTool updateTool = new TodoUpdateTool();
-    private final TodoStatusTool statusTool = new TodoStatusTool();
+    private final TodoTool todoTool = new TodoTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
@@ -36,22 +34,26 @@ class TodoSystemTest {
 
         // 1. Create
         ObjectNode p1 = mapper.createObjectNode();
+        p1.put("action", "create");
         p1.put("title", "My Plan");
         p1.put("content", "- [ ] task 1");
-        createTool.execute(p1);
+        todoTool.execute(p1);
 
         // 2. Status
-        JsonNode s1 = statusTool.execute(mapper.createObjectNode());
+        ObjectNode pStatus = mapper.createObjectNode();
+        pStatus.put("action", "status");
+        JsonNode s1 = todoTool.execute(pStatus);
         String text1 = s1.get("content").get(0).get("text").asText();
         assertTrue(text1.contains("task 1"));
 
         // 3. Update
         ObjectNode p2 = mapper.createObjectNode();
+        p2.put("action", "update");
         p2.put("content", "- [x] task 1\n- [ ] task 2");
-        updateTool.execute(p2);
+        todoTool.execute(p2);
 
         // 4. Final status
-        JsonNode s2 = statusTool.execute(mapper.createObjectNode());
+        JsonNode s2 = todoTool.execute(pStatus);
         String text2 = s2.get("content").get(0).get("text").asText();
         assertTrue(text2.contains("task 2"));
         assertTrue(text2.contains("[x] task 1"));

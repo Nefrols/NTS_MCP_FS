@@ -42,38 +42,22 @@ public class McpServer {
 
     static {
         // Регистрация всех доступных инструментов сервера
-        router.registerTool(new FileInfoTool());
-        router.registerTool(new FileExistsTool());
-        router.registerTool(new ListDirectoryTool());
-        router.registerTool(new ReadFileTool());
-        router.registerTool(new ReadFileRangesTool());
+        router.registerTool(new FileReadTool());
+        router.registerTool(new FileManageTool());
+        router.registerTool(new FileSearchTool());
         router.registerTool(new EditFileTool());
-        router.registerTool(new SearchFilesTool());
-        router.registerTool(new FindFileTool());
-        router.registerTool(new CreateFileTool());
-        router.registerTool(new DeleteFileTool());
-        router.registerTool(new MoveFileTool());
-        router.registerTool(new RenameFileTool());
-        router.registerTool(new FileHistoryTool());
         router.registerTool(new CompareFilesTool());
-        router.registerTool(new UndoTool());
-        router.registerTool(new RedoTool());
-        router.registerTool(new CheckpointTool());
-
-
-        router.registerTool(new TransactionJournalTool());
+        
+        router.registerTool(new SessionTool());
+        
         router.registerTool(new GradleTool());
-        router.registerTool(new GitTool());
-        router.registerTool(new GitDiffTool());
-        router.registerTool(new GitCommitSessionTool());
+        router.registerTool(new GitCombinedTool());
+        
         router.registerTool(new BatchToolsTool(router));
-        router.registerTool(new TaskKillTool());
-        router.registerTool(new TaskLogTool());
-        router.registerTool(new ProjectStructureTool());
+        router.registerTool(new TaskTool());
+        
         router.registerTool(new ProjectReplaceTool());
-        router.registerTool(new TodoCreateTool());
-        router.registerTool(new TodoUpdateTool());
-        router.registerTool(new TodoStatusTool());
+        router.registerTool(new TodoTool());
     }
 
 

@@ -41,7 +41,7 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Edit file(s) atomically. PREFERRED: Use 'operations' for precise, multi-hunk editing. Supports fuzzy text replacement (less reliable), line ranges, and auto-indent. REQUIRED: read_file first (OR provide valid expectedChecksum to bypass for sequential editing).";
+        return "High-precision file editor. Best for applying multiple changes (hunks) simultaneously. PREFERRED: Use 'operations' array for precise line-based edits. MANDATORY: Read file before editing. Note: External tool changes bypass the session manager.";
     }
 
     @Override
@@ -61,40 +61,37 @@ public class EditFileTool implements McpTool {
         // Структура для пакетного редактирования нескольких файлов
         var edits = props.putObject("edits");
         edits.put("type", "array");
-        edits.put("description", "Batch mode: apply edits to multiple files in a single transaction. Example: [{\"path\": \"file1.java\", \"operations\": [...]}, {\"path\": \"file2.java\", \"oldText\": \"foo\", \"newText\": \"bar\"}]");
+        edits.put("description", "Multi-file transaction: all edits apply or all fail. Ideal for cross-file refactoring.");
         var editItem = edits.putObject("items");
         editItem.put("type", "object");
         var editProps = editItem.putObject("properties");
-        editProps.putObject("path").put("type", "string").put("description", "File to edit in batch.");
+        editProps.putObject("path").put("type", "string").put("description", "Path for this specific hunk set.");
         editProps.set("operations", mapper.createObjectNode()
                 .put("type", "array")
-                .put("description", "Atomic operations list. Format: [{\"operation\": \"replace|insert_before|insert_after|delete\", \"startLine\": N, \"endLine\": M, \"content\": \"...\", \"expectedContent\": \"...\"}]"));
+                .put("description", "Ordered list of steps: replace, insert_before, insert_after, delete. Processing is bottom-up to keep indices valid."));
 
         // Вспомогательные поля для каждого элемента в батче
-        editProps.putObject("oldText").put("type", "string").put("description", "Literal text to replace.");
-        editProps.putObject("newText").put("type", "string").put("description", "Replacement text.");
-        editProps.putObject("startLine").put("type", "integer").put("description", "1-based start line.");
-        editProps.putObject("endLine").put("type", "integer").put("description", "1-based end line.");
-        editProps.putObject("expectedContent").put("type", "string").put("description", "Validation string (exact match required).");
+        editProps.putObject("oldText").put("type", "string").put("description", "Fuzzy search fallback. Use when line numbers are unknown.");
+        editProps.putObject("newText").put("type", "string").put("description", "Text to inject.");
+        editProps.putObject("startLine").put("type", "integer").put("description", "1-based starting line.");
+        editProps.putObject("endLine").put("type", "integer").put("description", "1-based ending line.");
+        editProps.putObject("expectedContent").put("type", "string").put("description", "CRITICAL safety check: validation of current file state before edit.");
 
         // Поля корневого уровня для одиночных правок (обратная совместимость)
-        props.putObject("oldText").put("type", "string").put("description", "Exact text to replace. If not unique, throws error. If not found, attempts fuzzy match. PREFERRED: Use 'operations'.");
-        props.putObject("newText").put("type", "string").put("description", "Replacement text.");
-        props.putObject("startLine").put("type", "integer").put("description", "Range start.");
-        props.putObject("endLine").put("type", "integer").put("description", "Range end.");
-        props.putObject("expectedContent").put("type", "string").put("description", "REQUIRED for safety in line edits.");
-        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line indexing.");
-        props.putObject("expectedChecksum").put("type", "string").put("description", "CRC32C hex of file before edit. Bypasses read_file requirement if correct. Use the checksum from the previous successful edit to chain operations safely.");
+        props.putObject("oldText").put("type", "string").put("description", "Text to replace if 'operations' is not used. Supports whitespace normalization.");
+        props.putObject("newText").put("type", "string").put("description", "Replacement content.");
+        props.putObject("startLine").put("type", "integer").put("description", "Range start (1-based).");
+        props.putObject("endLine").put("type", "integer").put("description", "Range end (inclusive).");
+        props.putObject("expectedContent").put("type", "string").put("description", "Mandatory validation string. Prevents editing 'stale' context.");
+        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line addressing within the file.");
+        props.putObject("expectedChecksum").put("type", "string").put("description", "HEX CRC32C. Bypass read-check if state is known (e.g., from a previous edit).");
         
-        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction (e.g. 'Fix: updated null-check logic').");
-        props.putObject("dryRun").put("type", "boolean").put("description", "If true, only returns the diff of changes without applying them.");
+        props.putObject("instruction").put("type", "string").put("description", "Short summary of the change for the session journal.");
+        props.putObject("dryRun").put("type", "boolean").put("description", "Preview only: returns unified diff without disk write.");
 
         // Массив атомарных операций для одного файла
         var ops = props.putObject("operations");
-        ops.put("type", "array").put("description", "Atomic steps for a single file. PREFERRED method for code editing. " +
-                "Example: [{\"operation\": \"replace\", \"startLine\": 10, \"endLine\": 12, \"content\": \"new lines\", \"expectedContent\": \"old lines\"}, " +
-                "{\"operation\": \"insert_after\", \"line\": 20, \"content\": \"// comment\"}, " +
-                "{\"operation\": \"delete\", \"startLine\": 5, \"endLine\": 5}]");
+        ops.put("type", "array").put("description", "List of operations for the file. Recommended for reliability.");
 
         schema.putArray("required").add("path");
         return schema;

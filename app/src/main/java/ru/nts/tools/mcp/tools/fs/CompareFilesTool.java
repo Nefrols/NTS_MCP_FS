@@ -23,11 +23,9 @@ public class CompareFilesTool implements McpTool {
     @Override
     public String getName() {
         return "nts_compare_files";
-    }
-
-    @Override
+    }    @Override
     public String getDescription() {
-        return "Compare two files and return a unified diff.";
+        return "Compares two text files and returns the result in Unified Diff format.";
     }
 
     @Override
@@ -40,13 +38,14 @@ public class CompareFilesTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         var props = schema.putObject("properties");
-        props.putObject("path1").put("type", "string").put("description", "First file path (original).");
-        props.putObject("path2").put("type", "string").put("description", "Second file path (modified).");
+
+        props.putObject("path1").put("type", "string").put("description", "Path to the first (source) file for comparison.");
+        props.putObject("path2").put("type", "string").put("description", "Path to the second (modified) file for comparison.");
+
         schema.putArray("required").add("path1").add("path2");
         return schema;
     }
-
-    @Override
+@Override
     public JsonNode execute(JsonNode params) throws Exception {
         String p1Str = params.get("path1").asText();
         String p2Str = params.get("path2").asText();

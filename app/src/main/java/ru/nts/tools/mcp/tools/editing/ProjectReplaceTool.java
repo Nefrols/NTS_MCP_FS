@@ -32,7 +32,7 @@ public class ProjectReplaceTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Global search and replace across multiple files. Transactional (all changes can be undone by one nts_undo).";
+        return "Global find and replace tool. Performs atomic multi-file refactoring within a single transaction. Note: Changes made by external tools or other MCPs are not tracked and cannot be restored.";
     }
 
     @Override
@@ -46,12 +46,12 @@ public class ProjectReplaceTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("pattern").put("type", "string").put("description", "Search string or regex.");
-        props.putObject("replacement").put("type", "string").put("description", "Replacement text.");
-        props.putObject("isRegex").put("type", "boolean").put("description", "Treat pattern as regex.");
-        props.putObject("include").put("type", "string").put("description", "Optional: Glob pattern for files to include (e.g. 'src/**/*.java').");
-        props.putObject("exclude").put("type", "string").put("description", "Optional: Glob pattern for files to exclude.");
-        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction.");
+        props.putObject("pattern").put("type", "string").put("description", "Search string or regex pattern to find.");
+        props.putObject("replacement").put("type", "string").put("description", "New replacement text.");
+        props.putObject("isRegex").put("type", "boolean").put("description", "If true, the pattern is interpreted as a regular expression.");
+        props.putObject("include").put("type", "string").put("description", "Glob pattern to limit the search scope (e.g., 'src/**/*.java').");
+        props.putObject("exclude").put("type", "string").put("description", "Glob pattern to exclude specific files or directories.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction journal history.");
 
         schema.putArray("required").add("pattern").add("replacement");
         return schema;

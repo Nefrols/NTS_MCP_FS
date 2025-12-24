@@ -42,7 +42,7 @@ public class BatchToolsTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Atomic orchestrator. Executes multiple DIFFERENT tools in a single transaction (e.g. rename + edit).";
+        return "Atomic orchestrator. Executes a sequence of various actions as a single indivisible transaction. Note: Use of standard tools or other MCPs is not tracked by the session manager and cannot be restored via undo/redo/checkpoint.";
     }
 
     @Override
@@ -56,17 +56,16 @@ public class BatchToolsTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        // Определение массива действий для выполнения
         var actions = props.putObject("actions");
         actions.put("type", "array");
+        actions.put("description", "Ordered list of actions. Each action requires a 'tool' name and its 'params' object. Ideal for complex workflows like rename + edit.");
         var item = actions.putObject("items");
         item.put("type", "object");
         var itemProps = item.putObject("properties");
+        itemProps.putObject("tool").put("type", "string").put("description", "Target MCP tool name.");
+        itemProps.putObject("params").put("type", "object").put("description", "Arguments for the tool.");
 
-        itemProps.putObject("tool").put("type", "string").put("description", "Tool name.");
-        itemProps.putObject("params").put("type", "object").put("description", "Tool parameters.");
-        
-        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the whole batch transaction.");
+        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the entire batch to record in the transaction journal.");
 
         schema.putArray("required").add("actions");
         return schema;
