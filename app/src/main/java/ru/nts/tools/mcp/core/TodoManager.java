@@ -49,8 +49,16 @@ public class TodoManager {
         public String toString() {
             String stats = TransactionManager.getSessionStats();
 
+            // Получаем sessionId для отображения (важно для LLM!)
+            SessionContext ctx = SessionContext.current();
+            String sessionId = ctx != null ? ctx.getSessionId() : "none";
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("[HUD sid:").append(sessionId).append("] ");
+
             if (title == null) {
-                return String.format("[HUD] %s", stats);
+                sb.append(stats);
+                return sb.toString();
             }
 
             // Компактный прогресс: ✓3 ✗1 ○2 = 3 done, 1 failed, 2 pending
@@ -66,8 +74,6 @@ public class TodoManager {
                 progress.append("○").append(pending);
             }
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("[HUD] ");
             sb.append(title).append(" [").append(progress).append("]");
 
             if (nextTask != null) {
@@ -83,6 +89,14 @@ public class TodoManager {
         }
     }
 
+    /**
+     * Возвращает путь к директории todos текущей сессии.
+     */
+    private static Path getTodosDir() {
+        // Используем currentOrDefault() для согласованности с getSessionTodo()
+        return SessionContext.currentOrDefault().getTodosDir();
+    }
+
     public static HudInfo getHudInfo() {
         // Используем ТОЛЬКО TODO текущей сессии
         String sessionTodoFile = getSessionTodo();
@@ -90,7 +104,7 @@ public class TodoManager {
             return new HudInfo(null, 0, 0, 0, null, 0);
         }
 
-        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
+        Path todoDir = getTodosDir();
         Path activeFile = todoDir.resolve(sessionTodoFile);
 
         if (!Files.exists(activeFile)) {
@@ -147,7 +161,7 @@ public class TodoManager {
             return completed;
         }
 
-        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
+        Path todoDir = getTodosDir();
         Path activeFile = todoDir.resolve(sessionTodoFile);
 
         if (!Files.exists(activeFile)) {

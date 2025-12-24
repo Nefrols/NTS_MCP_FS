@@ -240,6 +240,45 @@ class FileSearchToolTest {
         assertTrue(text.contains("Matches found in 3 files"));
     }
 
+    // ==================== Find с glob ====================
+
+    @Test
+    void testFindGlobDoubleStarMatchesRoot() throws Exception {
+        // Файл в корне
+        Files.writeString(tempDir.resolve("RootFile.java"), "class RootFile {}");
+        // Файл в подпапке
+        Files.createDirectories(tempDir.resolve("src"));
+        Files.writeString(tempDir.resolve("src/Nested.java"), "class Nested {}");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "find");
+        params.put("path", ".");
+        params.put("pattern", "**/*.java");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        // Должен найти ОБА файла
+        assertTrue(text.contains("RootFile.java"), "Should find root file with **/*.java");
+        assertTrue(text.contains("Nested.java"), "Should find nested file with **/*.java");
+        assertTrue(text.contains("Found 2 matches"));
+    }
+
+    @Test
+    void testFindSimpleGlobInRoot() throws Exception {
+        Files.writeString(tempDir.resolve("Test.java"), "class Test {}");
+        Files.writeString(tempDir.resolve("Other.txt"), "text");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "find");
+        params.put("path", ".");
+        params.put("pattern", "*.java");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Test.java"));
+        assertFalse(text.contains("Other.txt"));
+    }
+
     // ==================== Кириллица ====================
 
     @Test

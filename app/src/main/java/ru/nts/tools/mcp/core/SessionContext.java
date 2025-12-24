@@ -2,7 +2,6 @@
 package ru.nts.tools.mcp.core;
 
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -36,6 +35,9 @@ public class SessionContext {
     private final SessionSearchTracker searchTracker;
     private volatile String activeTodoFile;
 
+    // Текущий вызываемый инструмент (для диагностики)
+    private volatile String currentToolName;
+
     /**
      * Создает новый контекст сессии.
      */
@@ -50,11 +52,12 @@ public class SessionContext {
 
     /**
      * Получает или создает контекст для указанной сессии.
-     * Если sessionId == null, генерируется новый UUID.
+     * Если sessionId == null или пустой, используется "default" сессия.
+     * Это критично для совместимости с клиентами, не передающими sessionId.
      */
     public static SessionContext getOrCreate(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            sessionId = UUID.randomUUID().toString();
+            sessionId = "default";
         }
         return sessions.computeIfAbsent(sessionId, SessionContext::new);
     }
@@ -149,6 +152,42 @@ public class SessionContext {
 
     public void setActiveTodoFile(String fileName) {
         this.activeTodoFile = fileName;
+    }
+
+    /**
+     * Возвращает текущий вызываемый инструмент.
+     */
+    public String getCurrentToolName() {
+        return currentToolName;
+    }
+
+    /**
+     * Устанавливает текущий вызываемый инструмент.
+     */
+    public void setCurrentToolName(String toolName) {
+        this.currentToolName = toolName;
+    }
+
+    /**
+     * Возвращает путь к директории сессии.
+     * Структура: .nts/sessions/{sessionId}/
+     */
+    public java.nio.file.Path getSessionDir() {
+        return PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+    }
+
+    /**
+     * Возвращает путь к директории todos сессии.
+     */
+    public java.nio.file.Path getTodosDir() {
+        return getSessionDir().resolve("todos");
+    }
+
+    /**
+     * Возвращает путь к директории snapshots сессии.
+     */
+    public java.nio.file.Path getSnapshotsDir() {
+        return getSessionDir().resolve("snapshots");
     }
 
     /**

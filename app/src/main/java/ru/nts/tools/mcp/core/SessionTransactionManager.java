@@ -38,7 +38,8 @@ public class SessionTransactionManager {
     private final ThreadLocal<Integer> nestingLevel = ThreadLocal.withInitial(() -> 0);
 
     private Path getSnapshotDir() throws IOException {
-        Path dir = PathSanitizer.getRoot().resolve(".nts/snapshots");
+        // Используем currentOrDefault() для согласованности
+        Path dir = SessionContext.currentOrDefault().getSnapshotsDir();
         if (!Files.exists(dir)) {
             Files.createDirectories(dir);
         }

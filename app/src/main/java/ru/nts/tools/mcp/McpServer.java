@@ -13,6 +13,8 @@ import ru.nts.tools.mcp.tools.external.*;
 import ru.nts.tools.mcp.tools.planning.*;
 import ru.nts.tools.mcp.tools.system.*;
 
+import java.util.Set;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -46,24 +48,47 @@ public class McpServer {
      */
     private static final boolean DEBUG = true;
 
+    /**
+     * Множество известных валидных sessionId (для проверки).
+     * Сессии создаются через nts_init и добавляются сюда.
+     */
+    private static final Set<String> validSessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     static {
         // Регистрация всех доступных инструментов сервера
+        router.registerTool(new InitTool());  // MUST be first - creates sessions
+
         router.registerTool(new FileReadTool());
         router.registerTool(new FileManageTool());
         router.registerTool(new FileSearchTool());
         router.registerTool(new EditFileTool());
         router.registerTool(new CompareFilesTool());
-        
+
         router.registerTool(new SessionTool());
-        
+
         router.registerTool(new GradleTool());
         router.registerTool(new GitCombinedTool());
-        
+
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskTool());
-        
+
         router.registerTool(new ProjectReplaceTool());
         router.registerTool(new TodoTool());
+    }
+
+    /**
+     * Регистрирует новую валидную сессию.
+     * Вызывается из InitTool после создания сессии.
+     */
+    public static void registerValidSession(String sessionId) {
+        validSessions.add(sessionId);
+    }
+
+    /**
+     * Проверяет, является ли sessionId валидным.
+     */
+    public static boolean isValidSession(String sessionId) {
+        return sessionId != null && validSessions.contains(sessionId);
     }
 
 
@@ -111,11 +136,14 @@ public class McpServer {
      * @param message Строка, содержащая JSON-RPC запрос.
      */
     private static void processMessage(String message) {
-        // Извлекаем sessionId из _meta параметров запроса (если есть)
+        // Извлекаем sessionId из параметров запроса
+        // Поддерживаем два способа передачи:
+        // 1. arguments.sessionId - для агентов, которые не могут передавать _meta
+        // 2. _meta.sessionId - для клиентов, поддерживающих метаданные MCP
         String sessionId = null;
         try {
             JsonNode request = mapper.readTree(message);
-            sessionId = request.path("params").path("_meta").path("sessionId").asText(null);
+            sessionId = extractSessionId(request);
         } catch (Exception ignored) {
             // Если не удалось извлечь sessionId - будет использована default сессия
         }
@@ -130,6 +158,31 @@ public class McpServer {
             // Очищаем контекст потока (но сессия остается в реестре)
             SessionContext.clearCurrent();
         }
+    }
+
+    /**
+     * Извлекает sessionId из JSON-RPC запроса.
+     * Проверяет два возможных местоположения:
+     * 1. params.arguments.sessionId - явный параметр в аргументах инструмента
+     * 2. params._meta.sessionId - метаданные MCP протокола
+     *
+     * @param request JSON-RPC запрос
+     * @return sessionId или null, если не найден
+     */
+    private static String extractSessionId(JsonNode request) {
+        // Сначала проверяем arguments.sessionId (приоритет для агентов)
+        String fromArgs = request.path("params").path("arguments").path("sessionId").asText(null);
+        if (fromArgs != null && !fromArgs.isBlank()) {
+            return fromArgs;
+        }
+
+        // Затем проверяем _meta.sessionId (для MCP-клиентов)
+        String fromMeta = request.path("params").path("_meta").path("sessionId").asText(null);
+        if (fromMeta != null && !fromMeta.isBlank()) {
+            return fromMeta;
+        }
+
+        return null;
     }
 
     /**
@@ -207,7 +260,40 @@ public class McpServer {
                     case "tools/call" -> {
                         String toolName = request.path("params").path("name").asText();
                         JsonNode params = request.path("params").path("arguments");
-                        response.set("result", router.callTool(toolName, params));
+                        // Извлекаем sessionId из arguments или _meta
+                        String sessionId = extractSessionId(request);
+
+                        // Проверяем, требует ли инструмент сессию
+                        boolean requiresSession = router.toolRequiresSession(toolName);
+
+                        if (requiresSession) {
+                            // Проверяем наличие и валидность sessionId
+                            if (sessionId == null || sessionId.isBlank()) {
+                                throw new IllegalStateException(
+                                    "NO_SESSION: This tool requires a valid session ID. " +
+                                    "Call nts_init first to create a session, then pass the returned sessionId " +
+                                    "in the 'sessionId' parameter for all subsequent requests.");
+                            }
+                            if (!isValidSession(sessionId)) {
+                                throw new IllegalStateException(
+                                    "INVALID_SESSION: Session ID '" + sessionId + "' is not recognized. " +
+                                    "The session may have expired or never existed. " +
+                                    "Call nts_init to create a new session.");
+                            }
+                        }
+
+                        // Устанавливаем контекст сессии (для nts_init будет создан новый)
+                        SessionContext ctx = SessionContext.current();
+                        if (ctx != null) {
+                            ctx.setCurrentToolName(toolName);
+                        }
+                        try {
+                            response.set("result", router.callTool(toolName, params));
+                        } finally {
+                            if (ctx != null) {
+                                ctx.setCurrentToolName(null);
+                            }
+                        }
                     }
                     case "logging/setLevel" -> {
                         // Заглушка для установки уровня логирования

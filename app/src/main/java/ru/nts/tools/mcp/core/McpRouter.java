@@ -48,6 +48,10 @@ public class McpRouter {
      * Формирует список всех доступных инструментов в формате, соответствующем протоколу MCP.
      * Используется для ответа на запрос 'tools/list'.
      *
+     * Для инструментов, требующих сессию (requiresSession=true), автоматически добавляется
+     * обязательный параметр sessionId в inputSchema. Это позволяет агентам передавать
+     * sessionId напрямую в аргументах вызова, а не только через _meta.
+     *
      * @return JsonNode, содержащий массив объектов с описанием имен, описаний и схем параметров инструментов.
      */
     public JsonNode listTools() {
@@ -59,7 +63,39 @@ public class McpRouter {
             String description = "[" + tool.getCategory().toUpperCase() + "] " + tool.getDescription();
             toolNode.put("description", description);
             toolNode.put("category", tool.getCategory());
-            toolNode.set("inputSchema", tool.getInputSchema());
+
+            // Получаем базовую схему инструмента
+            JsonNode baseSchema = tool.getInputSchema();
+
+            // Для инструментов, требующих сессию, добавляем sessionId в схему
+            if (tool.requiresSession() && baseSchema instanceof ObjectNode schemaNode) {
+                ObjectNode enrichedSchema = schemaNode.deepCopy();
+
+                // Добавляем sessionId в properties
+                ObjectNode properties = (ObjectNode) enrichedSchema.get("properties");
+                if (properties == null) {
+                    properties = mapper.createObjectNode();
+                    enrichedSchema.set("properties", properties);
+                }
+
+                ObjectNode sessionIdProp = mapper.createObjectNode();
+                sessionIdProp.put("type", "string");
+                sessionIdProp.put("description", "Session UUID obtained from nts_init. Required for all tools except nts_init.");
+                properties.set("sessionId", sessionIdProp);
+
+                // Добавляем sessionId в required
+                ArrayNode required = (ArrayNode) enrichedSchema.get("required");
+                if (required == null) {
+                    required = mapper.createArrayNode();
+                    enrichedSchema.set("required", required);
+                }
+                required.add("sessionId");
+
+                toolNode.set("inputSchema", enrichedSchema);
+            } else {
+                toolNode.set("inputSchema", baseSchema);
+            }
+
             toolsArray.add(toolNode);
         }
         ObjectNode result = mapper.createObjectNode();
@@ -94,5 +130,20 @@ public class McpRouter {
      */
     public McpTool getTool(String name) {
         return tools.get(name);
+    }
+
+    /**
+     * Проверяет, требует ли инструмент валидную сессию.
+     *
+     * @param name Имя инструмента.
+     * @return true если инструмент требует сессию, false если может работать без неё.
+     * @throws IllegalArgumentException если инструмент не найден.
+     */
+    public boolean toolRequiresSession(String name) {
+        McpTool tool = getTool(name);
+        if (tool == null) {
+            throw new IllegalArgumentException("Tool not found: " + name);
+        }
+        return tool.requiresSession();
     }
 }

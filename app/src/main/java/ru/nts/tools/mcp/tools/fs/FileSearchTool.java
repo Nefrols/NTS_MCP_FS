@@ -162,11 +162,39 @@ public class FileSearchTool implements McpTool {
     }
 
     private JsonNode executeFind(String pathStr, String pattern) throws IOException {
-        Path path = PathSanitizer.sanitize(pathStr, true);
+        Path basePath = PathSanitizer.sanitize(pathStr, true);
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+        Path root = PathSanitizer.getRoot();
+
+        // Для паттернов типа **/*.java создаём дополнительный matcher для корневых файлов
+        // Извлекаем паттерн после **/ для проверки файлов в корне
+        PathMatcher fileNameMatcher = null;
+        if (pattern.startsWith("**/")) {
+            String filePattern = pattern.substring(3); // Убираем **/
+            fileNameMatcher = FileSystems.getDefault().getPathMatcher("glob:" + filePattern);
+        }
+        final PathMatcher finalFileNameMatcher = fileNameMatcher;
+
         List<String> found = new ArrayList<>();
-        try (var s = Files.walk(path)) {
-            s.filter(p -> matcher.matches(p.getFileName())).forEach(p -> found.add(PathSanitizer.getRoot().relativize(p).toString()));
+        try (var s = Files.walk(basePath)) {
+            s.filter(p -> {
+                Path relativePath = root.relativize(p);
+                Path fileName = p.getFileName();
+
+                // Проверяем полный относительный путь
+                if (matcher.matches(relativePath)) {
+                    return true;
+                }
+                // Проверяем только имя файла (для простых паттернов типа *.java)
+                if (matcher.matches(fileName)) {
+                    return true;
+                }
+                // Для **/*.ext проверяем файлы в корне через extracted pattern
+                if (finalFileNameMatcher != null && finalFileNameMatcher.matches(fileName)) {
+                    return true;
+                }
+                return false;
+            }).forEach(p -> found.add(root.relativize(p).toString()));
         }
         return createResponse("Found " + found.size() + " matches:\n" + String.join("\n", found));
     }

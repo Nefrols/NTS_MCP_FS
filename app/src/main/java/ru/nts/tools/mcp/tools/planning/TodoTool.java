@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.TodoManager;
 
 import java.io.IOException;
@@ -26,6 +27,13 @@ public class TodoTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private static final Pattern TODO_ITEM_PATTERN = Pattern.compile("^\\s*([-*]|\\d+\\.)\\s+\\[([ xX])]\\s+(.*)$");
+
+    /**
+     * Возвращает путь к директории todos текущей сессии.
+     */
+    private Path getTodosDir() {
+        return SessionContext.currentOrDefault().getTodosDir();
+    }
 
     @Override
     public String getName() { return "nts_todo"; }
@@ -54,7 +62,7 @@ public class TodoTool implements McpTool {
             INTEGRATION:
             • HUD displays active plan progress
             • nts_git commit_session includes completed tasks
-            • Plans stored in .nts/todos/ directory
+            • Plans stored in .nts/sessions/{sessionId}/todos/
 
             TIP: Use numbered IDs from status output for updates.
             """;
@@ -117,7 +125,7 @@ public class TodoTool implements McpTool {
         String title = params.path("title").asText("New Plan");
         String content = params.path("content").asText("");
 
-        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
+        Path todoDir = getTodosDir();
         if (!Files.exists(todoDir)) Files.createDirectories(todoDir);
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
@@ -133,7 +141,7 @@ public class TodoTool implements McpTool {
     }
 
     private JsonNode executeStatus(JsonNode params) throws IOException {
-        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
+        Path todoDir = getTodosDir();
 
         // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
         String fileName = params.path("fileName").asText(null);
@@ -155,7 +163,7 @@ public class TodoTool implements McpTool {
     }
 
     private JsonNode executeUpdate(JsonNode params) throws Exception {
-        Path todoDir = PathSanitizer.getRoot().resolve(".nts/todos");
+        Path todoDir = getTodosDir();
 
         // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
         String fileName = params.path("fileName").asText(null);

@@ -1,6 +1,7 @@
 // Aristo 25.12.2025
 package ru.nts.tools.mcp.core;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.tools.editing.EditFileTool;
@@ -12,14 +13,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExtendedHudTest {
 
-    @Test
-    void testHudWithStats(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-        LineAccessTracker.reset();
+    @TempDir
+    Path tempDir;
 
-        // Создаем TODO файл и устанавливаем его как сессионный
-        Path todoDir = tempDir.resolve(".nts/todos");
+    @BeforeEach
+    void setUp() {
+        PathSanitizer.setRoot(tempDir);
+        // Полностью сбрасываем все сессии для чистого состояния
+        SessionContext.resetAll();
+        // Устанавливаем стабильную сессию для всех тестов
+        SessionContext ctx = SessionContext.getOrCreate("test-session");
+        SessionContext.setCurrent(ctx);
+    }
+
+    @Test
+    void testHudWithStats() throws Exception {
+        SessionContext ctx = SessionContext.current();
+
+        // Создаем TODO файл в директории сессии
+        Path todoDir = ctx.getTodosDir();
         Files.createDirectories(todoDir);
         Files.writeString(todoDir.resolve("TODO_1.md"), "# TODO: Test Plan\n- [x] Task 1\n- [ ] Task 2");
         TodoManager.setSessionTodo("TODO_1.md");
@@ -44,8 +56,9 @@ class ExtendedHudTest {
         TodoManager.HudInfo hud = TodoManager.getHudInfo();
         String hudStr = hud.toString();
 
-        // Новый формат HUD: [HUD] Test Plan [✓1 ○1] → #2: Task 2 | Session: 1 edits, 0 undos | Unlocked: 1 files
-        assertTrue(hudStr.contains("Test Plan"), "Should contain plan title");
+        // Новый формат HUD: [HUD sid:test-session] Test Plan [✓1 ○1] → #2: Task 2 | Session: 1 edits, 0 undos | Unlocked: 1 files
+        assertTrue(hudStr.contains("sid:test-session"), "Should contain session ID: " + hudStr);
+        assertTrue(hudStr.contains("Test Plan"), "Should contain plan title: " + hudStr);
         assertTrue(hudStr.contains("✓1"), "Should show 1 completed task");
         assertTrue(hudStr.contains("○1"), "Should show 1 pending task");
         assertTrue(hudStr.contains("Session: 1 edits"), "Should show edit count");
