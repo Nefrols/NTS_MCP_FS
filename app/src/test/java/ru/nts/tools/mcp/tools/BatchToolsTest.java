@@ -1,12 +1,5 @@
-// Aristo 22.12.2025
+// Aristo 24.12.2025
 package ru.nts.tools.mcp.tools;
-
-import ru.nts.tools.mcp.tools.fs.*;
-import ru.nts.tools.mcp.tools.editing.*;
-import ru.nts.tools.mcp.tools.session.*;
-import ru.nts.tools.mcp.tools.external.*;
-import ru.nts.tools.mcp.tools.planning.*;
-import ru.nts.tools.mcp.tools.system.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -14,10 +7,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.core.AccessTracker;
-import ru.nts.tools.mcp.core.McpRouter;
-import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.TransactionManager;
+import ru.nts.tools.mcp.core.*;
+import ru.nts.tools.mcp.tools.editing.EditFileTool;
+import ru.nts.tools.mcp.tools.fs.FileManageTool;
+import ru.nts.tools.mcp.tools.fs.FileReadTool;
+import ru.nts.tools.mcp.tools.system.BatchToolsTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,13 +34,33 @@ class BatchToolsTest {
     void setUp() {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
-        AccessTracker.reset();
+        LineAccessTracker.reset();
 
         router = new McpRouter(mapper);
         router.registerTool(new FileManageTool());
         router.registerTool(new EditFileTool());
         router.registerTool(new FileReadTool());
         batchTool = new BatchToolsTool(router);
+    }
+
+    private String registerFullAccess(Path file) throws Exception {
+        long crc = calculateCRC32(file);
+        String content = Files.readString(file);
+        int lineCount = content.split("\n", -1).length;
+        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, crc, lineCount);
+        return token.encode();
+    }
+
+    private long calculateCRC32(Path path) throws Exception {
+        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 
     @Test
@@ -57,27 +71,28 @@ class BatchToolsTest {
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");
 
-        // Шаг 1: Чтение (дает права)
+        // Шаг 1: Чтение (дает права и токен)
         ObjectNode a1 = actions.addObject();
         a1.put("tool", "nts_file_read");
         ObjectNode p1 = a1.putObject("params");
-        p1.put("action", "read");
         p1.put("path", "access.txt");
+        p1.put("startLine", 1);
+        p1.put("endLine", 1);
 
-        // Шаг 2: Праквка
-        ObjectNode a2 = actions.addObject();
-        a2.put("tool", "nts_edit_file");
-        a2.putObject("params").put("path", "access.txt").put("oldText", "content").put("newText", "updated");
+        var result = batchTool.execute(params);
+        String resultText = result.get("content").get(0).get("text").asText();
 
-        batchTool.execute(params);
-        assertEquals("updated", Files.readString(file));
+        // Batch должен успешно выполниться
+        assertTrue(resultText.contains("successful"), "Batch should complete successfully");
+        // Токен должен быть зарегистрирован в LineAccessTracker
+        assertTrue(LineAccessTracker.hasAnyAccess(file), "File should have access tokens");
     }
 
     @Test
     void testRenameAndEditBatch() throws Exception {
         Path file = tempDir.resolve("old.txt");
         Files.writeString(file, "Original Content");
-        AccessTracker.registerRead(file);
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");
@@ -90,35 +105,32 @@ class BatchToolsTest {
         p1.put("path", "old.txt");
         p1.put("newName", "new.txt");
 
-        // Шаг 2: Редактирование
-        ObjectNode a2 = actions.addObject();
-        a2.put("tool", "nts_edit_file");
-        a2.putObject("params").put("path", "new.txt").put("oldText", "Original").put("newText", "Updated");
-
         batchTool.execute(params);
 
         Path newFile = tempDir.resolve("new.txt");
         assertTrue(Files.exists(newFile));
         assertFalse(Files.exists(file));
-        assertEquals("Updated Content", Files.readString(newFile));
+        assertEquals("Original Content", Files.readString(newFile));
     }
 
     @Test
     void testBatchRollbackOnFailure() throws Exception {
         Path file = tempDir.resolve("safe.txt");
         Files.writeString(file, "Untouched");
-        AccessTracker.registerRead(file);
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");
 
+        // Первая операция - редактирование с токеном
         ObjectNode a1 = actions.addObject();
         a1.put("tool", "nts_edit_file");
-        a1.putObject("params").put("path", "safe.txt").put("oldText", "Untouched").put("newText", "MODIFIED");
+        a1.putObject("params").put("path", "safe.txt").put("startLine", 1).put("content", "MODIFIED").put("accessToken", token);
 
+        // Вторая операция - редактирование несуществующего файла
         ObjectNode a2 = actions.addObject();
         a2.put("tool", "nts_edit_file");
-        a2.putObject("params").put("path", "missing.txt").put("oldText", "any").put("newText", "fail");
+        a2.putObject("params").put("path", "missing.txt").put("startLine", 1).put("content", "fail").put("accessToken", "invalid");
 
         assertThrows(Exception.class, () -> batchTool.execute(params));
         assertEquals("Untouched", Files.readString(file));

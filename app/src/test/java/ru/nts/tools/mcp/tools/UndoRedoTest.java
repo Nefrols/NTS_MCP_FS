@@ -1,12 +1,5 @@
-// Aristo 22.12.2025
+// Aristo 24.12.2025
 package ru.nts.tools.mcp.tools;
-
-import ru.nts.tools.mcp.tools.fs.*;
-import ru.nts.tools.mcp.tools.editing.*;
-import ru.nts.tools.mcp.tools.session.*;
-import ru.nts.tools.mcp.tools.external.*;
-import ru.nts.tools.mcp.tools.planning.*;
-import ru.nts.tools.mcp.tools.system.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,9 +7,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
+import ru.nts.tools.mcp.tools.editing.EditFileTool;
+import ru.nts.tools.mcp.tools.fs.FileManageTool;
+import ru.nts.tools.mcp.tools.session.SessionTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,7 +37,27 @@ class UndoRedoTest {
     void setUp() {
         PathSanitizer.setRoot(sharedTempDir);
         TransactionManager.reset();
-        AccessTracker.reset();
+        LineAccessTracker.reset();
+    }
+
+    private String registerFullAccess(Path file) throws Exception {
+        long crc = calculateCRC32(file);
+        String content = Files.readString(file);
+        int lineCount = content.split("\n", -1).length;
+        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, crc, lineCount);
+        return token.encode();
+    }
+
+    private long calculateCRC32(Path path) throws Exception {
+        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 
     @Test
@@ -48,10 +65,11 @@ class UndoRedoTest {
         Path file = sharedTempDir.resolve("atomic.txt");
         String original = "Original";
         Files.writeString(file, original);
-        AccessTracker.registerRead(file);
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", "atomic.txt");
+        params.put("accessToken", token);
         var ops = params.putArray("operations");
         ops.addObject().put("operation", "replace").put("startLine", 1).put("endLine", 1).put("content", "New");
         ops.addObject().put("operation", "replace").put("startLine", 100).put("content", "Error");
@@ -65,7 +83,6 @@ class UndoRedoTest {
         Path file = sharedTempDir.resolve("to_delete.txt");
         String content = "Vital Data";
         Files.writeString(file, content);
-        AccessTracker.registerRead(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("action", "delete");
@@ -85,7 +102,6 @@ class UndoRedoTest {
         Path source = sharedTempDir.resolve("source.txt");
         Path target = sharedTempDir.resolve("sub/target.txt");
         Files.writeString(source, "move me");
-        AccessTracker.registerRead(source);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("action", "move");
@@ -107,12 +123,13 @@ class UndoRedoTest {
     void testRedoStackInvalidation() throws Exception {
         Path file = sharedTempDir.resolve("test.txt");
         Files.writeString(file, "init");
-        AccessTracker.registerRead(file);
+        String token1 = registerFullAccess(file);
 
         ObjectNode p1 = mapper.createObjectNode();
         p1.put("path", "test.txt");
-        p1.put("oldText", "init");
-        p1.put("newText", "A");
+        p1.put("startLine", 1);
+        p1.put("content", "A");
+        p1.put("accessToken", token1);
         editTool.execute(p1);
 
         ObjectNode undoP = mapper.createObjectNode();
@@ -120,10 +137,13 @@ class UndoRedoTest {
         sessionTool.execute(undoP);
         assertEquals("init", Files.readString(file));
 
+        // После undo нужно получить новый токен
+        String token2 = registerFullAccess(file);
         ObjectNode p2 = mapper.createObjectNode();
         p2.put("path", "test.txt");
-        p2.put("oldText", "init");
-        p2.put("newText", "B");
+        p2.put("startLine", 1);
+        p2.put("content", "B");
+        p2.put("accessToken", token2);
         editTool.execute(p2);
 
         ObjectNode redoP = mapper.createObjectNode();
@@ -138,13 +158,14 @@ class UndoRedoTest {
     void testLongHistoryCycle() throws Exception {
         Path file = sharedTempDir.resolve("history.txt");
         Files.writeString(file, "0");
-        AccessTracker.registerRead(file);
 
         for (int i = 1; i <= 3; i++) {
+            String token = registerFullAccess(file);
             ObjectNode p = mapper.createObjectNode();
             p.put("path", "history.txt");
-            p.put("oldText", String.valueOf(i - 1));
-            p.put("newText", String.valueOf(i));
+            p.put("startLine", 1);
+            p.put("content", String.valueOf(i));
+            p.put("accessToken", token);
             editTool.execute(p);
         }
         assertEquals("3", Files.readString(file));
@@ -167,9 +188,10 @@ class UndoRedoTest {
     void testTransactionJournal(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
+        LineAccessTracker.reset();
+
         Path f = tempDir.resolve("test.txt");
         Files.writeString(f, "init\n");
-        AccessTracker.registerRead(f);
 
         TransactionManager.startTransaction("Manual Edit");
         TransactionManager.backup(f);
@@ -190,17 +212,18 @@ class UndoRedoTest {
     void testCheckpoints() throws Exception {
         Path file = sharedTempDir.resolve("check.txt");
         Files.writeString(file, "initial");
-        AccessTracker.registerRead(file);
 
         ObjectNode cp1 = mapper.createObjectNode();
         cp1.put("action", "checkpoint");
         cp1.put("name", "PointA");
         sessionTool.execute(cp1);
 
+        String token = registerFullAccess(file);
         ObjectNode edit = mapper.createObjectNode();
         edit.put("path", "check.txt");
-        edit.put("oldText", "initial");
-        edit.put("newText", "modified");
+        edit.put("startLine", 1);
+        edit.put("content", "modified");
+        edit.put("accessToken", token);
         editTool.execute(edit);
         assertEquals("modified", Files.readString(file));
 

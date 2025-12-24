@@ -42,7 +42,29 @@ public class BatchToolsTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Atomic orchestrator. Executes a sequence of various actions as a single indivisible transaction. Note: Use of standard tools or other MCPs is not tracked by the session manager and cannot be restored via undo/redo/checkpoint.";
+        return """
+            Atomic transaction orchestrator - execute multiple tools as single operation.
+
+            KEY FEATURE: All-or-nothing execution
+            • If ANY action fails → ALL previous actions rolled back
+            • Perfect for complex workflows requiring consistency
+
+            USE CASES:
+            • Rename file + update imports
+            • Create file + edit another + update config
+            • Read multiple files + apply coordinated edits
+
+            EXAMPLE:
+            actions: [
+              {tool: 'nts_file_manage', params: {action: 'rename', path: 'Old.java', newName: 'New.java'}},
+              {tool: 'nts_edit_file', params: {path: 'Main.java', startLine: 5, content: 'import New;', accessToken: '...'}}
+            ]
+
+            TOKENS: Read operations in batch register access tokens.
+            Use tokens from read results for subsequent edits in same batch.
+
+            LIMITATION: Only NTS MCP tools tracked. External tools not included in rollback.
+            """;
     }
 
     @Override
@@ -58,14 +80,21 @@ public class BatchToolsTool implements McpTool {
 
         var actions = props.putObject("actions");
         actions.put("type", "array");
-        actions.put("description", "Ordered list of actions. Each action requires a 'tool' name and its 'params' object. Ideal for complex workflows like rename + edit.");
+        actions.put("description",
+                "Ordered list of tool calls. Executed sequentially. " +
+                "On any failure, all previous actions are rolled back. Required.");
+
         var item = actions.putObject("items");
         item.put("type", "object");
         var itemProps = item.putObject("properties");
-        itemProps.putObject("tool").put("type", "string").put("description", "Target MCP tool name.");
-        itemProps.putObject("params").put("type", "object").put("description", "Arguments for the tool.");
+        itemProps.putObject("tool").put("type", "string").put("description",
+                "NTS MCP tool name: 'nts_file_read', 'nts_edit_file', 'nts_file_manage', etc.");
+        itemProps.putObject("params").put("type", "object").put("description",
+                "Tool parameters as object. Same format as direct tool call.");
 
-        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the entire batch to record in the transaction journal.");
+        props.putObject("instruction").put("type", "string").put("description",
+                "Descriptive label for session journal. Example: 'Rename User class to Account'. " +
+                "Helps identify batch in undo history.");
 
         schema.putArray("required").add("actions");
         return schema;

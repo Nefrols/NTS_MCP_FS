@@ -4,7 +4,7 @@ package ru.nts.tools.mcp.tools.fs;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
@@ -22,11 +22,31 @@ public class FileManageTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
-    public String getName() { return "nts_file_manage"; }
+    public String getName() {
+        return "nts_file_manage";
+    }
 
     @Override
     public String getDescription() {
-        return "Structural modification tool. Use this to create, delete, move, or rename files and directories. All operations are transactional and support UNDO. Note: Changes made by external tools or other MCPs are not tracked and cannot be restored.";
+        return """
+            File system structure manager with full UNDO support.
+
+            ACTIONS:
+            • create - New file with optional initial content. Parent dirs auto-created.
+            • delete - Remove file/directory. Use recursive=true for non-empty dirs.
+            • move   - Relocate file/dir to new path. Preserves access tokens!
+            • rename - Change filename in same directory. Preserves access tokens!
+
+            TOKEN BEHAVIOR:
+            • move/rename: Tokens automatically transferred to new path
+            • delete: All tokens for the file are invalidated
+            • create: No tokens (must read first to get them)
+
+            SAFETY:
+            • All operations are transactional (auto-rollback on error)
+            • Use nts_session(action='undo') to reverse any operation
+            • External changes (by other tools) cannot be undone
+            """;
     }
 
     @Override
@@ -40,12 +60,28 @@ public class FileManageTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("action").put("type", "string").put("description", "Action: 'create' (new file), 'delete' (remove), 'move' (relocate), 'rename' (change name).");
-        props.putObject("path").put("type", "string").put("description", "Primary target path relative to project root.");
-        props.putObject("content").put("type", "string").put("description", "Initial file data for 'create'. Can be empty.");
-        props.putObject("targetPath").put("type", "string").put("description", "Destination for 'move'. Missing parent directories will be created automatically.");
-        props.putObject("newName").put("type", "string").put("description", "New filename for 'rename' (keeps the same parent directory).");
-        props.putObject("recursive").put("type", "boolean").put("description", "Required for 'delete' if the target is a non-empty directory.");
+        props.putObject("action").put("type", "string").put("description",
+                "Operation: 'create', 'delete', 'move', 'rename'. Required.");
+
+        props.putObject("path").put("type", "string").put("description",
+                "Target path (relative to project root). For create: new file path. " +
+                "For delete/move/rename: existing file/dir path. Required.");
+
+        props.putObject("content").put("type", "string").put("description",
+                "For 'create': initial file content. Omit for empty file. " +
+                "Tip: Use nts_edit_file for complex content - it has better formatting.");
+
+        props.putObject("targetPath").put("type", "string").put("description",
+                "For 'move': destination path. Parent directories created automatically. " +
+                "Example: move 'src/old.java' to 'src/util/new.java'.");
+
+        props.putObject("newName").put("type", "string").put("description",
+                "For 'rename': new filename only (not full path). Stays in same directory. " +
+                "Example: rename 'OldClass.java' to 'NewClass.java'.");
+
+        props.putObject("recursive").put("type", "boolean").put("description",
+                "For 'delete': required if target is non-empty directory. " +
+                "CAUTION: Deletes all contents! Default: false.");
 
         schema.putArray("required").add("action").add("path");
         return schema;
@@ -67,11 +103,15 @@ public class FileManageTool implements McpTool {
     }
 
     private JsonNode executeCreate(Path path, String pathStr, String content) throws IOException {
-        if (Files.exists(path)) throw new IOException("File already exists: " + pathStr);
-        
+        if (Files.exists(path)) {
+            throw new IOException("File already exists: " + pathStr);
+        }
+
         TransactionManager.startTransaction("Create file: " + pathStr);
         try {
-            if (path.getParent() != null) Files.createDirectories(path.getParent());
+            if (path.getParent() != null) {
+                Files.createDirectories(path.getParent());
+            }
             TransactionManager.backup(path); // This will record that file didn't exist
             Files.writeString(path, content);
             TransactionManager.commit();
@@ -83,21 +123,31 @@ public class FileManageTool implements McpTool {
     }
 
     private JsonNode executeDelete(Path path, String pathStr, boolean recursive) throws IOException {
-        if (!Files.exists(path)) throw new IOException("Path not found: " + pathStr);
+        if (!Files.exists(path)) {
+            throw new IOException("Path not found: " + pathStr);
+        }
 
         TransactionManager.startTransaction("Delete: " + pathStr);
         try {
             if (Files.isDirectory(path)) {
-                // For directory delete, we backup all files inside
+                // For directory delete, we backup all files inside and invalidate tokens
                 try (var s = Files.walk(path)) {
                     s.filter(Files::isRegularFile).forEach(p -> {
-                        try { TransactionManager.backup(p); } catch (IOException ignored) {}
+                        try {
+                            TransactionManager.backup(p);
+                            LineAccessTracker.invalidateFile(p);
+                        } catch (IOException ignored) {
+                        }
                     });
                 }
-                if (recursive) deleteRecursive(path);
-                else Files.delete(path);
+                if (recursive) {
+                    deleteRecursive(path);
+                } else {
+                    Files.delete(path);
+                }
             } else {
                 TransactionManager.backup(path);
+                LineAccessTracker.invalidateFile(path);
                 Files.delete(path);
             }
             TransactionManager.commit();
@@ -107,11 +157,14 @@ public class FileManageTool implements McpTool {
         }
         return createResponse("Deleted: " + pathStr);
     }
-    
+
     private void deleteRecursive(Path path) throws IOException {
         try (var s = Files.walk(path)) {
             s.sorted((p1, p2) -> p2.compareTo(p1)).forEach(p -> {
-                try { Files.delete(p); } catch (IOException ignored) {}
+                try {
+                    Files.delete(p);
+                } catch (IOException ignored) {
+                }
             });
         }
     }
@@ -120,11 +173,14 @@ public class FileManageTool implements McpTool {
         Path dest = PathSanitizer.sanitize(destStr, false);
         TransactionManager.startTransaction("Move from " + srcStr + " to " + destStr);
         try {
-            if (dest.getParent() != null) Files.createDirectories(dest.getParent());
+            if (dest.getParent() != null) {
+                Files.createDirectories(dest.getParent());
+            }
             TransactionManager.backup(src);
             TransactionManager.backup(dest);
             Files.move(src, dest);
-            AccessTracker.moveRecord(src, dest);
+            // Переносим токены доступа на новый путь
+            LineAccessTracker.moveTokens(src, dest);
             TransactionManager.commit();
         } catch (Exception e) {
             TransactionManager.rollback();
@@ -140,7 +196,8 @@ public class FileManageTool implements McpTool {
             TransactionManager.backup(path);
             TransactionManager.backup(newPath);
             Files.move(path, newPath);
-            AccessTracker.moveRecord(path, newPath);
+            // Переносим токены доступа на новый путь
+            LineAccessTracker.moveTokens(path, newPath);
             TransactionManager.commit();
         } catch (Exception e) {
             TransactionManager.rollback();

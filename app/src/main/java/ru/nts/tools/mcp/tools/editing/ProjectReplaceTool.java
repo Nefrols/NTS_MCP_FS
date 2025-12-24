@@ -32,7 +32,33 @@ public class ProjectReplaceTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Global find and replace tool. Performs atomic multi-file refactoring within a single transaction. Note: Changes made by external tools or other MCPs are not tracked and cannot be restored.";
+        return """
+            Global search and replace across entire project.
+
+            USE CASES:
+            • Rename class/method across all files
+            • Update import paths
+            • Change API endpoints
+            • Fix typos in comments/strings
+
+            FEATURES:
+            • Atomic transaction: all files succeed or all rollback
+            • Regex support for complex patterns
+            • Include/exclude globs to limit scope
+            • Binary files automatically skipped
+            • Report shows affected files with occurrence counts
+
+            SAFETY:
+            • Preview changes first with nts_file_search grep
+            • All changes undoable via nts_session undo
+            • Tokens invalidated after replace - re-read if needed
+
+            EXAMPLES:
+            • Rename: pattern='OldClass', replacement='NewClass', include='**/*.java'
+            • Regex: pattern='log\\.(info|debug)', replacement='logger.$1', isRegex=true
+
+            WARNING: Powerful tool - verify pattern matches expected text first!
+            """;
     }
 
     @Override
@@ -46,12 +72,29 @@ public class ProjectReplaceTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("pattern").put("type", "string").put("description", "Search string or regex pattern to find.");
-        props.putObject("replacement").put("type", "string").put("description", "New replacement text.");
-        props.putObject("isRegex").put("type", "boolean").put("description", "If true, the pattern is interpreted as a regular expression.");
-        props.putObject("include").put("type", "string").put("description", "Glob pattern to limit the search scope (e.g., 'src/**/*.java').");
-        props.putObject("exclude").put("type", "string").put("description", "Glob pattern to exclude specific files or directories.");
-        props.putObject("instruction").put("type", "string").put("description", "Semantic label for the transaction journal history.");
+        props.putObject("pattern").put("type", "string").put("description",
+                "Text to find. Literal string unless isRegex=true. " +
+                "For regex: use Java Pattern syntax. Required.");
+
+        props.putObject("replacement").put("type", "string").put("description",
+                "Replacement text. For regex: $1, $2 for capture groups. Required. " +
+                "Example: 'New$1Name' replaces 'OldFooName' with 'NewFooName' if pattern='Old(.*)Name'.");
+
+        props.putObject("isRegex").put("type", "boolean").put("description",
+                "Interpret pattern as regex. Default: false (literal match). " +
+                "Use for: wildcards (.*), groups ((foo|bar)), special chars (\\d+).");
+
+        props.putObject("include").put("type", "string").put("description",
+                "Glob to limit scope. Examples: 'src/**/*.java', '**/*.ts', 'app/models/*.py'. " +
+                "Omit to search entire project.");
+
+        props.putObject("exclude").put("type", "string").put("description",
+                "Glob to skip files/dirs. Examples: '**/test/**', '**/*.min.js'. " +
+                "Build dirs and .git always excluded.");
+
+        props.putObject("instruction").put("type", "string").put("description",
+                "Description for session journal. Example: 'Rename UserService to AccountService'. " +
+                "Shown in nts_session journal output.");
 
         schema.putArray("required").add("pattern").add("replacement");
         return schema;
@@ -83,9 +126,13 @@ public class ProjectReplaceTool implements McpTool {
                     Path relPath = root.relativize(p);
                     // Нормализация пути для матчера (замена \ на /)
                     Path normalizedRelPath = Path.of(relPath.toString().replace('\\', '/'));
-                    
-                    if (includeMatcher != null && !includeMatcher.matches(normalizedRelPath)) continue;
-                    if (excludeMatcher != null && excludeMatcher.matches(normalizedRelPath)) continue;
+
+                    if (includeMatcher != null && !includeMatcher.matches(normalizedRelPath)) {
+                        continue;
+                    }
+                    if (excludeMatcher != null && excludeMatcher.matches(normalizedRelPath)) {
+                        continue;
+                    }
 
                     // Защита от огромных файлов
                     PathSanitizer.checkFileSize(p);
@@ -97,7 +144,9 @@ public class ProjectReplaceTool implements McpTool {
 
                     if (isRegex) {
                         Matcher m = pattern.matcher(content);
-                        while (m.find()) count++;
+                        while (m.find()) {
+                            count++;
+                        }
                     } else {
                         int idx = content.indexOf(query);
                         while (idx >= 0) {
@@ -125,7 +174,7 @@ public class ProjectReplaceTool implements McpTool {
         try {
             for (ReplaceTask task : tasks) {
                 TransactionManager.backup(task.path);
-                
+
                 String newContent;
                 if (isRegex) {
                     newContent = pattern.matcher(task.originalContent).replaceAll(replacement);
@@ -134,8 +183,8 @@ public class ProjectReplaceTool implements McpTool {
                 }
 
                 FileUtils.safeWrite(task.path, newContent, task.charset);
-                // Массовая замена считается легитимной операцией, обновляем AccessTracker
-                AccessTracker.registerRead(task.path);
+                // Инвалидируем токены для изменённых файлов
+                LineAccessTracker.invalidateFile(task.path);
             }
             TransactionManager.commit();
         } catch (Exception e) {
@@ -163,5 +212,6 @@ public class ProjectReplaceTool implements McpTool {
         return res;
     }
 
-    private record ReplaceTask(Path path, String originalContent, Charset charset, int count) {}
+    private record ReplaceTask(Path path, String originalContent, Charset charset, int count) {
+    }
 }

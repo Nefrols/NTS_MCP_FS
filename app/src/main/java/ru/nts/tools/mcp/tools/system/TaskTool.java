@@ -20,7 +20,26 @@ public class TaskTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Process manager for background tasks. Use 'log' to monitor long-running tasks or 'kill' to terminate them. Essential for asynchronous command execution via Gradle or Git.";
+        return """
+            Background task manager - monitor and control async processes.
+
+            ACTIONS:
+            • log  - Get current output from running task
+            • kill - Terminate a running task
+
+            WHEN TO USE:
+            • Gradle build taking too long? Check progress with 'log'
+            • Task stuck or wrong command? Stop it with 'kill'
+            • Git command running async? Monitor with 'log'
+
+            WORKFLOW:
+            1. Start long task (e.g., nts_gradle_task with large timeout)
+            2. Task returns taskId while running
+            3. Poll with log(taskId) to check progress
+            4. Kill if needed, or wait for completion
+
+            NOTE: taskId is returned by tools that run async (Gradle, Git commands).
+            """;
     }
 
     @Override
@@ -34,8 +53,12 @@ public class TaskTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("action").put("type", "string").put("description", "Operation: 'kill' (stop process), 'log' (fetch output history).");
-        props.putObject("taskId").put("type", "string").put("description", "Unique identifier of the background task.");
+        props.putObject("action").put("type", "string").put("description",
+                "Operation: 'log' (get output), 'kill' (terminate). Required.");
+
+        props.putObject("taskId").put("type", "string").put("description",
+                "Task identifier from async tool response. Format: 'task-XXXX'. " +
+                "Example: 'task-1234' returned by nts_gradle_task or nts_git.");
 
         schema.putArray("required").add("action").add("taskId");
         return schema;

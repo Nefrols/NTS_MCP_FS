@@ -34,7 +34,32 @@ public class TodoTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Internal progress tracker. Keep your goals organized with 'create', 'status', and 'update'. Use 'update' with an 'id' to mark tasks as 'done' or 'failed'.";
+        return """
+            Task planning and progress tracking system.
+
+            ACTIONS:
+            • create - Start new plan with title and checklist
+            • status - View current plan and task states
+            • update - Modify plan content or mark task done/failed
+
+            TASK FORMAT (Markdown checklist):
+            - [ ] Pending task
+            - [x] Completed task
+            - [X] Failed task (uppercase X)
+
+            WORKFLOW:
+            1. create(title='Implement feature', content='- [ ] Step 1\\n- [ ] Step 2')
+            2. status() → view current plan
+            3. update(id=1, status='done') → mark first task complete
+            4. update(id=2, status='failed', comment='blocked by X')
+
+            INTEGRATION:
+            • HUD displays active plan progress
+            • nts_git commit_session includes completed tasks
+            • Plans stored in .nts/todos/ directory
+
+            TIP: Use numbered IDs from status output for updates.
+            """;
     }
 
     @Override
@@ -48,13 +73,31 @@ public class TodoTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("action").put("type", "string").put("description", "Flow: 'create' (initiate plan), 'status' (read current), 'update' (modify content or task status).");
-        props.putObject("title").put("type", "string").put("description", "Brief objective for the new plan.");
-        props.putObject("content").put("type", "string").put("description", "Detailed Markdown steps or task description.");
-        props.putObject("id").put("type", "integer").put("description", "1-based task index for atomic updates.");
-        props.putObject("status").put("type", "string").put("description", "Target state: 'todo', 'done', 'failed'.");
-        props.putObject("comment").put("type", "string").put("description", "Context for the task update (e.g., why it failed).");
-        props.putObject("fileName").put("type", "string").put("description", "Target specific plan. Defaults to active.");
+        props.putObject("action").put("type", "string").put("description",
+                "Operation: 'create', 'status', 'update'. Required.");
+
+        props.putObject("title").put("type", "string").put("description",
+                "For 'create': plan name shown in HUD. Example: 'Refactor auth module'.");
+
+        props.putObject("content").put("type", "string").put("description",
+                "For 'create': Markdown checklist. Use '- [ ] Task' format. " +
+                "For 'update' without id: replaces entire plan content.");
+
+        props.putObject("id").put("type", "integer").put("description",
+                "For 'update': 1-based task number to modify. " +
+                "Get IDs from 'status' output. Example: id=3 for third task.");
+
+        props.putObject("status").put("type", "string").put("description",
+                "For 'update' with id: new task state. " +
+                "Values: 'todo' (reset), 'done' (complete), 'failed' (blocked/abandoned).");
+
+        props.putObject("comment").put("type", "string").put("description",
+                "For 'update': explanation appended to task. " +
+                "Example: 'blocked by missing API' or 'completed with workaround'.");
+
+        props.putObject("fileName").put("type", "string").put("description",
+                "Target specific plan file instead of active one. " +
+                "Format: 'TODO_YYYYMMDD_HHMMSS.md'. Omit to use most recent plan.");
 
         schema.putArray("required").add("action");
         return schema;

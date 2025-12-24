@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
 import ru.nts.tools.mcp.tools.fs.FileReadTool;
@@ -16,7 +16,8 @@ import ru.nts.tools.mcp.tools.fs.FileReadTool;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тесты для инструмента чтения файлов (FileReadTool).
@@ -33,7 +34,7 @@ class FileReadToolTest {
     void setUp() {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
-        AccessTracker.reset();
+        LineAccessTracker.reset();
     }
 
     @Test
@@ -71,7 +72,7 @@ class FileReadToolTest {
     @Test
     void testReadRanges() throws Exception {
         Path file = tempDir.resolve("ranges.txt");
-        Files.writeString(file, "1\n2\n3\n4\n5\n6");
+        Files.writeString(file, "AAA\nBBB\nCCC\nDDD\nEEE\nFFF");
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", "ranges.txt");
@@ -81,18 +82,19 @@ class FileReadToolTest {
 
         JsonNode result = tool.execute(params);
         String text = result.get("content").get(0).get("text").asText();
-        assertTrue(text.contains("1"));
-        assertTrue(text.contains("2"));
-        assertTrue(text.contains("5"));
-        assertTrue(text.contains("6"));
-        assertFalse(text.contains("3"));
+        assertTrue(text.contains("AAA"), "Should contain line 1");
+        assertTrue(text.contains("BBB"), "Should contain line 2");
+        assertTrue(text.contains("EEE"), "Should contain line 5");
+        assertTrue(text.contains("FFF"), "Should contain line 6");
+        assertFalse(text.contains("CCC"), "Should NOT contain line 3");
+        assertFalse(text.contains("DDD"), "Should NOT contain line 4");
     }
 
     @Test
     void testHistoryAction() throws Exception {
         Path file = tempDir.resolve("hist.txt");
         Files.writeString(file, "init");
-        
+
         TransactionManager.startTransaction("Change 1");
         TransactionManager.backup(file);
         Files.writeString(file, "v1");

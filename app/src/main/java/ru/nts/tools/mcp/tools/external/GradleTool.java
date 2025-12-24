@@ -28,7 +28,28 @@ public class GradleTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Runs Gradle tasks (build, test, etc.) with real-time progress monitoring and intelligent error parsing.";
+        return """
+            Gradle build automation - compile, test, and package projects.
+
+            COMMON TASKS:
+            • build      - Compile + test + assemble
+            • test       - Run all tests
+            • clean      - Remove build artifacts
+            • check      - Run all verification tasks
+            • assemble   - Build without tests
+
+            SMART FEATURES:
+            • Auto-parses compilation errors with file:line format
+            • Extracts test results summary (passed/failed/skipped)
+            • Shows progress percentage for long builds
+            • Truncates large outputs (keeps last 50 lines)
+
+            ASYNC EXECUTION:
+            If task exceeds timeout, returns taskId for monitoring.
+            Use nts_task(action='log', taskId=X) to poll progress.
+
+            EXAMPLE: task='test', timeout=120, arguments='--info'
+            """;
     }
 
     @Override
@@ -42,9 +63,19 @@ public class GradleTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("task").put("type", "string").put("description", "Gradle task name to execute (e.g., 'build', 'test', 'clean').");
-        props.putObject("arguments").put("type", "string").put("description", "Additional command-line arguments/flags for the task.");
-        props.putObject("timeout").put("type", "integer").put("description", "Maximum execution time in seconds. MANDATORY parameter.");
+        props.putObject("task").put("type", "string").put("description",
+                "Gradle task name: 'build', 'test', 'clean', 'check', 'assemble', etc. " +
+                "Can also use custom tasks defined in build.gradle. Required.");
+
+        props.putObject("arguments").put("type", "string").put("description",
+                "Additional Gradle flags. Examples: " +
+                "'--info' (verbose), '--stacktrace' (errors), '-x test' (skip tests), " +
+                "'--tests MyTest' (specific test).");
+
+        props.putObject("timeout").put("type", "integer").put("description",
+                "Max execution time in SECONDS. Required. " +
+                "Recommendations: clean=30, build=120, test=300. " +
+                "If exceeded, task continues async - use nts_task to monitor.");
 
         schema.putArray("required").add("task").add("timeout");
         return schema;

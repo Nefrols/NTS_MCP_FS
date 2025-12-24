@@ -26,7 +26,26 @@ public class GitCombinedTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Consolidated Git tool. Supported actions: cmd, diff, commit_session.";
+        return """
+            Git integration hub - version control operations.
+
+            ACTIONS:
+            • cmd - Execute Git commands (status, diff, log, add, commit, branch, rev-parse)
+                    Only safe, local operations allowed. No push/pull/fetch.
+            • diff - View changes in unified diff format
+                    Use staged=true for indexed changes only
+            • commit_session - Auto-generate commit from session activity
+                    Includes completed TODO tasks and technical changes
+
+            WORKFLOW EXAMPLES:
+            1. Check status: cmd + command='status'
+            2. View changes: diff (shows both staged and unstaged)
+            3. Stage files: cmd + command='add' + args='.'
+            4. Commit: cmd + command='commit' + args='-m "message"'
+            5. Auto-commit: commit_session + header='Feature: search'
+
+            SECURITY: Push/pull/fetch/remote operations blocked.
+            """;
     }
 
     @Override
@@ -40,13 +59,30 @@ public class GitCombinedTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("action").put("type", "string").put("description", "Action type: 'cmd' (arbitrary command), 'diff' (view changes), 'commit_session' (auto-commit status).");
-        props.putObject("command").put("type", "string").put("description", "For 'cmd': Git subcommand (status, diff, log, add, commit, rev-parse, branch). Only local operations allowed.");
-        props.putObject("args").put("type", "string").put("description", "Arguments for the chosen Git command.");
-        props.putObject("timeout").put("type", "integer").put("description", "Command execution time limit in seconds. Defaults to 30.");
-        props.putObject("path").put("type", "string").put("description", "For 'diff': path to a file or directory to limit the diff scope.");
-        props.putObject("staged").put("type", "boolean").put("description", "For 'diff': if true, show only indexed changes (git diff --cached).");
-        props.putObject("header").put("type", "string").put("description", "For 'commit_session': short commit header (e.g., 'Feature: added search').");
+        props.putObject("action").put("type", "string").put("description",
+                "Operation: 'cmd' (run git command), 'diff' (show changes), 'commit_session' (auto-commit). Required.");
+
+        props.putObject("command").put("type", "string").put("description",
+                "For 'cmd': Git subcommand. Allowed: status, diff, log, add, commit, rev-parse, branch. " +
+                "Example: command='status' or command='log' args='--oneline -5'");
+
+        props.putObject("args").put("type", "string").put("description",
+                "Additional arguments for git command. Space-separated. " +
+                "Example: '-m \"Fix bug\"' for commit, '--oneline -10' for log.");
+
+        props.putObject("timeout").put("type", "integer").put("description",
+                "Max execution time in seconds. Default: 30. Increase for large repos.");
+
+        props.putObject("path").put("type", "string").put("description",
+                "For 'diff': limit scope to specific file or directory. Omit for full repo diff.");
+
+        props.putObject("staged").put("type", "boolean").put("description",
+                "For 'diff': true = show only staged changes (git diff --cached). " +
+                "false/omit = show both staged and unstaged.");
+
+        props.putObject("header").put("type", "string").put("description",
+                "For 'commit_session': commit message header. Body auto-generated from: " +
+                "completed TODO tasks + session change instructions. Required for commit_session.");
 
         schema.putArray("required").add("action");
         return schema;

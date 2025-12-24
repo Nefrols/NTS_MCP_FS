@@ -1,3 +1,4 @@
+// Aristo 24.12.2025
 package ru.nts.tools.mcp.core;
 
 import org.junit.jupiter.api.Test;
@@ -7,7 +8,7 @@ import ru.nts.tools.mcp.tools.editing.EditFileTool;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExtendedHudTest {
 
@@ -15,23 +16,28 @@ class ExtendedHudTest {
     void testHudWithStats(@TempDir Path tempDir) throws Exception {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
-        AccessTracker.reset();
+        LineAccessTracker.reset();
 
         // Создаем TODO файл
         Path todoDir = tempDir.resolve(".nts/todos");
         Files.createDirectories(todoDir);
         Files.writeString(todoDir.resolve("TODO_1.md"), "# TODO: Test Plan\n- [x] Task 1\n- [ ] Task 2");
 
-        // Эмулируем активность
+        // Эмулируем активность - регистрируем доступ к файлу
         Path file = tempDir.resolve("work.txt");
         Files.writeString(file, "old");
-        AccessTracker.registerRead(file);
 
+        // Регистрируем чтение и получаем токен
+        long crc = calculateCRC32(file);
+        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, 1, crc, 1);
+
+        // Выполняем редактирование с токеном
         EditFileTool editTool = new EditFileTool();
         var params = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
         params.put("path", "work.txt");
-        params.put("oldText", "old");
-        params.put("newText", "new");
+        params.put("startLine", 1);
+        params.put("content", "new");
+        params.put("accessToken", token.encode());
         editTool.execute(params);
 
         TodoManager.HudInfo hud = TodoManager.getHudInfo();
@@ -41,5 +47,17 @@ class ExtendedHudTest {
         assertTrue(hudStr.contains("Progress: 1/2"));
         assertTrue(hudStr.contains("Session: 1 edits"));
         assertTrue(hudStr.contains("Unlocked: 1 files"));
+    }
+
+    private long calculateCRC32(Path path) throws Exception {
+        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 }

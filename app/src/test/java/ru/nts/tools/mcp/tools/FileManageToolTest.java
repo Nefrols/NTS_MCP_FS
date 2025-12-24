@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
 import ru.nts.tools.mcp.tools.fs.FileManageTool;
@@ -14,7 +14,8 @@ import ru.nts.tools.mcp.tools.fs.FileManageTool;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тесты для инструмента управления файлами (FileManageTool).
@@ -31,7 +32,7 @@ class FileManageToolTest {
     void setUp() {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
-        AccessTracker.reset();
+        LineAccessTracker.reset();
     }
 
     @Test

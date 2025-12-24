@@ -23,9 +23,26 @@ public class CompareFilesTool implements McpTool {
     @Override
     public String getName() {
         return "nts_compare_files";
-    }    @Override
+    }
+
+    @Override
     public String getDescription() {
-        return "Compares two text files and returns the result in Unified Diff format.";
+        return """
+            File comparison tool - shows differences between two files.
+
+            OUTPUT: Unified Diff format (same as git diff)
+            • Lines starting with '-' = removed from path1
+            • Lines starting with '+' = added in path2
+            • Context lines shown for reference
+
+            USE CASES:
+            • Compare original vs modified file
+            • Verify changes before commit
+            • Diff two versions of same file
+            • Check if files are identical
+
+            RETURNS: "Files are identical." if no differences found.
+            """;
     }
 
     @Override
@@ -39,8 +56,11 @@ public class CompareFilesTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("path1").put("type", "string").put("description", "Path to the first (source) file for comparison.");
-        props.putObject("path2").put("type", "string").put("description", "Path to the second (modified) file for comparison.");
+        props.putObject("path1").put("type", "string").put("description",
+                "First file (baseline/original). Diff shows what changed FROM this file.");
+
+        props.putObject("path2").put("type", "string").put("description",
+                "Second file (modified/new). Diff shows what changed TO this file.");
 
         schema.putArray("required").add("path1").add("path2");
         return schema;

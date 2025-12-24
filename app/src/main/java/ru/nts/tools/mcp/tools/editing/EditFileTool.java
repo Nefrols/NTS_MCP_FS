@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 24.12.2025
 package ru.nts.tools.mcp.tools.editing;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -6,25 +6,26 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
-import java.io.IOException;
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.zip.CRC32C;
 
 /**
- * Расширенный инструмент для интеллектуального редактирования файлов.
+ * Инструмент для построчного редактирования файлов.
  * Поддерживает:
- * 1. Пакетное редактирование (Batching): Применение множества правок за один вызов.
- * 2. Глобальная атомарность (Multi-file): Редактирование нескольких файлов в одной транзакции.
- * 3. Авто-коррекция индексов: Сортировка операций снизу вверх гарантирует стабильность строк.
- * 4. Контроль целостности (expectedContent): Валидация текущего состояния перед внесением изменений.
- * 5. Умное форматирование: Автоматическое наследование отступов (Auto-indentation).
+ * 1. Замена по диапазону строк (startLine/endLine).
+ * 2. Пакетное редактирование (operations): Применение множества правок за один вызов.
+ * 3. Глобальная атомарность (Multi-file): Редактирование нескольких файлов в одной транзакции.
+ * 4. Авто-коррекция индексов: Сортировка операций снизу вверх гарантирует стабильность строк.
+ * 5. Контроль целостности (expectedContent): Валидация текущего состояния перед внесением изменений.
  * 6. Отказоустойчивость: Интеграция с TransactionManager (UNDO/REDO).
  */
 public class EditFileTool implements McpTool {
@@ -41,7 +42,26 @@ public class EditFileTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "High-precision file editor. Best for applying multiple changes (hunks) simultaneously. PREFERRED: Use 'operations' array for precise line-based edits. MANDATORY: Read file before editing. Note: External tool changes bypass the session manager.";
+        return """
+            Line-based file editor with mandatory access control.
+
+            PREREQUISITE: Get accessToken from nts_file_read FIRST!
+            Token must cover ALL lines you want to edit.
+
+            WORKFLOW:
+            1. nts_file_read(path, startLine, endLine) → get TOKEN
+            2. nts_edit_file(path, startLine, content, accessToken=TOKEN) → get NEW_TOKEN
+            3. Use NEW_TOKEN for subsequent edits
+
+            FEATURES:
+            • Single edit: path + startLine + content + accessToken
+            • Batch edit: path + operations[] + accessToken (bottom-up processing)
+            • Multi-file: edits[] array (atomic transaction - all succeed or all rollback)
+            • Safety: expectedContent validates current state before edit
+            • Preview: dryRun=true shows diff without writing
+
+            OPERATIONS: replace (default), insert_before, insert_after, delete
+            """;
     }
 
     @Override
@@ -55,43 +75,52 @@ public class EditFileTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        // Основной путь (для одиночных правок)
-        props.putObject("path").put("type", "string").put("description", "Target file path.");
+        // === SINGLE FILE EDIT (most common) ===
+        props.putObject("path").put("type", "string").put("description",
+                "Target file path. Required for single-file edit mode.");
 
-        // Структура для пакетного редактирования нескольких файлов
-        var edits = props.putObject("edits");
-        edits.put("type", "array");
-        edits.put("description", "Multi-file transaction: all edits apply or all fail. Ideal for cross-file refactoring.");
-        var editItem = edits.putObject("items");
-        editItem.put("type", "object");
-        var editProps = editItem.putObject("properties");
-        editProps.putObject("path").put("type", "string").put("description", "Path for this specific hunk set.");
-        editProps.set("operations", mapper.createObjectNode()
-                .put("type", "array")
-                .put("description", "Ordered list of steps: replace, insert_before, insert_after, delete. Processing is bottom-up to keep indices valid."));
+        props.putObject("accessToken").put("type", "string").put("description",
+                "MANDATORY: Token from nts_file_read. Must cover lines [startLine..endLine]. " +
+                "Without valid token → SecurityException. After edit → returns NEW token.");
 
-        // Вспомогательные поля для каждого элемента в батче
-        editProps.putObject("oldText").put("type", "string").put("description", "Fuzzy search fallback. Use when line numbers are unknown.");
-        editProps.putObject("newText").put("type", "string").put("description", "Text to inject.");
-        editProps.putObject("startLine").put("type", "integer").put("description", "1-based starting line.");
-        editProps.putObject("endLine").put("type", "integer").put("description", "1-based ending line.");
-        editProps.putObject("expectedContent").put("type", "string").put("description", "CRITICAL safety check: validation of current file state before edit.");
+        props.putObject("startLine").put("type", "integer").put("description",
+                "First line to replace (1-based). Content replaces lines [startLine..endLine].");
 
-        // Поля корневого уровня для одиночных правок (обратная совместимость)
-        props.putObject("oldText").put("type", "string").put("description", "Text to replace if 'operations' is not used. Supports whitespace normalization.");
-        props.putObject("newText").put("type", "string").put("description", "Replacement content.");
-        props.putObject("startLine").put("type", "integer").put("description", "Range start (1-based).");
-        props.putObject("endLine").put("type", "integer").put("description", "Range end (inclusive).");
-        props.putObject("expectedContent").put("type", "string").put("description", "Mandatory validation string. Prevents editing 'stale' context.");
-        props.putObject("contextStartPattern").put("type", "string").put("description", "Regex anchor for relative line addressing within the file.");
-        props.putObject("expectedChecksum").put("type", "string").put("description", "HEX CRC32C. Bypass read-check if state is known (e.g., from a previous edit).");
-        
-        props.putObject("instruction").put("type", "string").put("description", "Short summary of the change for the session journal.");
-        props.putObject("dryRun").put("type", "boolean").put("description", "Preview only: returns unified diff without disk write.");
+        props.putObject("endLine").put("type", "integer").put("description",
+                "Last line to replace (1-based, inclusive). Omit to replace single line. " +
+                "Example: startLine=5, endLine=10 replaces 6 lines with 'content'.");
 
-        // Массив атомарных операций для одного файла
+        props.putObject("content").put("type", "string").put("description",
+                "New content. Can be multi-line (use \\n). Replaces entire [startLine..endLine] range. " +
+                "For insert: becomes new lines. For delete: leave empty or use operations.");
+
+        props.putObject("expectedContent").put("type", "string").put("description",
+                "SAFETY: Expected current content of target lines. Edit fails if mismatch. " +
+                "Use to prevent race conditions. Error message shows actual content if different.");
+
+        // === BATCH OPERATIONS (single file, multiple edits) ===
         var ops = props.putObject("operations");
-        ops.put("type", "array").put("description", "List of operations for the file. Recommended for reliability.");
+        ops.put("type", "array").put("description",
+                "Multiple edits on SAME file in one call. Auto-sorted bottom-up (safe index handling). " +
+                "Each: {operation, startLine, [endLine], [content]}. " +
+                "Operations: 'replace' (default), 'insert_before', 'insert_after', 'delete'.");
+
+        // === MULTI-FILE ATOMIC EDIT ===
+        var edits = props.putObject("edits");
+        edits.put("type", "array").put("description",
+                "ATOMIC multi-file edit: ALL succeed or ALL rollback. Each item: {path, accessToken, startLine/operations, content}. " +
+                "Use for refactoring across files (e.g., rename method + update all call sites).");
+
+        // === UTILITY OPTIONS ===
+        props.putObject("contextStartPattern").put("type", "string").put("description",
+                "Regex to find anchor line. startLine becomes relative offset from match. " +
+                "Example: pattern='def myFunc', startLine=2 → edits 2nd line after 'def myFunc'.");
+
+        props.putObject("instruction").put("type", "string").put("description",
+                "Human-readable change description for session journal. Shown in undo history.");
+
+        props.putObject("dryRun").put("type", "boolean").put("description",
+                "Preview mode: returns unified diff WITHOUT writing to disk. Test your edit first!");
 
         schema.putArray("required").add("path");
         return schema;
@@ -124,19 +153,24 @@ public class EditFileTool implements McpTool {
      * Выполняет пакетное редактирование нескольких файлов в рамках единой транзакции.
      * Если хотя бы одна правка в любом файле не пройдет валидацию, откатываются ВСЕ файлы.
      *
-     * @param params Корневые параметры запроса.
+     * @param params     Корневые параметры запроса.
      * @param editsArray JSON-массив правок для файлов.
-     * @param dryRun Флаг предпросмотра изменений.
+     * @param dryRun     Флаг предпросмотра изменений.
      *
      * @return Текстовый отчет об успешном завершении батча.
      */
     private JsonNode executeMultiFileEdit(JsonNode params, JsonNode editsArray, boolean dryRun) throws Exception {
         String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
-        if (!dryRun) TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)", instruction);
+        if (!dryRun) {
+            TransactionManager.startTransaction("Multi-file batch edit (" + editsArray.size() + " files)", instruction);
+        }
         try {
             StringBuilder statusMsg = new StringBuilder();
-            if (dryRun) statusMsg.append("[DRY RUN] Would apply batch edit to ").append(editsArray.size()).append(" files:\n\n");
-            else statusMsg.append("Multi-file batch edit successful (" + editsArray.size() + " files):\n\n");
+            if (dryRun) {
+                statusMsg.append("[DRY RUN] Would apply batch edit to ").append(editsArray.size()).append(" files:\n\n");
+            } else {
+                statusMsg.append("Multi-file batch edit successful (" + editsArray.size() + " files):\n\n");
+            }
 
             for (JsonNode editNode : editsArray) {
                 // Применяем правки к каждому файлу и собираем статистику
@@ -145,7 +179,10 @@ public class EditFileTool implements McpTool {
 
                 statusMsg.append(String.format("- %s [Git: %s]\n", stats.path.getFileName(), gitStatus.isEmpty() ? "Unchanged" : gitStatus));
                 statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
-                if (!dryRun) statusMsg.append(String.format("  New CRC32C: %X\n", stats.crc32));
+                if (!dryRun) {
+                    statusMsg.append(String.format("  CRC32C: %X | Lines: %d\n", stats.crc32, stats.newLineCount));
+                    statusMsg.append(String.format("  [NEW TOKEN: %s]\n", stats.newToken));
+                }
 
                 if (stats.diff != null && !stats.diff.isEmpty()) {
                     statusMsg.append("\n```diff\n").append(stats.diff).append("\n```\n");
@@ -154,14 +191,15 @@ public class EditFileTool implements McpTool {
             }
             if (!dryRun) {
                 TransactionManager.commit();
-                statusMsg.append("(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
             } else {
                 statusMsg.append("[DRY RUN] No changes were applied.");
             }
             return createResponse(statusMsg.toString().trim());
         } catch (Exception e) {
             // Глобальный откат при любом сбое
-            if (!dryRun) TransactionManager.rollback();
+            if (!dryRun) {
+                TransactionManager.rollback();
+            }
             throw e;
         }
     }
@@ -177,44 +215,55 @@ public class EditFileTool implements McpTool {
     private JsonNode executeSingleFileEdit(JsonNode params, boolean dryRun) throws Exception {
         String pathStr = params.get("path").asText();
         String instruction = params.has("instruction") ? params.get("instruction").asText() : null;
-        if (!dryRun) TransactionManager.startTransaction("Edit file: " + pathStr, instruction);
+        if (!dryRun) {
+            TransactionManager.startTransaction("Edit file: " + pathStr, instruction);
+        }
         try {
             FileEditStats stats = applyFileEdits(params, dryRun);
-            if (!dryRun) TransactionManager.commit();
+            if (!dryRun) {
+                TransactionManager.commit();
+            }
 
             String gitStatus = GitUtils.getFileStatus(stats.path);
             StringBuilder sb = new StringBuilder();
-            if (dryRun) sb.append("[DRY RUN] Would apply edits to file: ").append(pathStr);
-            else sb.append("Edits successfully applied to file: ").append(pathStr);
-            
+            if (dryRun) {
+                sb.append("[DRY RUN] Would apply edits to file: ").append(pathStr);
+            } else {
+                sb.append("Edits applied: ").append(pathStr);
+            }
+
             if (!gitStatus.isEmpty()) {
                 sb.append(" [Git: ").append(gitStatus).append("]");
             }
             sb.append("\nOperations: ").append(stats.total());
             if (!dryRun) {
-                sb.append("\nNew CRC32C: ").append(Long.toHexString(stats.crc32).toUpperCase());
-                sb.append("\n(Tip: Use this checksum in your next nts_edit_file call to continue editing without re-reading the file.)");
+                sb.append(String.format(" | New CRC32C: %X | Lines: %d", stats.crc32, stats.newLineCount));
+                sb.append("\n[NEW TOKEN: ").append(stats.newToken).append("]");
             }
 
             if (stats.diff != null && !stats.diff.isEmpty()) {
                 sb.append("\n\n```diff\n").append(stats.diff).append("\n```");
             }
 
-            if (dryRun) sb.append("\n\n[DRY RUN] No changes were applied.");
+            if (dryRun) {
+                sb.append("\n\n[DRY RUN] No changes were applied.");
+            }
 
             return createResponse(sb.toString());
         } catch (Exception e) {
-            if (!dryRun) TransactionManager.rollback();
+            if (!dryRun) {
+                TransactionManager.rollback();
+            }
             throw e;
         }
     }
 
     /**
      * Логика применения правок к конкретному файлу.
-     * Выполняет чтение, проверку прав, бэкап и последовательную обработку операций.
+     * Выполняет чтение, проверку прав (токенов), бэкап и последовательную обработку операций.
      *
      * @param fileParams Параметры (путь и действия).
-     * @param dryRun Флаг предпросмотра изменений.
+     * @param dryRun     Флаг предпросмотра изменений.
      *
      * @return Объект со статистикой изменений.
      */
@@ -233,35 +282,59 @@ public class EditFileTool implements McpTool {
         EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
         Charset charset = fileData.charset();
         String content = fileData.content();
+        String[] contentLines = content.split("\n", -1);
+        int oldLineCount = contentLines.length;
+        long currentCrc = calculateCRC32(path);
 
-        // Валидация checksum для bypass проверки AccessTracker
-        if (fileParams.has("expectedChecksum")) {
-            String expectedHex = fileParams.get("expectedChecksum").asText();
-            long currentCrc = FileUtils.calculateCRC32(path);
-            long expectedCrc;
-            try {
-                expectedCrc = Long.parseUnsignedLong(expectedHex, 16);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("Invalid expectedChecksum format: '" + expectedHex + "'. Expected a hexadecimal value.");
+        // Определяем диапазон редактирования
+        int editStart, editEnd;
+        if (fileParams.has("operations")) {
+            // Для operations находим общий диапазон
+            int minLine = Integer.MAX_VALUE, maxLine = 0;
+            for (JsonNode op : fileParams.get("operations")) {
+                int start = op.path("startLine").asInt(op.path("line").asInt(1));
+                int end = op.path("endLine").asInt(start);
+                minLine = Math.min(minLine, start);
+                maxLine = Math.max(maxLine, end);
             }
-
-            if (currentCrc != expectedCrc) {
-                throw new IllegalStateException("Checksum mismatch (Optimistic Locking)! Expected: " + expectedHex + ", Actual: " + Long.toHexString(currentCrc).toUpperCase() + ". The file was modified externally. Please perform nts_read_file again or use the new checksum for synchronization.");
-            }
-            // Хеш совпал — значит LLM знает актуальное состояние файла.
-            AccessTracker.registerRead(path);
+            editStart = minLine;
+            editEnd = maxLine;
+        } else {
+            editStart = fileParams.path("startLine").asInt(1);
+            editEnd = fileParams.path("endLine").asInt(editStart);
         }
 
-        // Проверка "предохранителя": запрет редактирования файлов без предварительного чтения
-        if (!AccessTracker.hasBeenRead(path)) {
-            throw new SecurityException("Access denied: file '" + pathStr + "' has not been read in the current session. You must read the file (nts_read_file) or provide valid expectedChecksum before making edits to ensure context consistency.");
+        // Валидация токена доступа (REQUIRED)
+        if (!fileParams.has("accessToken")) {
+            throw new SecurityException("Access denied: 'accessToken' is required for editing. " + "Read the file first with nts_file_read to obtain a token.");
+        }
+
+        String tokenStr = fileParams.get("accessToken").asText();
+        LineAccessToken token;
+        try {
+            token = LineAccessToken.decode(tokenStr, path);
+        } catch (Exception e) {
+            throw new SecurityException("Invalid access token: " + e.getMessage());
+        }
+
+        // Проверяем валидность токена
+        var validation = LineAccessTracker.validateToken(token, currentCrc, oldLineCount);
+        if (!validation.valid()) {
+            throw new SecurityException("Token validation failed: " + validation.message() + " Re-read the file with nts_file_read to get a new token.");
+        }
+
+        // Проверяем, что токен покрывает диапазон редактирования
+        if (!token.covers(editStart, editEnd)) {
+            throw new SecurityException(String.format("Token does not cover edit range [%d-%d]. Token covers [%d-%d]. " + "Read the required lines first with nts_file_read.", editStart, editEnd, token.startLine(), token.endLine()));
         }
 
         // Представление контента в виде списка строк для корректной манипуляции
-        List<String> currentLines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
+        List<String> currentLines = new ArrayList<>(Arrays.asList(contentLines));
 
         // Регистрация состояния файла "ДО" в текущей транзакции
-        if (!dryRun) TransactionManager.backup(path);
+        if (!dryRun) {
+            TransactionManager.backup(path);
+        }
 
         FileEditStats stats = new FileEditStats(path);
         String newContent;
@@ -282,21 +355,20 @@ public class EditFileTool implements McpTool {
             for (JsonNode opNode : sortedOps) {
                 applyTypedOperation(currentLines, opNode, 0, stats);
             }
-            
+
             newContent = String.join("\n", currentLines);
             // Сохранение итогового состояния на диск
-            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
-        } else if (fileParams.has("oldText") && fileParams.has("newText")) {
-            // Режим нечеткой (fuzzy) замены текста по содержимому
-            newContent = performSmartReplace(content, fileParams.get("oldText").asText(), fileParams.get("newText").asText());
-            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
-            stats.replaces++;
-        } else if (fileParams.has("startLine") && (fileParams.has("newText") || fileParams.has("content"))) {
+            if (!dryRun) {
+                FileUtils.safeWrite(path, newContent, charset);
+            }
+        } else if (fileParams.has("startLine")) {
             // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
             newContent = String.join("\n", currentLines);
             // Сохранение итогового состояния на диск
-            if (!dryRun) FileUtils.safeWrite(path, newContent, charset);
+            if (!dryRun) {
+                FileUtils.safeWrite(path, newContent, charset);
+            }
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
@@ -304,8 +376,17 @@ public class EditFileTool implements McpTool {
         // Генерация diff
         stats.diff = DiffUtils.getUnifiedDiff(path.getFileName().toString(), content, newContent);
 
-        // Вычисление итоговой контрольной суммы для подтверждения целостности
-        if (!dryRun) stats.crc32 = FileUtils.calculateCRC32(path);
+        // Вычисление итоговой контрольной суммы и обновление токенов
+        if (!dryRun) {
+            stats.crc32 = calculateCRC32(path);
+            int newLineCount = currentLines.size();
+            stats.newLineCount = newLineCount;
+            int lineDelta = newLineCount - oldLineCount;
+
+            // Обновляем токены после редактирования
+            LineAccessToken newToken = LineAccessTracker.updateAfterEdit(path, editStart, editEnd, lineDelta, stats.crc32, newLineCount);
+            stats.newToken = newToken.encode();
+        }
         return stats;
     }
 
@@ -363,10 +444,7 @@ public class EditFileTool implements McpTool {
 
             if (!normActual.equals(normExpected)) {
                 // Если не совпало — выбрасываем ошибку с подробным дампом текущих строк
-                throw new IllegalStateException("Content validation failed for range " + start + "-" + end + "!\n" +
-                        "EXPECTED:\n[" + normExpected + "]\n" +
-                        "ACTUAL CONTENT IN FILE:\n[" + normActual + "]\n" +
-                        "Please adjust your request using the actual text from the file.");
+                throw new IllegalStateException("Content validation failed for range " + start + "-" + end + "!\n" + "EXPECTED:\n[" + normExpected + "]\n" + "ACTUAL CONTENT IN FILE:\n[" + normActual + "]\n" + "Please adjust your request using the actual text from the file.");
             }
         }
 
@@ -435,76 +513,18 @@ public class EditFileTool implements McpTool {
     }
 
     /**
-     * Выполняет замену текста, игнорируя различия в количестве пробелов и типах переносов строк.
+     * Вычисляет CRC32C для файла.
      */
-    private String performSmartReplace(String content, String oldText, String newText) {
-        // Точное совпадение
-        if (content.contains(oldText)) {
-            int count = countOccurrences(content, oldText);
-            if (count > 1) {
-                throw new IllegalArgumentException("Multiple matches (" + count + ") found for 'oldText'. Use 'operations' with line numbers for precise editing, or provide more context in 'oldText' to make it unique.");
-            }
-            return content.replace(oldText, newText);
-        }
-
-        // Совпадение с нормализованными переносами (\r\n -> \n)
-        String normContent = content.replace("\r\n", "\n");
-        String normOld = oldText.replace("\r\n", "\n");
-        if (normContent.contains(normOld)) {
-            int count = countOccurrences(normContent, normOld);
-            if (count > 1) {
-                throw new IllegalArgumentException("Multiple matches (" + count + ") found for 'oldText' (after newline normalization). Use 'operations' with line numbers for precise editing.");
-            }
-            return normContent.replace(normOld, newText);
-        }
-
-        // Нечеткий поиск: превращаем пробелы в \s+
-        String escapedOld = escapeRegexExceptWhitespace(normOld);
-        String regex = escapedOld.replaceAll("\\s+", "\\\\s+");
-        Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE | Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(normContent);
-        if (matcher.find()) {
-            int start = matcher.start();
-            int end = matcher.end();
-            if (matcher.find()) {
-                throw new IllegalArgumentException("Multiple ambiguous matches found during fuzzy search.");
-            }
-            return normContent.substring(0, start) + newText + normContent.substring(end);
-        }
-        throw new IllegalArgumentException("Text not found. Use line-based editing with expectedContent.");
-    }
-
-    /**
-     * Экранирует метасимволы регулярных выражений, не затрагивая пробелы.
-     */
-    private String escapeRegexExceptWhitespace(String input) {
-        StringBuilder sb = new StringBuilder();
-        String specials = "<([{\\^-=$!|]})?*+.>";
-        for (int i = 0; i < input.length(); i++) {
-            char c = input.charAt(i);
-            if (Character.isWhitespace(c)) {
-                sb.append(c);
-            } else if (specials.indexOf(c) != -1) {
-                sb.append("\\").append(c);
-            } else {
-                sb.append(c);
+    private long calculateCRC32(Path path) throws Exception {
+        CRC32C crc = new CRC32C();
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
             }
         }
-        return sb.toString();
-    }
-
-    /**
-     * Подсчитывает количество непересекающихся вхождений подстроки.
-     */
-    private int countOccurrences(String text, String str) {
-        if (str.isEmpty()) return 0;
-        int count = 0;
-        int idx = 0;
-        while ((idx = text.indexOf(str, idx)) != -1) {
-            count++;
-            idx += str.length();
-        }
-        return count;
+        return crc.getValue();
     }
 
     /**
@@ -517,6 +537,8 @@ public class EditFileTool implements McpTool {
         int deletes = 0;
         long crc32 = 0;
         String diff = "";
+        String newToken = null;
+        int newLineCount = 0;
 
         FileEditStats(Path path) {
             this.path = path;

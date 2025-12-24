@@ -21,7 +21,29 @@ public class SessionTool implements McpTool {
 
     @Override
     public String getDescription() {
-        return "Recovery and Session hub. Manage restore points, undo changes, and view the activity journal. Best practice: Create a 'checkpoint' before starting a complex task. Note: Only tools from this MCP are tracked.";
+        return """
+            Session recovery and undo/redo system.
+
+            ACTIONS:
+            • checkpoint - Save named restore point BEFORE risky changes
+            • rollback   - Revert ALL changes back to checkpoint
+            • undo       - Step back one operation (like Ctrl+Z)
+            • redo       - Step forward one operation (like Ctrl+Y)
+            • journal    - View full session activity log
+
+            BEST PRACTICES:
+            1. Create checkpoint before complex refactoring
+            2. Use undo for quick fixes (wrong edit)
+            3. Use rollback to abandon failed approach
+            4. Check journal to understand what changed
+
+            LIMITATIONS:
+            • Only tracks changes made through THIS MCP
+            • External tools (IDE, other MCPs) not tracked
+            • Tokens invalidated after undo/rollback - re-read files!
+
+            EXAMPLE: checkpoint('before-refactor') → make changes → rollback('before-refactor')
+            """;
     }
 
     @Override
@@ -35,8 +57,13 @@ public class SessionTool implements McpTool {
         schema.put("type", "object");
         var props = schema.putObject("properties");
 
-        props.putObject("action").put("type", "string").put("description", "Strategy: 'checkpoint' (save state), 'rollback' (revert to point), 'undo' (step back), 'redo' (step forward), 'journal' (activity log).");
-        props.putObject("name").put("type", "string").put("description", "Label for 'checkpoint' or target for 'rollback'.");
+        props.putObject("action").put("type", "string").put("description",
+                "Operation: 'checkpoint', 'rollback', 'undo', 'redo', 'journal'. Required.");
+
+        props.putObject("name").put("type", "string").put("description",
+                "For 'checkpoint': descriptive name to identify restore point (e.g., 'before-api-change'). " +
+                "For 'rollback': exact name of checkpoint to restore. " +
+                "Not needed for undo/redo/journal.");
 
         schema.putArray("required").add("action");
         return schema;

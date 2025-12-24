@@ -1,21 +1,17 @@
-// Aristo 22.12.2025
+// Aristo 24.12.2025
 package ru.nts.tools.mcp.tools;
-
-import ru.nts.tools.mcp.tools.fs.*;
-import ru.nts.tools.mcp.tools.editing.*;
-import ru.nts.tools.mcp.tools.session.*;
-import ru.nts.tools.mcp.tools.external.*;
-import ru.nts.tools.mcp.tools.planning.*;
-import ru.nts.tools.mcp.tools.system.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.core.AccessTracker;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.TransactionManager;
+import ru.nts.tools.mcp.tools.editing.EditFileTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,65 +20,121 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Тесты для расширенного инструмента редактирования файлов (EditFileTool).
+ * Тесты для инструмента построчного редактирования файлов (EditFileTool).
  * Проверяют:
- * 1. Одиночные замены текста и строк.
- * 2. Многофайловое пакетное редактирование (Multi-file batching).
+ * 1. Замену строк по диапазону с токеном доступа.
+ * 2. Многофайловое пакетное редактирование.
  * 3. Атомарность транзакций и корректный откат при сбоях.
- * 4. Валидацию содержимого через expectedContent.
- * 5. Автоматический расчет смещений строк при последовательных правках.
+ * 4. Валидацию токенов перед редактированием.
  */
 class EditFileToolTest {
 
-    /**
-     * Тестируемый инструмент редактирования.
-     */
     private final EditFileTool tool = new EditFileTool();
-
-    /**
-     * JSON манипулятор.
-     */
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /**
-     * Проверяет базовую замену текста по содержимому.
-     */
-    @Test
-    void testReplaceText(@TempDir Path tempDir) throws Exception {
+    @TempDir
+    Path tempDir;
+
+    @BeforeEach
+    void setUp() {
         PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.txt");
-        Files.writeString(file, "Hello World");
-        AccessTracker.registerRead(file);
-
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("oldText", "World");
-        params.put("newText", "Java");
-
-        tool.execute(params);
-        assertEquals("Hello Java", Files.readString(file), "Текст должен быть заменен");
+        TransactionManager.reset();
+        LineAccessTracker.reset();
     }
 
     /**
-     * Проверяет успешное выполнение правок в нескольких файлах в рамках одного вызова.
+     * Вспомогательный метод: регистрирует доступ и возвращает токен.
+     */
+    private String registerAccess(Path file, int startLine, int endLine) throws Exception {
+        long crc = calculateCRC32(file);
+        String content = Files.readString(file);
+        int lineCount = content.split("\n", -1).length;
+        LineAccessToken token = LineAccessTracker.registerAccess(file, startLine, endLine, crc, lineCount);
+        return token.encode();
+    }
+
+    /**
+     * Вспомогательный метод: регистрирует доступ ко всем строкам файла.
+     */
+    private String registerFullAccess(Path file) throws Exception {
+        String content = Files.readString(file);
+        int lineCount = content.split("\n", -1).length;
+        return registerAccess(file, 1, lineCount);
+    }
+
+    /**
+     * Проверяет базовую замену строки с токеном.
      */
     @Test
-    void testMultiFileBatchEdit(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
+    void testReplaceLine() throws Exception {
+        Path file = tempDir.resolve("test.txt");
+        Files.writeString(file, "Hello World");
+        String token = registerFullAccess(file);
 
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 1);
+        params.put("content", "Hello Java");
+        params.put("accessToken", token);
+
+        tool.execute(params);
+        assertEquals("Hello Java", Files.readString(file));
+    }
+
+    /**
+     * Проверяет, что редактирование без токена отклоняется.
+     */
+    @Test
+    void testEditWithoutTokenFails() throws Exception {
+        Path file = tempDir.resolve("test.txt");
+        Files.writeString(file, "Content");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 1);
+        params.put("content", "New Content");
+
+        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("accessToken"));
+    }
+
+    /**
+     * Проверяет, что редактирование вне диапазона токена отклоняется.
+     */
+    @Test
+    void testEditOutsideTokenRangeFails() throws Exception {
+        Path file = tempDir.resolve("test.txt");
+        Files.write(file, List.of("Line 1", "Line 2", "Line 3", "Line 4", "Line 5"));
+        // Токен только на строки 1-2
+        String token = registerAccess(file, 1, 2);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("startLine", 4);
+        params.put("content", "Modified");
+        params.put("accessToken", token);
+
+        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("does not cover"));
+    }
+
+    /**
+     * Проверяет успешное редактирование нескольких файлов в одной транзакции.
+     */
+    @Test
+    void testMultiFileBatchEdit() throws Exception {
         Path f1 = tempDir.resolve("file1.txt");
         Path f2 = tempDir.resolve("file2.txt");
         Files.writeString(f1, "Original 1");
         Files.writeString(f2, "Original 2");
-        AccessTracker.registerRead(f1);
-        AccessTracker.registerRead(f2);
+        String token1 = registerFullAccess(f1);
+        String token2 = registerFullAccess(f2);
 
         ObjectNode params = mapper.createObjectNode();
         ArrayNode edits = params.putArray("edits");
 
-        edits.addObject().put("path", f1.toString()).put("oldText", "Original 1").put("newText", "Changed 1");
-        edits.addObject().put("path", f2.toString()).put("oldText", "Original 2").put("newText", "Changed 2");
+        edits.addObject().put("path", f1.toString()).put("startLine", 1).put("content", "Changed 1").put("accessToken", token1);
+        edits.addObject().put("path", f2.toString()).put("startLine", 1).put("content", "Changed 2").put("accessToken", token2);
 
         tool.execute(params);
 
@@ -91,79 +143,50 @@ class EditFileToolTest {
     }
 
     /**
-     * Проверяет, что при ошибке в одном из файлов батча, изменения во всех остальных файлах откатываются.
+     * Проверяет откат при ошибке валидации содержимого.
      */
     @Test
-    void testMultiFileRollback(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-
+    void testMultiFileRollback() throws Exception {
         Path f1 = tempDir.resolve("file1.txt");
         Path f2 = tempDir.resolve("file2.txt");
         Files.writeString(f1, "Safe");
         Files.writeString(f2, "Danger");
-        AccessTracker.registerRead(f1);
-        AccessTracker.registerRead(f2);
+        String token1 = registerFullAccess(f1);
+        String token2 = registerFullAccess(f2);
 
         ObjectNode params = mapper.createObjectNode();
         ArrayNode edits = params.putArray("edits");
 
-        // Валидная первая правка
-        edits.addObject().put("path", f1.toString()).put("oldText", "Safe").put("newText", "Broken");
+        edits.addObject().put("path", f1.toString()).put("startLine", 1).put("content", "Broken").put("accessToken", token1);
 
-        // Ошибочная вторая правка
         ObjectNode e2 = edits.addObject();
         e2.put("path", f2.toString());
         e2.put("startLine", 1).put("endLine", 1);
         e2.put("expectedContent", "WRONG_CONTENT");
-        e2.put("newText", "ShouldNotChange");
+        e2.put("content", "ShouldNotChange");
+        e2.put("accessToken", token2);
 
         assertThrows(IllegalStateException.class, () -> tool.execute(params));
 
-        // Оба файла должны вернуться в исходное состояние
-        assertEquals("Safe", Files.readString(f1), "Первый файл должен откатиться");
-        assertEquals("Danger", Files.readString(f2), "Второй файл не должен измениться");
+        assertEquals("Safe", Files.readString(f1));
+        assertEquals("Danger", Files.readString(f2));
     }
 
     /**
-     * Проверяет механизм проактивной диагностики: возврат актуального текста при ошибке валидации.
+     * Проверяет автоматическую коррекцию индексов при нескольких операциях.
      */
     @Test
-    void testExpectedContentFailure(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("test.txt");
-        Files.write(file, List.of("AAA", "BBB", "CCC"));
-        AccessTracker.registerRead(file);
-
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("startLine", 2).put("endLine", 2);
-        params.put("expectedContent", "WRONG");
-        params.put("newText", "XXX");
-
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
-        // Убеждаемся, что в ошибке есть информация о реальном содержимом
-        assertTrue(ex.getMessage().contains("ACTUAL CONTENT IN FILE:"), "Ошибка должна содержать диагностику");
-        assertTrue(ex.getMessage().contains("[BBB]"), "Ошибка должна содержать актуальную строку");
-    }
-
-    /**
-     * Проверяет автоматическую коррекцию индексов строк при выполнении нескольких операций в одном файле.
-     */
-    @Test
-    void testBatchOperationsWithOffsets(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
+    void testBatchOperationsWithOffsets() throws Exception {
         Path file = tempDir.resolve("batch.txt");
         Files.write(file, List.of("Line 1", "Line 2", "Line 3"));
-        AccessTracker.registerRead(file);
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
+        params.put("accessToken", token);
         ArrayNode ops = params.putArray("operations");
 
-        // Операция 1 увеличивает файл (1 строка -> 3 строки)
         ops.addObject().put("operation", "replace").put("startLine", 1).put("endLine", 1).put("content", "A\nB\nC");
-        // Операция 2 удаляет строку (которая сместилась из-за Оп 1)
         ops.addObject().put("operation", "delete").put("startLine", 2).put("endLine", 2);
 
         tool.execute(params);
@@ -180,14 +203,14 @@ class EditFileToolTest {
      * Тестирует операцию вставки после указанной строки.
      */
     @Test
-    void testInsertAfter(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
+    void testInsertAfter() throws Exception {
         Path file = tempDir.resolve("insert.txt");
         Files.write(file, List.of("Start", "End"));
-        AccessTracker.registerRead(file);
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
+        params.put("accessToken", token);
         ArrayNode ops = params.putArray("operations");
 
         ops.addObject().put("operation", "insert_after").put("line", 1).put("content", "Middle");
@@ -195,237 +218,101 @@ class EditFileToolTest {
         tool.execute(params);
 
         List<String> result = Files.readAllLines(file);
-        assertEquals("Middle", result.get(1), "Текст должен быть вставлен на вторую позицию");
+        assertEquals("Middle", result.get(1));
     }
 
     /**
-     * Проверяет атомарность батча: отмена всех правок в файле при сбое одной из них.
+     * Проверяет возврат нового токена после успешного редактирования.
      */
     @Test
-    void testBatchAtomicity(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("atomic.txt");
-        String originalContent = "Line 1\nLine 2\nLine 3";
-        Files.writeString(file, originalContent);
-        AccessTracker.registerRead(file);
+    void testNewTokenReturnedAfterEdit() throws Exception {
+        Path file = tempDir.resolve("token.txt");
+        Files.writeString(file, "Original");
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        ArrayNode ops = params.putArray("operations");
+        params.put("startLine", 1);
+        params.put("content", "Modified");
+        params.put("accessToken", token);
 
-        ops.addObject().put("operation", "replace").put("startLine", 1).put("endLine", 1).put("content", "MODIFIED");
-        // Ошибка во второй операции
-        ops.addObject().put("operation", "replace").put("startLine", 2).put("endLine", 2).put("expectedContent", "WRONG").put("content", "ERROR");
+        var result = tool.execute(params);
+        String responseText = result.get("content").get(0).get("text").asText();
 
-        assertThrows(IllegalStateException.class, () -> tool.execute(params));
-
-        String currentContent = Files.readString(file).replace("\r", "");
-        assertEquals(originalContent, currentContent, "Файл не должен измениться при частичном сбое батча");
+        assertTrue(responseText.contains("[NEW TOKEN:"));
+        assertTrue(responseText.contains("LAT:"));
     }
 
     /**
-     * Сложный тест мульти-файловой транзакции с разнородными операциями.
+     * Проверяет инвалидацию старого токена после редактирования.
      */
     @Test
-    void testComplexMultiFileBatch(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
+    void testOldTokenInvalidAfterEdit() throws Exception {
+        Path file = tempDir.resolve("invalid.txt");
+        Files.writeString(file, "Line 1");
+        String oldToken = registerFullAccess(file);
 
-        Path f1 = tempDir.resolve("f1.txt");
-        Path f2 = tempDir.resolve("f2.txt");
-        Files.writeString(f1, "A\nB\nC");
-        Files.writeString(f2, "1\n2\n3");
-        AccessTracker.registerRead(f1);
-        AccessTracker.registerRead(f2);
+        // Первое редактирование
+        ObjectNode params1 = mapper.createObjectNode();
+        params1.put("path", file.toString());
+        params1.put("startLine", 1);
+        params1.put("content", "Modified");
+        params1.put("accessToken", oldToken);
+        tool.execute(params1);
 
-        ObjectNode params = mapper.createObjectNode();
-        ArrayNode edits = params.putArray("edits");
+        // Попытка использовать старый токен
+        ObjectNode params2 = mapper.createObjectNode();
+        params2.put("path", file.toString());
+        params2.put("startLine", 1);
+        params2.put("content", "Again");
+        params2.put("accessToken", oldToken);
 
-        // Файл 1: Удаляем B, вставляем X после A
-        ObjectNode e1 = edits.addObject();
-        e1.put("path", f1.toString());
-        ArrayNode ops1 = e1.putArray("operations");
-        ops1.addObject().put("operation", "delete").put("startLine", 2).put("endLine", 2);
-        ops1.addObject().put("operation", "insert_after").put("line", 1).put("content", "X");
-
-        // Файл 2: Простая замена
-        ObjectNode e2 = edits.addObject();
-        e2.put("path", f2.toString());
-        e2.put("startLine", 2).put("endLine", 2).put("newText", "TWO");
-
-        tool.execute(params);
-
-        assertEquals("A\nX\nC", Files.readString(f1).replace("\r", ""), "Файл 1 обработан некорректно");
-        assertEquals("1\nTWO\n3", Files.readString(f2).replace("\r", ""), "Файл 2 обработан некорректно");
+        SecurityException ex = assertThrows(SecurityException.class, () -> tool.execute(params2));
+        assertTrue(ex.getMessage().contains("Token validation failed"));
     }
 
     /**
-     * Проверяет откат батча при нарушении политик безопасности (PathSanitizer).
+     * Проверяет DryRun режим (без изменений файла).
      */
     @Test
-    void testMultiFileRollbackOnSecurityException(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-
-        Path safeFile = tempDir.resolve("safe.txt");
-        Files.writeString(safeFile, "Safe Content");
-        AccessTracker.registerRead(safeFile);
-
-        ObjectNode params = mapper.createObjectNode();
-        ArrayNode edits = params.putArray("edits");
-
-        edits.addObject().put("path", safeFile.toString()).put("oldText", "Safe").put("newText", "Hacked");
-        // Попытка изменить защищенный файл gradlew
-        edits.addObject().put("path", "gradlew").put("oldText", "any").put("newText", "bad");
-
-        assertThrows(SecurityException.class, () -> tool.execute(params));
-        assertEquals("Safe Content", Files.readString(safeFile), "Изменения должны быть откатаны");
-    }
-
-    /**
-     * Проверяет откат батча при отсутствии регистрации чтения для одного из файлов.
-     */
-    @Test
-    void testMultiFileRollbackOnAccessError(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-
-        Path f1 = tempDir.resolve("f1.txt");
-        Path f2 = tempDir.resolve("f2.txt");
-        Files.writeString(f1, "Content 1");
-        Files.writeString(f2, "Content 2");
-        AccessTracker.registerRead(f1);
-        // f2 НЕ регистрируем
-
-        ObjectNode params = mapper.createObjectNode();
-        ArrayNode edits = params.putArray("edits");
-
-        edits.addObject().put("path", f1.toString()).put("oldText", "Content 1").put("newText", "Modified");
-        edits.addObject().put("path", f2.toString()).put("oldText", "Content 2").put("newText", "Modified");
-
-        assertThrows(SecurityException.class, () -> tool.execute(params));
-        assertEquals("Content 1", Files.readString(f1), "Первый файл должен быть откатан");
-    }
-
-    /**
-     * Проверяет, что нечеткая замена (oldText) выбрасывает исключение, если найдено более одного совпадения.
-     */
-    @Test
-    void testAmbiguousOldText(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("ambiguous.txt");
-        Files.writeString(file, "Line A\nLine A\nLine B");
-        AccessTracker.registerRead(file);
+    void testDryRunMode() throws Exception {
+        Path file = tempDir.resolve("dry.txt");
+        Files.writeString(file, "Original");
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("oldText", "Line A");
-        params.put("newText", "Line X");
+        params.put("startLine", 1);
+        params.put("content", "Modified");
+        params.put("accessToken", token);
+        params.put("dryRun", true);
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> tool.execute(params));
-        assertTrue(ex.getMessage().contains("Multiple matches"), "Должно быть выброшено исключение о множественных совпадениях");
+        var result = tool.execute(params);
+        String responseText = result.get("content").get(0).get("text").asText();
+
+        assertTrue(responseText.contains("[DRY RUN]"));
+        assertEquals("Original", Files.readString(file), "Файл не должен измениться");
     }
 
     /**
-     * Проверяет, что предоставление правильного expectedChecksum позволяет редактировать файл без предварительного чтения.
+     * Проверяет диагностику при ошибке валидации expectedContent.
      */
     @Test
-    void testEditWithValidChecksumBypass(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-        AccessTracker.reset(); // Убеждаемся, что трекер пуст
-
-        Path file = tempDir.resolve("bypass.txt");
-        Files.writeString(file, "Original Content");
-
-        // Вычисляем CRC32, который должен быть известен LLM
-        long crc = calculateCRC32(file);
-        String crcHex = Long.toHexString(crc).toUpperCase();
+    void testExpectedContentFailureDiagnostics() throws Exception {
+        Path file = tempDir.resolve("test.txt");
+        Files.write(file, List.of("AAA", "BBB", "CCC"));
+        String token = registerFullAccess(file);
 
         ObjectNode params = mapper.createObjectNode();
         params.put("path", file.toString());
-        params.put("oldText", "Original").put("newText", "Modified");
-        params.put("expectedChecksum", crcHex);
-
-        // Должно пройти успешно, несмотря на то, что AccessTracker пуст
-        tool.execute(params);
-
-        assertEquals("Modified Content", Files.readString(file));
-        assertTrue(AccessTracker.hasBeenRead(file), "Файл должен быть автоматически зарегистрирован как прочитанный");
-    }
-
-    /**
-     * Проверяет, что неверный expectedChecksum блокирует редактирование, даже если файл не был прочитан.
-     */
-    @Test
-    void testEditWithInvalidChecksum(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-        AccessTracker.reset();
-
-        Path file = tempDir.resolve("invalid_sum.txt");
-        Files.writeString(file, "Content");
-
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("oldText", "Content").put("newText", "New");
-        params.put("expectedChecksum", "DEADBEEF"); // Неверный хеш
+        params.put("startLine", 2).put("endLine", 2);
+        params.put("expectedContent", "WRONG");
+        params.put("content", "XXX");
+        params.put("accessToken", token);
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
-        assertTrue(ex.getMessage().contains("Checksum mismatch"), "Должно быть сообщение о несовпадении хеша");
-    }
-
-    /**
-     * Проверяет Optimistic Locking: если файл был прочитан, но изменился на диске (хеш не совпадает),
-     * операция должна быть отклонена.
-     */
-    @Test
-    void testOptimisticLocking(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        Path file = tempDir.resolve("opt_lock.txt");
-        Files.writeString(file, "Version 1");
-        AccessTracker.registerRead(file); // Файл "прочитан"
-
-        // Имитируем внешнее изменение файла
-        Files.writeString(file, "Version 2");
-
-        // Пытаемся редактировать, думая, что там Version 1 (вычисляем хеш от Version 1)
-        Path v1Tmp = tempDir.resolve("v1.tmp");
-        Files.writeString(v1Tmp, "Version 1");
-        long v1Crc = calculateCRC32(v1Tmp);
-        
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        params.put("oldText", "Version 1").put("newText", "Version 3");
-        params.put("expectedChecksum", Long.toHexString(v1Crc).toUpperCase());
-
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> tool.execute(params));
-        assertTrue(ex.getMessage().contains("Checksum mismatch"), "Операция должна быть отклонена из-за изменения файла");
-    }
-
-    /**
-     * Regression test: Ensures that when 'edits' array is used with a root 'path',
-     * but items inside 'edits' do not specify 'path', the root path is inherited.
-     */
-    @Test
-    void testRootPathWithEditsArrayMissingPath(@TempDir Path tempDir) throws Exception {
-        PathSanitizer.setRoot(tempDir);
-        TransactionManager.reset();
-
-        Path file = tempDir.resolve("repro.txt");
-        Files.writeString(file, "Original Content");
-        AccessTracker.registerRead(file);
-
-        ObjectNode params = mapper.createObjectNode();
-        params.put("path", file.toString());
-        ArrayNode edits = params.putArray("edits");
-        edits.addObject().put("oldText", "Original").put("newText", "Modified");
-
-        tool.execute(params);
-
-        String content = Files.readString(file);
-        assertTrue(content.contains("Modified"), "Content should be modified to include 'Modified'");
-        assertFalse(content.contains("Original"), "Original content should be replaced");
+        assertTrue(ex.getMessage().contains("ACTUAL CONTENT IN FILE:"));
+        assertTrue(ex.getMessage().contains("[BBB]"));
     }
 
     /**
