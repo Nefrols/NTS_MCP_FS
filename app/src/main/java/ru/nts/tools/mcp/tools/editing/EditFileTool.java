@@ -96,7 +96,8 @@ public class EditFileTool implements McpTool {
 
         props.putObject("expectedContent").put("type", "string").put("description",
                 "SAFETY: Expected current content of target lines. Edit fails if mismatch. " +
-                "Use to prevent race conditions. Error message shows actual content if different.");
+                "Uses fuzzy matching: ignores trailing whitespace, line ending differences (\\r\\n vs \\n). " +
+                "Error message shows actual content if different.");
 
         // === BATCH OPERATIONS (single file, multiple edits) ===
         var ops = props.putObject("operations");
@@ -435,16 +436,23 @@ public class EditFileTool implements McpTool {
             throw new IllegalArgumentException("Addressing error: range " + start + "-" + end + " is out of bounds for file with " + lines.size() + " lines.");
         }
 
-        // 5. Контроль ожидаемого содержимого (expectedContent) с диагностикой
+        // 5. Контроль ожидаемого содержимого (expectedContent) с fuzzy matching
         if (expected != null && end >= start) {
-            String actual = lines.subList(start - 1, end).stream().map(l -> l.replace("\r", "")).collect(Collectors.joining("\n"));
+            String actual = lines.subList(start - 1, end).stream()
+                    .map(l -> l.replace("\r", ""))
+                    .collect(Collectors.joining("\n"));
 
-            String normActual = actual.replace("\r", "");
-            String normExpected = expected.replace("\r", "");
+            // Fuzzy matching: нормализуем whitespace и line endings
+            String normActual = fuzzyNormalize(actual);
+            String normExpected = fuzzyNormalize(expected);
 
             if (!normActual.equals(normExpected)) {
                 // Если не совпало — выбрасываем ошибку с подробным дампом текущих строк
-                throw new IllegalStateException("Content validation failed for range " + start + "-" + end + "!\n" + "EXPECTED:\n[" + normExpected + "]\n" + "ACTUAL CONTENT IN FILE:\n[" + normActual + "]\n" + "Please adjust your request using the actual text from the file.");
+                throw new IllegalStateException(
+                        "Content validation failed for range " + start + "-" + end + "!\n" +
+                        "EXPECTED:\n[" + expected.replace("\r", "") + "]\n" +
+                        "ACTUAL CONTENT IN FILE:\n[" + actual + "]\n" +
+                        "Please adjust your request using the actual text from the file.");
             }
         }
 
@@ -497,6 +505,36 @@ public class EditFileTool implements McpTool {
             return text;
         }
         return Arrays.stream(text.split("\n", -1)).map(line -> line.isEmpty() ? line : indentation + line).collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Fuzzy-нормализация текста для сравнения expectedContent.
+     * Игнорирует:
+     * - Trailing whitespace (пробелы в конце строк)
+     * - Различия в переносах строк (\r\n vs \n)
+     * - Пустые строки в конце
+     */
+    private String fuzzyNormalize(String text) {
+        if (text == null) return "";
+
+        // Нормализуем line endings
+        String normalized = text.replace("\r\n", "\n").replace("\r", "\n");
+
+        // Удаляем trailing whitespace с каждой строки
+        String[] lines = normalized.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) sb.append("\n");
+            sb.append(lines[i].stripTrailing());
+        }
+
+        // Удаляем trailing пустые строки
+        String result = sb.toString();
+        while (result.endsWith("\n")) {
+            result = result.substring(0, result.length() - 1);
+        }
+
+        return result;
     }
 
     /**

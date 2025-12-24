@@ -39,16 +39,21 @@ public class FileSearchTool implements McpTool {
             • find  - Locate files by glob pattern (e.g., '**/*.java', 'src/**/Test*.ts')
             • grep  - Search file contents. RETURNS TOKENS for matched line ranges!
                       Use these tokens directly with nts_edit_file.
+                      Supports context: before=N, after=N (like grep -B/-A)
             • structure - Project tree visualization (respects .gitignore)
 
+            GREP OUTPUT FORMAT:
+            • Match lines marked with ':' (e.g., "  42: public void foo()")
+            • Context lines marked with '-' (e.g., "  41- @Override")
+
             TOKEN WORKFLOW:
-            1. grep for code pattern → get tokens for matches
+            1. grep for code pattern → get tokens for matches (+ context if needed)
             2. Use tokens from grep output directly in nts_edit_file
             3. Or use list to see previously accessed file ranges with tokens
 
             TIPS:
+            • grep with before=2, after=2 gives surrounding context for understanding
             • grep returns grouped line ranges with tokens - no need to nts_file_read first!
-            • list shows [ACCESS: ...] for files you've already read
             • Use autoIgnore=true (default) to skip build artifacts
             """;
     }
@@ -91,6 +96,12 @@ public class FileSearchTool implements McpTool {
                 "Maximum number of matching files for 'grep'. Default: 100. " +
                 "Set 0 for unlimited (may be slow on large codebases).");
 
+        props.putObject("before").put("type", "integer").put("description",
+                "For 'grep': lines of context BEFORE each match (like grep -B). Default: 0.");
+
+        props.putObject("after").put("type", "integer").put("description",
+                "For 'grep': lines of context AFTER each match (like grep -A). Default: 0.");
+
         schema.putArray("required").add("action");
         return schema;
     }
@@ -106,7 +117,9 @@ public class FileSearchTool implements McpTool {
             case "grep" ->
                     executeGrep(pathStr, params.get("pattern").asText(),
                             params.path("isRegex").asBoolean(false),
-                            params.path("maxResults").asInt(100));
+                            params.path("maxResults").asInt(100),
+                            params.path("before").asInt(0),
+                            params.path("after").asInt(0));
             case "structure" ->
                     executeStructure(pathStr, params.path("depth").asInt(3), params.path("autoIgnore").asBoolean(true));
             default -> throw new IllegalArgumentException("Unknown action: " + action);
@@ -199,7 +212,8 @@ public class FileSearchTool implements McpTool {
         return createResponse("Found " + found.size() + " matches:\n" + String.join("\n", found));
     }
 
-    private JsonNode executeGrep(String pathStr, String query, boolean isRegex, int maxResults) throws Exception {
+    private JsonNode executeGrep(String pathStr, String query, boolean isRegex, int maxResults,
+                                  int contextBefore, int contextAfter) throws Exception {
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
         if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
             throw new IllegalArgumentException("Search directory not found: " + pathStr);
@@ -236,11 +250,11 @@ public class FileSearchTool implements McpTool {
                             PathSanitizer.checkFileSize(path);
                             filesProcessed.incrementAndGet();
 
-                            // Используем оптимизированный FastSearch
+                            // Используем оптимизированный FastSearch с контекстом
                             FastSearch.SearchResult searchResult = FastSearch.search(
                                     path, query, isRegex,
                                     0,  // maxResults per file - без лимита
-                                    0, 0  // без контекста
+                                    contextBefore, contextAfter
                             );
 
                             if (searchResult != null && !searchResult.matches().isEmpty()) {
@@ -301,7 +315,9 @@ public class FileSearchTool implements McpTool {
                 sb.append(String.format("  [Lines %d-%d | TOKEN: %s]\n", range.start(), range.end(), range.token()));
             }
             for (var line : res.lines()) {
-                sb.append(String.format("  %4d| %s\n", line.number(), line.text()));
+                // ':' для совпадений, '-' для контекста (как в grep)
+                char marker = line.isMatch() ? ':' : '-';
+                sb.append(String.format("  %4d%c %s\n", line.number(), marker, line.text()));
             }
             sb.append("\n");
         }

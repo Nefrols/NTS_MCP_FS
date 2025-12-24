@@ -252,9 +252,12 @@ public class FileReadTool implements McpTool {
         List<String> head = new ArrayList<>();
         long lineCount = 0;
 
+        // Для больших файлов показываем больше строк (обычно там imports)
+        final int headLimit = 10;
+
         try (var linesStream = Files.lines(path, charset)) {
             var it = linesStream.peek(l -> {
-                if (head.size() < 5) {
+                if (head.size() < headLimit) {
                     head.add(l);
                 }
             }).iterator();
@@ -268,12 +271,17 @@ public class FileReadTool implements McpTool {
 
         // Показываем прочитанные диапазоны
         String accessedRanges = LineAccessTracker.formatAccessedRanges(path);
+        boolean isLargeFile = lineCount > 500;
 
         StringBuilder sb = new StringBuilder();
         sb.append("File: ").append(path.toAbsolutePath()).append("\n");
         sb.append("Size: ").append(attrs.size()).append(" bytes\n");
         sb.append("Encoding: ").append(charset.name()).append("\n");
-        sb.append("Lines: ").append(lineCount).append("\n");
+        sb.append("Lines: ").append(lineCount);
+        if (isLargeFile) {
+            sb.append(" [LARGE FILE]");
+        }
+        sb.append("\n");
         sb.append("CRC32C: ").append(String.format("%X", crc32)).append("\n");
         sb.append("Modified: ").append(attrs.lastModifiedTime()).append("\n");
 
@@ -281,9 +289,15 @@ public class FileReadTool implements McpTool {
             sb.append("Accessed: ").append(accessedRanges).append("\n");
         }
 
-        sb.append("\n### Head (first 5 lines):\n");
+        // Заголовок файла (package/imports для кода)
+        sb.append("\n### Header (first ").append(head.size()).append(" lines - usually package/imports):\n");
         for (int i = 0; i < head.size(); i++) {
             sb.append(String.format("%4d| %s\n", i + 1, head.get(i)));
+        }
+
+        // Подсказка для больших файлов
+        if (isLargeFile) {
+            sb.append("\n[TIP: Large file. Use grep to find specific code, or read targeted ranges.]");
         }
 
         return createResponse(sb.toString().trim());
