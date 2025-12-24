@@ -1,27 +1,27 @@
-// Aristo 23.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp.core;
 
 import java.nio.file.Path;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Трекер результатов поиска (Search Tracker).
- * Позволяет временно кэшировать информацию о найденных совпадениях в рамках текущей сессии.
- * Эти данные используются инструментом nts_list_directory для визуализации релевантности файлов.
+ * Фасад для трекера результатов поиска.
+ * Делегирует все операции к session-scoped SessionSearchTracker.
+ *
+ * Обеспечивает обратную совместимость со старым статическим API,
+ * при этом изолируя кеш поиска между сессиями.
  */
 public class SearchTracker {
 
-    /**
-     * Карта: Абсолютный путь файла -> Количество найденных совпадений.
-     */
-    private static final Map<Path, Integer> matchCache = new ConcurrentHashMap<>();
+    // Делегирование к session-scoped трекеру
+    private static SessionSearchTracker ctx() {
+        return SessionContext.currentOrDefault().search();
+    }
 
     /**
      * Очищает кэш совпадений. Вызывается перед началом нового поиска или явно.
      */
     public static void clear() {
-        matchCache.clear();
+        ctx().clear();
     }
 
     /**
@@ -31,11 +31,7 @@ public class SearchTracker {
      * @param count Количество найденных строк/вхождений.
      */
     public static void registerMatches(Path path, int count) {
-        if (count > 0) {
-            matchCache.put(path.toAbsolutePath().normalize(), count);
-        } else {
-            matchCache.remove(path.toAbsolutePath().normalize());
-        }
+        ctx().registerMatches(path, count);
     }
 
     /**
@@ -45,13 +41,13 @@ public class SearchTracker {
      * @return Количество совпадений или 0, если файл не найден в кэше.
      */
     public static int getMatchCount(Path path) {
-        return matchCache.getOrDefault(path.toAbsolutePath().normalize(), 0);
+        return ctx().getMatchCount(path);
     }
 
     /**
      * Проверяет, есть ли в кэше хоть какие-то результаты.
      */
     public static boolean isEmpty() {
-        return matchCache.isEmpty();
+        return ctx().getMatchingFilesCount() == 0;
     }
 }

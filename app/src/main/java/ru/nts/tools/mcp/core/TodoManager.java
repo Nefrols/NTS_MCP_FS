@@ -13,35 +13,35 @@ import java.util.regex.Pattern;
  * Менеджер планов (Todo Manager).
  * Обеспечивает парсинг Markdown планов и формирование данных для AI-HUD.
  *
- * ВАЖНО: Работает только с TODO текущей сессии (не с файлами прошлых сессий).
+ * Делегирует хранение активного TODO к session-scoped SessionContext.
  */
 public class TodoManager {
 
     private static final Pattern TODO_ITEM_PATTERN = Pattern.compile("(?m)^\\s*([-*]|\\d+\\.)\\s+\\[([ xX])]\\s+(.*)$");
-
-    // Активный TODO текущей сессии (только один на сессию)
-    private static volatile String sessionTodoFile = null;
 
     /**
      * Устанавливает активный TODO для текущей сессии.
      * Вызывается из TodoTool при создании плана.
      */
     public static void setSessionTodo(String fileName) {
-        sessionTodoFile = fileName;
+        SessionContext.currentOrDefault().setActiveTodoFile(fileName);
     }
 
     /**
      * Возвращает имя файла активного TODO текущей сессии.
      */
     public static String getSessionTodo() {
-        return sessionTodoFile;
+        return SessionContext.currentOrDefault().getActiveTodoFile();
     }
 
     /**
      * Сбрасывает состояние сессии (для тестов).
      */
     public static void reset() {
-        sessionTodoFile = null;
+        SessionContext ctx = SessionContext.current();
+        if (ctx != null) {
+            ctx.setActiveTodoFile(null);
+        }
     }
 
     public record HudInfo(String title, int done, int failed, int total, String nextTask, int nextId) {
@@ -85,6 +85,7 @@ public class TodoManager {
 
     public static HudInfo getHudInfo() {
         // Используем ТОЛЬКО TODO текущей сессии
+        String sessionTodoFile = getSessionTodo();
         if (sessionTodoFile == null) {
             return new HudInfo(null, 0, 0, 0, null, 0);
         }
@@ -141,6 +142,7 @@ public class TodoManager {
     public static List<String> getCompletedTasks() {
         List<String> completed = new ArrayList<>();
 
+        String sessionTodoFile = getSessionTodo();
         if (sessionTodoFile == null) {
             return completed;
         }

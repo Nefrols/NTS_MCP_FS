@@ -1,10 +1,11 @@
-// Aristo 23.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpRouter;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.tools.fs.*;
 import ru.nts.tools.mcp.tools.editing.*;
 import ru.nts.tools.mcp.tools.session.*;
@@ -22,6 +23,11 @@ import java.util.concurrent.Executors;
  * Основной класс MCP сервера, оптимизированный для работы с виртуальными потоками Java 24.
  * Реализует протокол Model Context Protocol через стандартные потоки ввода-вывода (stdio).
  * Обеспечивает параллельную обработку запросов от LLM с поддержкой транзакционности.
+ *
+ * Session Isolation:
+ * Каждый LLM-клиент может использовать независимый контекст сессии.
+ * Для указания сессии клиент передает _meta.sessionId в параметрах запроса.
+ * Если sessionId не указан, используется default-сессия (для обратной совместимости).
  */
 public class McpServer {
 
@@ -100,16 +106,45 @@ public class McpServer {
      * Обрабатывает одиночное JSON-RPC сообщение.
      * Выполняет парсинг, маршрутизацию к соответствующему методу и формирование ответа.
      *
+     * Устанавливает SessionContext для изоляции состояния между сессиями.
+     *
      * @param message Строка, содержащая JSON-RPC запрос.
      */
     private static void processMessage(String message) {
+        // Извлекаем sessionId из _meta параметров запроса (если есть)
+        String sessionId = null;
+        try {
+            JsonNode request = mapper.readTree(message);
+            sessionId = request.path("params").path("_meta").path("sessionId").asText(null);
+        } catch (Exception ignored) {
+            // Если не удалось извлечь sessionId - будет использована default сессия
+        }
+
+        // Устанавливаем контекст сессии для текущего потока
+        SessionContext ctx = SessionContext.getOrCreate(sessionId);
+        SessionContext.setCurrent(ctx);
+
+        try {
+            processMessageInternal(message);
+        } finally {
+            // Очищаем контекст потока (но сессия остается в реестре)
+            SessionContext.clearCurrent();
+        }
+    }
+
+    /**
+     * Внутренняя обработка сообщения после установки контекста сессии.
+     */
+    private static void processMessageInternal(String message) {
         try {
             JsonNode request = mapper.readTree(message);
             String method = request.path("method").asText();
             JsonNode id = request.get("id");
 
             if (DEBUG) {
-                System.err.println("[" + Thread.currentThread() + "] Received method: " + method);
+                SessionContext ctx = SessionContext.current();
+                String sid = ctx != null ? ctx.getSessionId() : "none";
+                System.err.println("[" + Thread.currentThread() + "] [Session: " + sid + "] Received method: " + method);
             }
 
             // Подготовка базового каркаса ответа

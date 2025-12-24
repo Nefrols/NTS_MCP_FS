@@ -1,4 +1,4 @@
-// Aristo 22.12.2025
+// Aristo 25.12.2025
 package ru.nts.tools.mcp.core;
 
 import java.io.BufferedReader;
@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Утилита для безопасного выполнения внешних процессов (команд ОС) с поддержкой управления задачами.
@@ -18,7 +19,10 @@ import java.util.concurrent.TimeUnit;
  * 2. Безопасность: Прямой запуск через ProcessBuilder без использования shell (cmd.exe/sh),
  * что делает невозможным выполнение цепочек команд через ';' или пайпы '|'.
  * 3. Стабильность: Жесткие лимиты на время выполнения (timeout) и объем возвращаемых данных.
- * 4. Управление задачами: Каждая команда получает уникальный хеш (taskId) для отслеживания и прерывания.
+ * 4. Управление задачами: Каждая команда получает уникальный идентификатор для отслеживания.
+ *
+ * Thread-safety: Все операции потокобезопасны для многосессионной работы.
+ * Session-scoped: TaskId включает идентификатор сессии для предотвращения коллизий.
  */
 public class ProcessExecutor {
 
@@ -30,9 +34,26 @@ public class ProcessExecutor {
 
     /**
      * Реестр активных и недавно завершенных задач.
-     * Ключ — уникальный taskId (короткий хеш), значение — информация о запущенном процессе.
+     * Ключ — уникальный taskId, значение — информация о запущенном процессе.
      */
     private static final Map<String, TaskInfo> taskRegistry = new ConcurrentHashMap<>();
+
+    /**
+     * Счетчик для генерации уникальных taskId внутри сессии.
+     */
+    private static final AtomicLong taskCounter = new AtomicLong(0);
+
+    /**
+     * Генерирует уникальный taskId с привязкой к сессии.
+     * Формат: {sessionId_prefix}-{counter}-{uuid_suffix}
+     */
+    private static String generateTaskId() {
+        SessionContext ctx = SessionContext.current();
+        String sessionPrefix = ctx != null ? ctx.getSessionId().substring(0, Math.min(8, ctx.getSessionId().length())) : "default";
+        long counter = taskCounter.incrementAndGet();
+        String uuidSuffix = UUID.randomUUID().toString().substring(0, 8);
+        return String.format("%s-%d-%s", sessionPrefix, counter, uuidSuffix);
+    }
 
     /**
      * Выполняет внешнюю команду с заданным таймаутом ожидания.
@@ -48,8 +69,8 @@ public class ProcessExecutor {
      */
     public static ExecutionResult execute(List<String> command, long timeoutSeconds) throws Exception {
         Path root = PathSanitizer.getRoot();
-        // Генерация короткого уникального идентификатора для управления задачей
-        String taskId = UUID.randomUUID().toString().substring(0, 8);
+        // Генерация уникального идентификатора с привязкой к сессии
+        String taskId = generateTaskId();
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(root.toFile());

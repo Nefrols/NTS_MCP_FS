@@ -23,6 +23,34 @@ public record LineAccessToken(Path path,          // Абсолютный нор
     private static final HexFormat HEX = HexFormat.of().withUpperCase();
 
     /**
+     * Результат валидации токена.
+     */
+    public enum ValidationResult {
+        /** Токен валиден */
+        VALID("Token is valid"),
+        /** CRC файла не совпадает (файл изменён) */
+        CRC_MISMATCH("File content has changed (CRC mismatch)"),
+        /** Количество строк изменилось */
+        LINE_COUNT_MISMATCH("File structure changed (line count mismatch)"),
+        /** Токен не найден в реестре */
+        NOT_FOUND("Token not found or expired");
+
+        private final String message;
+
+        ValidationResult(String message) {
+            this.message = message;
+        }
+
+        public boolean valid() {
+            return this == VALID;
+        }
+
+        public String message() {
+            return message;
+        }
+    }
+
+    /**
      * Валидация параметров при создании.
      */
     public LineAccessToken {
