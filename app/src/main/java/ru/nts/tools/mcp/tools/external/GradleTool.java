@@ -46,17 +46,17 @@ public class GradleTool implements McpTool {
             Gradle build automation - compile, test, and package projects.
 
             COMMON TASKS:
-            • build      - Compile + test + assemble
-            • test       - Run all tests
-            • clean      - Remove build artifacts
-            • check      - Run all verification tasks
-            • assemble   - Build without tests
+            - build      - Compile + test + assemble
+            - test       - Run all tests
+            - clean      - Remove build artifacts
+            - check      - Run all verification tasks
+            - assemble   - Build without tests
 
             SMART FEATURES:
-            • Auto-parses compilation errors with file:line format
-            • Extracts test results summary (passed/failed/skipped)
-            • Shows progress percentage for long builds
-            • Truncates large outputs (keeps last 50 lines)
+            - Auto-parses compilation errors with file:line format
+            - Extracts test results summary (passed/failed/skipped)
+            - Shows progress percentage for long builds
+            - Truncates large outputs (keeps last 50 lines)
 
             ASYNC EXECUTION:
             If task exceeds timeout, returns taskId for monitoring.

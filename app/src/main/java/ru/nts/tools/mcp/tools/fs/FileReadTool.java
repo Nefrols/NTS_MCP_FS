@@ -38,7 +38,7 @@ import java.util.zip.CRC32C;
  * Особенности:
  * - Чтение только по диапазону строк (полное чтение файла запрещено)
  * - Возвращает токен доступа к прочитанным строкам
- * - Повторное чтение с токеном: если файл не изменился → [UNCHANGED]
+ * - Повторное чтение с токеном: если файл не изменился -> [UNCHANGED]
  * - Параметр force=true для принудительного чтения контента
  */
 public class FileReadTool implements McpTool {
@@ -55,19 +55,19 @@ public class FileReadTool implements McpTool {
         return """
             Secure file reader with line-level access control.
 
-            WORKFLOW: info → read(range) → get TOKEN → use TOKEN for edit
+            WORKFLOW: info -> read(range) -> get TOKEN -> use TOKEN for edit
 
             KEY RULES:
-            • Full file read is BLOCKED - always specify line range
-            • Returns TOKEN required for editing (nts_edit_file)
-            • Re-read with same TOKEN: returns UNCHANGED if file intact
-            • Tokens auto-merge: reading [1-50] then [40-60] → single token [1-60]
+            - Full file read is BLOCKED - always specify line range
+            - Returns TOKEN required for editing (nts_edit_file)
+            - Re-read with same TOKEN: returns UNCHANGED if file intact
+            - Tokens auto-merge: reading [1-50] then [40-60] -> single token [1-60]
 
             TIPS:
-            • Start with action='info' to see line count and preview
-            • Use 'ranges' array to read multiple sections efficiently
-            • Pass previous 'token' to check if re-read needed
-            • Use 'contextStartPattern' for dynamic anchor-based reading
+            - Start with action='info' to see line count and preview
+            - Use 'ranges' array to read multiple sections efficiently
+            - Pass previous 'token' to check if re-read needed
+            - Use 'contextStartPattern' for dynamic anchor-based reading
             """;
     }
 
@@ -99,7 +99,7 @@ public class FileReadTool implements McpTool {
                 "Shortcut: read single line N. Equivalent to startLine=N, endLine=N.");
 
         props.putObject("contextStartPattern").put("type", "string").put("description",
-                "Regex to find anchor line dynamically. Example: 'public void myMethod' → finds method start. " +
+                "Regex to find anchor line dynamically. Example: 'public void myMethod' -> finds method start. " +
                 "Use with contextRange to get surrounding lines.");
 
         props.putObject("contextRange").put("type", "integer").put("description",
@@ -115,7 +115,7 @@ public class FileReadTool implements McpTool {
         itemProps.putObject("endLine").put("type", "integer").put("description", "Range end (1-based, inclusive)");
 
         props.putObject("token").put("type", "string").put("description",
-                "Pass previous token to check if file changed. If valid → returns UNCHANGED (saves tokens). " +
+                "Pass previous token to check if file changed. If valid -> returns UNCHANGED (saves tokens). " +
                 "Get token from previous read or from nts_file_search list/grep output.");
 
         props.putObject("force").put("type", "boolean").put("description",

@@ -45,15 +45,15 @@ public class CompareFilesTool implements McpTool {
             File comparison tool - shows differences between two files.
 
             OUTPUT: Unified Diff format (same as git diff)
-            • Lines starting with '-' = removed from path1
-            • Lines starting with '+' = added in path2
-            • Context lines shown for reference
+            - Lines starting with '-' = removed from path1
+            - Lines starting with '+' = added in path2
+            - Context lines shown for reference
 
             USE CASES:
-            • Compare original vs modified file
-            • Verify changes before commit
-            • Diff two versions of same file
-            • Check if files are identical
+            - Compare original vs modified file
+            - Verify changes before commit
+            - Diff two versions of same file
+            - Check if files are identical
 
             RETURNS: "Files are identical." if no differences found.
             """;

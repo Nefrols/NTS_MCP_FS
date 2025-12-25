@@ -58,9 +58,9 @@ public class TodoTool implements McpTool {
             Task planning and progress tracking system.
 
             ACTIONS:
-            • create - Start new plan with title and checklist
-            • status - View current plan and task states
-            • update - Modify plan content or mark task done/failed
+            - create - Start new plan with title and checklist
+            - status - View current plan and task states
+            - update - Modify plan content or mark task done/failed
 
             TASK FORMAT (Markdown checklist):
             - [ ] Pending task
@@ -69,14 +69,14 @@ public class TodoTool implements McpTool {
 
             WORKFLOW:
             1. create(title='Implement feature', content='- [ ] Step 1\\n- [ ] Step 2')
-            2. status() → view current plan
-            3. update(id=1, status='done') → mark first task complete
+            2. status() -> view current plan
+            3. update(id=1, status='done') -> mark first task complete
             4. update(id=2, status='failed', comment='blocked by X')
 
             INTEGRATION:
-            • HUD displays active plan progress
-            • nts_git commit_session includes completed tasks
-            • Plans stored in .nts/sessions/{sessionId}/todos/
+            - HUD displays active plan progress
+            - nts_git commit_session includes completed tasks
+            - Plans stored in .nts/sessions/{sessionId}/todos/
 
             TIP: Use numbered IDs from status output for updates.
             """;

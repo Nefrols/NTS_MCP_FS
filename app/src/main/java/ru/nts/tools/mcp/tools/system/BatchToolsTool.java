@@ -68,29 +68,29 @@ public class BatchToolsTool implements McpTool {
             Atomic transaction orchestrator - execute multiple tools as single operation.
 
             KEY FEATURES:
-            • All-or-nothing: If ANY action fails → ALL rolled back
-            • Session Tokens: CRC check skipped within batch (no re-read needed)
-            • InfinityRange: Files created in batch have no line boundary checks
+            - All-or-nothing: If ANY action fails -> ALL rolled back
+            - Session Tokens: CRC check skipped within batch (no re-read needed)
+            - InfinityRange: Files created in batch have no line boundary checks
 
             VARIABLE INTERPOLATION (token & path passing):
-            • {{step1.token}}  - First LAT token from step 1
-            • {{step1.tokens}} - All tokens comma-separated
-            • {{myId.token}}   - Reference by action 'id'
-            • {{myId.path}}    - Current file path (auto-updates after rename/move!)
+            - {{step1.token}}  - First LAT token from step 1
+            - {{step1.tokens}} - All tokens comma-separated
+            - {{myId.token}}   - Reference by action 'id'
+            - {{myId.path}}    - Current file path (auto-updates after rename/move!)
 
             SESSION REFERENCES (path tracking after rename/move):
             Use {{id.path}} to reference a file that was renamed/moved:
             actions: [
               {id: 'f', tool: 'nts_file_manage', params: {action: 'create', path: 'Old.java', ...}},
               {tool: 'nts_file_manage', params: {action: 'rename', path: '{{f.path}}', newName: 'New.java'}},
-              {tool: 'nts_edit_file', params: {path: '{{f.path}}', ...}}  // ← auto-resolves to 'New.java'!
+              {tool: 'nts_edit_file', params: {path: '{{f.path}}', ...}}  // <- auto-resolves to 'New.java'!
             ]
 
             SMART LINE ADDRESSING (Virtual FS Context):
             For startLine/endLine, use special values that auto-calculate:
-            • $LAST           - Last line of the file
-            • $PREV_END       - End line of previous edit on this file
-            • $PREV_END+N     - N lines after previous edit (e.g., $PREV_END+1)
+            - $LAST           - Last line of the file
+            - $PREV_END       - End line of previous edit on this file
+            - $PREV_END+N     - N lines after previous edit (e.g., $PREV_END+1)
 
             EXAMPLE (create + rename + edit):
             actions: [

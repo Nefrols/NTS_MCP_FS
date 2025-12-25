@@ -42,25 +42,25 @@ public class SessionTool implements McpTool {
             Session recovery and undo/redo system with Deep Undo support.
 
             ACTIONS:
-            • checkpoint     - Save named restore point BEFORE risky changes
-            • rollback       - Revert ALL changes back to checkpoint
-            • undo           - Smart undo with Path Lineage support (tracks moved files!)
-            • redo           - Step forward one operation (like Ctrl+Y)
-            • journal        - View full session activity log
-            • git_checkpoint - Create Git stash as fallback restore point
-            • git_restore    - Restore files from Git HEAD (when undo fails)
+            - checkpoint     - Save named restore point BEFORE risky changes
+            - rollback       - Revert ALL changes back to checkpoint
+            - undo           - Smart undo with Path Lineage support (tracks moved files!)
+            - redo           - Step forward one operation (like Ctrl+Y)
+            - journal        - View full session activity log
+            - git_checkpoint - Create Git stash as fallback restore point
+            - git_restore    - Restore files from Git HEAD (when undo fails)
 
             SMART UNDO FEATURES:
-            • Path Lineage: tracks file moves (A→B→C) and undoes to correct location
-            • Partial Undo: skips dirty directories, undoes what's possible
-            • CRC Recovery: finds "lost" files by content hash
-            • Git Fallback: suggests git checkout when recovery impossible
+            - Path Lineage: tracks file moves (A->B->C) and undoes to correct location
+            - Partial Undo: skips dirty directories, undoes what's possible
+            - CRC Recovery: finds "lost" files by content hash
+            - Git Fallback: suggests git checkout when recovery impossible
 
             UNDO STATUSES:
-            • SUCCESS: fully restored
-            • RESOLVED_MOVE: file found at relocated path
-            • PARTIAL: some files skipped (check details)
-            • STUCK: cannot undo - use git fallback
+            - SUCCESS: fully restored
+            - RESOLVED_MOVE: file found at relocated path
+            - PARTIAL: some files skipped (check details)
+            - STUCK: cannot undo - use git fallback
 
             GIT INTEGRATION:
             When undo shows STUCK status, use git_restore to recover from HEAD.
@@ -72,7 +72,7 @@ public class SessionTool implements McpTool {
             3. Use rollback to abandon failed approach
             4. Check journal to understand what changed
 
-            EXAMPLE: checkpoint('before-refactor') → make changes → rollback('before-refactor')
+            EXAMPLE: checkpoint('before-refactor') -> make changes -> rollback('before-refactor')
             """;
     }
 

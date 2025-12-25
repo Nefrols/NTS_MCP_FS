@@ -53,29 +53,29 @@ public class ProjectReplaceTool implements McpTool {
             Global search and replace across entire project.
 
             USE CASES:
-            • Rename class/method across all files
-            • Update import paths
-            • Change API endpoints
-            • Fix typos in comments/strings
+            - Rename class/method across all files
+            - Update import paths
+            - Change API endpoints
+            - Fix typos in comments/strings
 
             FEATURES:
-            • Atomic transaction: all files succeed or all rollback
-            • Regex support for complex patterns
-            • Include/exclude globs to limit scope
-            • Binary files automatically skipped
-            • Report shows affected files with occurrence counts
+            - Atomic transaction: all files succeed or all rollback
+            - Regex support for complex patterns
+            - Include/exclude globs to limit scope
+            - Binary files automatically skipped
+            - Report shows affected files with occurrence counts
 
             SAFETY:
-            • Preview changes first with nts_file_search grep
-            • All changes undoable via nts_session undo
+            - Preview changes first with nts_file_search grep
+            - All changes undoable via nts_session undo
 
             TOKEN OUTPUT:
             Returns affectedFiles with path, crc32c, lineCount, and accessToken for each modified file.
             Use tokens in batch: {{stepN.affectedFiles}} or parse from output for subsequent edits.
 
             EXAMPLES:
-            • Rename: pattern='OldClass', replacement='NewClass', include='**/*.java'
-            • Regex: pattern='log\\.(info|debug)', replacement='logger.$1', isRegex=true
+            - Rename: pattern='OldClass', replacement='NewClass', include='**/*.java'
+            - Regex: pattern='log\\.(info|debug)', replacement='logger.$1', isRegex=true
 
             WARNING: Powerful tool - verify pattern matches expected text first!
             """;

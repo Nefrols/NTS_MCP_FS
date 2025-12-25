@@ -25,7 +25,9 @@ import ru.nts.tools.mcp.McpServer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Инструмент инициализации сессии.
@@ -53,13 +55,13 @@ public class InitTool implements McpTool {
             CRITICAL: Call this FIRST before using any other nts_* tools!
 
             This tool creates a new isolated session with:
-            • Unique session UUID (required for all other tools)
-            • Session-scoped undo/redo history
-            • Session-scoped file access tokens
-            • Session-scoped TODO plans
+            - Unique session UUID (required for all other tools)
+            - Session-scoped undo/redo history
+            - Session-scoped file access tokens
+            - Session-scoped TODO plans
 
             WORKFLOW:
-            1. Call nts_init() → receive session UUID
+            1. Call nts_init() -> receive session UUID
             2. Store the UUID from response
             3. Pass sessionId in arguments for ALL subsequent tool calls
 
@@ -69,9 +71,9 @@ public class InitTool implements McpTool {
             { "sessionId": "<uuid>", "path": "/some/file", ... }
 
             RETURNS:
-            • sessionId: UUID to pass in all subsequent tool calls
-            • projectRoot: Working directory path
-            • message: Welcome message with session info
+            - sessionId: UUID to pass in all subsequent tool calls
+            - projectRoot: Working directory path
+            - message: Welcome message with session info
 
             NOTE: Session UUID is also shown in HUD output after every tool call.
             If you lose the UUID, check the HUD or call nts_init again.
@@ -88,7 +90,7 @@ public class InitTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         schema.putObject("properties");
-        // No required parameters - init can be called without any args
+        schema.putArray("required"); // Empty array - no required params
         return schema;
     }
 
@@ -119,6 +121,18 @@ public class InitTool implements McpTool {
         Files.createDirectories(ctx.getSnapshotsDir());
 
         Path projectRoot = PathSanitizer.getRoot();
+        List<Path> allRoots = PathSanitizer.getRoots();
+
+        // Формируем информацию о roots
+        String rootsInfo;
+        if (allRoots.size() == 1) {
+            rootsInfo = "Project root: " + projectRoot;
+        } else {
+            rootsInfo = "Project roots (" + allRoots.size() + "):\n" +
+                allRoots.stream()
+                    .map(r -> "  - " + r.toString())
+                    .collect(Collectors.joining("\n"));
+        }
 
         // Формируем ответ
         ObjectNode result = mapper.createObjectNode();
@@ -131,19 +145,29 @@ public class InitTool implements McpTool {
             Session initialized successfully.
 
             SESSION ID: %s
-            Project root: %s
+            %s
             Session directory: %s
 
             IMPORTANT: Pass this sessionId in ALL subsequent tool calls.
             Example: { "sessionId": "%s", "path": "/file.txt", ... }
 
             The session UUID is also shown in the HUD output after every tool call.
-            """, sessionId, projectRoot, sessionDir, sessionId));
+            """, sessionId, rootsInfo, sessionDir, sessionId));
 
         // Структурированные данные для машинного чтения
         ObjectNode dataNode = content.addObject();
         dataNode.put("type", "text");
-        dataNode.put("text", "---\nsessionId: " + sessionId + "\nprojectRoot: " + projectRoot);
+
+        StringBuilder yamlData = new StringBuilder();
+        yamlData.append("---\nsessionId: ").append(sessionId).append("\n");
+        yamlData.append("primaryRoot: ").append(projectRoot).append("\n");
+        if (allRoots.size() > 1) {
+            yamlData.append("roots:\n");
+            for (Path root : allRoots) {
+                yamlData.append("  - ").append(root).append("\n");
+            }
+        }
+        dataNode.put("text", yamlData.toString());
 
         return result;
     }

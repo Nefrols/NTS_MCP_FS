@@ -38,13 +38,13 @@ public class TaskTool implements McpTool {
             Background task manager - monitor and control async processes.
 
             ACTIONS:
-            • log  - Get current output from running task
-            • kill - Terminate a running task
+            - log  - Get current output from running task
+            - kill - Terminate a running task
 
             WHEN TO USE:
-            • Gradle build taking too long? Check progress with 'log'
-            • Task stuck or wrong command? Stop it with 'kill'
-            • Git command running async? Monitor with 'log'
+            - Gradle build taking too long? Check progress with 'log'
+            - Task stuck or wrong command? Stop it with 'kill'
+            - Git command running async? Monitor with 'log'
 
             WORKFLOW:
             1. Start long task (e.g., nts_gradle_task with large timeout)

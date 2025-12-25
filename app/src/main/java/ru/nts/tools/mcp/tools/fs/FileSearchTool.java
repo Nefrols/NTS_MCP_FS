@@ -47,28 +47,28 @@ public class FileSearchTool implements McpTool {
             Project navigation and code search with automatic token generation.
 
             ACTIONS:
-            • list  - Directory contents. Shows files with their access tokens (if read before).
+            - list  - Directory contents. Shows files with their access tokens (if read before).
                       Format: [FILE] name.java
                                 [Lines 1-50 | TOKEN: LAT:...]
-            • find  - Locate files by glob pattern (e.g., '**/*.java', 'src/**/Test*.ts')
-            • grep  - Search file contents. RETURNS TOKENS for matched line ranges!
+            - find  - Locate files by glob pattern (e.g., '**/*.java', 'src/**/Test*.ts')
+            - grep  - Search file contents. RETURNS TOKENS for matched line ranges!
                       Use these tokens directly with nts_edit_file.
                       Supports context: before=N, after=N (like grep -B/-A)
-            • structure - Project tree visualization (respects .gitignore)
+            - structure - Project tree visualization (respects .gitignore)
 
             GREP OUTPUT FORMAT:
-            • Match lines marked with ':' (e.g., "  42: public void foo()")
-            • Context lines marked with '-' (e.g., "  41- @Override")
+            - Match lines marked with ':' (e.g., "  42: public void foo()")
+            - Context lines marked with '-' (e.g., "  41- @Override")
 
             TOKEN WORKFLOW:
-            1. grep for code pattern → get tokens for matches (+ context if needed)
+            1. grep for code pattern -> get tokens for matches (+ context if needed)
             2. Use tokens from grep output directly in nts_edit_file
             3. Or use list to see previously accessed file ranges with tokens
 
             TIPS:
-            • grep with before=2, after=2 gives surrounding context for understanding
-            • grep returns grouped line ranges with tokens - no need to nts_file_read first!
-            • Use autoIgnore=true (default) to skip build artifacts
+            - grep with before=2, after=2 gives surrounding context for understanding
+            - grep returns grouped line ranges with tokens - no need to nts_file_read first!
+            - Use autoIgnore=true (default) to skip build artifacts
             """;
     }
 
@@ -85,7 +85,7 @@ public class FileSearchTool implements McpTool {
 
         props.putObject("action").put("type", "string").put("description",
                 "Operation: 'list' (directory + access tokens), 'find' (glob filename search), " +
-                "'grep' (content search → RETURNS TOKENS), 'structure' (tree view). Required.");
+                "'grep' (content search -> RETURNS TOKENS), 'structure' (tree view). Required.");
 
         props.putObject("path").put("type", "string").put("description",
                 "Starting directory. Use '.' for project root. Default: '.'");

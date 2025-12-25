@@ -87,6 +87,7 @@ public class McpIntegrator {
                 int nextAction = clients.size() + 1;
                 System.out.println("\nActions:");
                 System.out.printf("1-%d. Install/Uninstall for specific client\n", clients.size());
+                System.out.printf("%d.   Set PROJECT_ROOT for integrated client\n", nextAction++);
                 System.out.printf("%d.   Build and Create local mcp-config.json in project root\n", nextAction++);
                 System.out.printf("%d.   Build project only (shadowJar)\n", nextAction++);
                 System.out.printf("%d.   Exit\n", nextAction);
@@ -100,6 +101,11 @@ public class McpIntegrator {
                     break;
                 }
 
+                if (String.valueOf(nextAction - 3).equals(choiceStr)) {
+                    // Set PROJECT_ROOT
+                    setProjectRoot(clients, scanner);
+                    continue;
+                }
                 if (String.valueOf(nextAction - 2).equals(choiceStr)) {
                     if (buildProject(projectRoot)) createLocalConfig(projectRoot);
                     continue;
@@ -185,6 +191,146 @@ public class McpIntegrator {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Интерактивно устанавливает PROJECT_ROOT для выбранного интегрированного клиента.
+     *
+     * @param clients Список всех известных клиентов.
+     * @param scanner Scanner для чтения ввода пользователя.
+     */
+    private static void setProjectRoot(List<ClientInfo> clients, Scanner scanner) {
+        // Собираем только интегрированные клиенты
+        List<ClientInfo> integrated = new ArrayList<>();
+        for (ClientInfo client : clients) {
+            if (Files.exists(client.configPath()) && isIntegrated(client.configPath())) {
+                integrated.add(client);
+            }
+        }
+
+        if (integrated.isEmpty()) {
+            System.out.println("\nNo integrated clients found. Install to a client first.");
+            return;
+        }
+
+        System.out.println("\n--- Select integrated client to configure ---");
+        for (int i = 0; i < integrated.size(); i++) {
+            ClientInfo client = integrated.get(i);
+            String currentRoot = getCurrentProjectRoot(client.configPath());
+            String rootInfo = currentRoot != null ? " [PROJECT_ROOT: " + currentRoot + "]" : " [PROJECT_ROOT: not set]";
+            System.out.printf("%d. %s%s\n", i + 1, client.name(), rootInfo);
+        }
+        System.out.println("0. Cancel");
+        System.out.print("> ");
+
+        if (!scanner.hasNextLine()) return;
+        String choiceStr = scanner.nextLine().trim();
+
+        if ("0".equals(choiceStr)) {
+            System.out.println("Cancelled.");
+            return;
+        }
+
+        try {
+            int choice = Integer.parseInt(choiceStr);
+            if (choice < 1 || choice > integrated.size()) {
+                System.out.println("Invalid choice.");
+                return;
+            }
+
+            ClientInfo client = integrated.get(choice - 1);
+
+            System.out.println("\nEnter absolute path to project working directory:");
+            System.out.println("(or press Enter to remove PROJECT_ROOT)");
+            System.out.print("> ");
+
+            if (!scanner.hasNextLine()) return;
+            String pathStr = scanner.nextLine().trim();
+
+            if (pathStr.isEmpty()) {
+                // Удаляем PROJECT_ROOT
+                removeProjectRoot(client.configPath());
+                System.out.println("PROJECT_ROOT removed from " + client.name());
+            } else {
+                Path projectPath = Paths.get(pathStr).toAbsolutePath().normalize();
+                if (!Files.isDirectory(projectPath)) {
+                    System.out.println("Warning: Directory does not exist: " + projectPath);
+                    System.out.print("Continue anyway? (y/n): ");
+                    if (!scanner.hasNextLine()) return;
+                    String confirm = scanner.nextLine().trim().toLowerCase();
+                    if (!confirm.equals("y") && !confirm.equals("yes")) {
+                        System.out.println("Cancelled.");
+                        return;
+                    }
+                }
+
+                updateProjectRoot(client.configPath(), projectPath.toString());
+                System.out.println("PROJECT_ROOT set to: " + projectPath);
+                System.out.println("Configuration updated for " + client.name());
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("Please enter a valid number.");
+        } catch (IOException e) {
+            System.err.println("Failed to update configuration: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Получает текущее значение PROJECT_ROOT из конфигурации.
+     */
+    private static String getCurrentProjectRoot(Path settingsFile) {
+        try {
+            JsonNode root = mapper.readTree(settingsFile.toFile());
+            return root.path("mcpServers").path(SERVER_NAME).path("env").path("PROJECT_ROOT").asText(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Обновляет PROJECT_ROOT в конфигурации сервера.
+     */
+    private static void updateProjectRoot(Path settingsFile, String projectRoot) throws IOException {
+        createBackup(settingsFile);
+
+        ObjectNode root = (ObjectNode) mapper.readTree(settingsFile.toFile());
+        ObjectNode mcpServers = (ObjectNode) root.path("mcpServers");
+        ObjectNode serverNode = (ObjectNode) mcpServers.path(SERVER_NAME);
+
+        // Создаем или обновляем env объект
+        ObjectNode env;
+        if (serverNode.has("env") && serverNode.get("env").isObject()) {
+            env = (ObjectNode) serverNode.get("env");
+        } else {
+            env = mapper.createObjectNode();
+            serverNode.set("env", env);
+        }
+
+        env.put("PROJECT_ROOT", projectRoot);
+
+        mapper.writeValue(settingsFile.toFile(), root);
+    }
+
+    /**
+     * Удаляет PROJECT_ROOT из конфигурации сервера.
+     */
+    private static void removeProjectRoot(Path settingsFile) throws IOException {
+        createBackup(settingsFile);
+
+        ObjectNode root = (ObjectNode) mapper.readTree(settingsFile.toFile());
+        JsonNode serverNode = root.path("mcpServers").path(SERVER_NAME);
+
+        if (serverNode.isObject() && serverNode.has("env")) {
+            ObjectNode env = (ObjectNode) serverNode.get("env");
+            env.remove("PROJECT_ROOT");
+
+            // Если env пустой, удаляем его полностью
+            if (env.isEmpty()) {
+                ((ObjectNode) serverNode).remove("env");
+            }
+        }
+
+        mapper.writeValue(settingsFile.toFile(), root);
     }
 
     /**
@@ -348,7 +494,10 @@ public class McpIntegrator {
         }
 
         server.put("command", "java");
-        server.putArray("args").add("-jar").add(jarPath.toString());
+        server.putArray("args")
+            .add("-Dfile.encoding=UTF-8")
+            .add("-jar")
+            .add(jarPath.toString());
 
         return server;
     }

@@ -63,16 +63,16 @@ public class EditFileTool implements McpTool {
             Token must cover ALL lines you want to edit.
 
             WORKFLOW:
-            1. nts_file_read(path, startLine, endLine) → get TOKEN
-            2. nts_edit_file(path, startLine, content, accessToken=TOKEN) → get NEW_TOKEN
+            1. nts_file_read(path, startLine, endLine) -> get TOKEN
+            2. nts_edit_file(path, startLine, content, accessToken=TOKEN) -> get NEW_TOKEN
             3. Use NEW_TOKEN for subsequent edits
 
             FEATURES:
-            • Single edit: path + startLine + content + accessToken
-            • Batch edit: path + operations[] + accessToken (bottom-up processing)
-            • Multi-file: edits[] array (atomic transaction - all succeed or all rollback)
-            • Safety: expectedContent validates current state before edit
-            • Preview: dryRun=true shows diff without writing
+            - Single edit: path + startLine + content + accessToken
+            - Batch edit: path + operations[] + accessToken (bottom-up processing)
+            - Multi-file: edits[] array (atomic transaction - all succeed or all rollback)
+            - Safety: expectedContent validates current state before edit
+            - Preview: dryRun=true shows diff without writing
 
             OPERATIONS: replace (default), insert_before, insert_after, delete
             """;
@@ -95,7 +95,7 @@ public class EditFileTool implements McpTool {
 
         props.putObject("accessToken").put("type", "string").put("description",
                 "MANDATORY: Token from nts_file_read. Must cover lines [startLine..endLine]. " +
-                "Without valid token → SecurityException. After edit → returns NEW token.");
+                "Without valid token -> SecurityException. After edit -> returns NEW token.");
 
         props.putObject("startLine").put("type", "integer").put("description",
                 "First line to replace (1-based). Content replaces lines [startLine..endLine].");
@@ -134,8 +134,8 @@ public class EditFileTool implements McpTool {
         props.putObject("contextStartPattern").put("type", "string").put("description",
                 "Regex to find anchor line. startLine becomes RELATIVE offset from match: " +
                 "0 = anchor line itself, 1 = next line, -1 = previous line. " +
-                "Example: pattern='public void foo', startLine=0 → edits the 'public void foo' line itself. " +
-                "Example: pattern='public void foo', startLine=1, endLine=3 → edits 3 lines AFTER the match.");
+                "Example: pattern='public void foo', startLine=0 -> edits the 'public void foo' line itself. " +
+                "Example: pattern='public void foo', startLine=1, endLine=3 -> edits 3 lines AFTER the match.");
 
         props.putObject("instruction").put("type", "string").put("description",
                 "Human-readable change description for session journal. Shown in undo history.");

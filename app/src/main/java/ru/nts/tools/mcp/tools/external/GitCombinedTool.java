@@ -45,11 +45,11 @@ public class GitCombinedTool implements McpTool {
             Git integration hub - version control operations.
 
             ACTIONS:
-            • cmd - Execute Git commands (status, diff, log, add, commit, branch, rev-parse, init)
+            - cmd - Execute Git commands (status, diff, log, add, commit, branch, rev-parse, init)
                     Only safe, local operations allowed. No push/pull/fetch.
-            • diff - View changes in unified diff format
+            - diff - View changes in unified diff format
                     Use staged=true for indexed changes only
-            • commit_session - Auto-generate commit from session activity
+            - commit_session - Auto-generate commit from session activity
                     Includes completed TODO tasks and technical changes
 
             WORKFLOW EXAMPLES:

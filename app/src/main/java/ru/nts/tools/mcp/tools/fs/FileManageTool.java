@@ -50,20 +50,20 @@ public class FileManageTool implements McpTool {
             File system structure manager with full UNDO support.
 
             ACTIONS:
-            • create - New file with optional initial content. Parent dirs auto-created.
-            • delete - Remove file/directory. Use recursive=true for non-empty dirs.
-            • move   - Relocate file/dir to new path. Preserves access tokens!
-            • rename - Change filename in same directory. Preserves access tokens!
+            - create - New file with optional initial content. Parent dirs auto-created.
+            - delete - Remove file/directory. Use recursive=true for non-empty dirs.
+            - move   - Relocate file/dir to new path. Preserves access tokens!
+            - rename - Change filename in same directory. Preserves access tokens!
 
             TOKEN BEHAVIOR:
-            • create: Returns access token for immediate editing (no read needed!)
-            • move/rename: Tokens automatically transferred to new path
-            • delete: All tokens for the file are invalidated
+            - create: Returns access token for immediate editing (no read needed!)
+            - move/rename: Tokens automatically transferred to new path
+            - delete: All tokens for the file are invalidated
 
             SAFETY:
-            • All operations are transactional (auto-rollback on error)
-            • Use nts_session(action='undo') to reverse any operation
-            • External changes (by other tools) cannot be undone
+            - All operations are transactional (auto-rollback on error)
+            - Use nts_session(action='undo') to reverse any operation
+            - External changes (by other tools) cannot be undone
             """;
     }
 

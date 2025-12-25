@@ -19,7 +19,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Утилита для проверки, нормализации и защиты путей файловой системы (Path Sanitizer).
@@ -27,13 +31,27 @@ import java.util.Set;
  * 1. Выход за пределы рабочей директории проекта (Path Traversal).
  * 2. Доступ к скрытым системным файлам и папкам инфраструктуры (.git, .gradle, .nts).
  * 3. Попытки загрузки сверхбольших файлов, способных вызвать переполнение памяти (OOM).
+ *
+ * Поддерживает множественные корневые директории (roots) согласно MCP протоколу.
  */
 public class PathSanitizer {
 
     /**
-     * Текущий корень рабочей директории. Все операции должны ограничиваться этим путем.
+     * Список корневых директорий проекта. Все операции должны ограничиваться этими путями.
+     * Использует CopyOnWriteArrayList для thread-safe доступа при динамическом обновлении roots.
      */
-    private static Path root = Paths.get(".").toAbsolutePath().normalize();
+    private static final List<Path> roots = new CopyOnWriteArrayList<>();
+
+    /**
+     * Основной (первый) корень для обратной совместимости.
+     * Устанавливается при вызове setRoot() или как первый элемент setRoots().
+     */
+    private static volatile Path primaryRoot = Paths.get(".").toAbsolutePath().normalize();
+
+    static {
+        // Инициализация с текущей директорией по умолчанию
+        roots.add(primaryRoot);
+    }
 
     /**
      * Максимально допустимый размер файла для текстовой обработки (10 MB).
@@ -48,18 +66,53 @@ public class PathSanitizer {
     private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".nts");
 
     /**
-     * Переопределяет корень проекта.
+     * Переопределяет корень проекта (единственный root).
      * В основном используется в модульных тестах для изоляции тестового окружения во временных папках.
+     * Также используется при установке PROJECT_ROOT из переменной окружения.
      *
      * @param newRoot Новый путь, который будет считаться корнем "песочницы".
      */
     public static void setRoot(Path newRoot) {
-        root = newRoot.toAbsolutePath().normalize();
+        Path normalized = newRoot.toAbsolutePath().normalize();
+        primaryRoot = normalized;
+        roots.clear();
+        roots.add(normalized);
+    }
+
+    /**
+     * Устанавливает список корневых директорий проекта.
+     * Используется при получении roots от MCP клиента.
+     * Первый элемент списка становится primaryRoot для обратной совместимости.
+     *
+     * @param newRoots Список путей, которые будут считаться разрешенными корнями.
+     */
+    public static void setRoots(List<Path> newRoots) {
+        if (newRoots == null || newRoots.isEmpty()) {
+            return;
+        }
+
+        List<Path> normalized = new ArrayList<>();
+        for (Path root : newRoots) {
+            normalized.add(root.toAbsolutePath().normalize());
+        }
+
+        primaryRoot = normalized.get(0);
+        roots.clear();
+        roots.addAll(normalized);
+    }
+
+    /**
+     * Возвращает неизменяемый список всех корневых директорий.
+     *
+     * @return Список объектов {@link Path} для всех разрешенных корней.
+     */
+    public static List<Path> getRoots() {
+        return Collections.unmodifiableList(new ArrayList<>(roots));
     }
 
     /**
      * Выполняет санитарную проверку и нормализацию пути.
-     * Гарантирует, что итоговый абсолютный путь находится строго внутри корня проекта.
+     * Гарантирует, что итоговый абсолютный путь находится строго внутри одного из корней проекта.
      *
      * @param requestedPath  Путь, переданный LLM (может быть абсолютным, относительным или содержать '..').
      * @param allowProtected Если true, разрешает чтение системных файлов (например, для анализа build.gradle).
@@ -67,7 +120,7 @@ public class PathSanitizer {
      *
      * @return Абсолютный нормализованный объект {@link Path}.
      *
-     * @throws SecurityException Если путь ведет за пределы корня или файл защищен политикой безопасности.
+     * @throws SecurityException Если путь ведет за пределы всех корней или файл защищен политикой безопасности.
      */
     public static Path sanitize(String requestedPath, boolean allowProtected) {
         Path target;
@@ -75,16 +128,28 @@ public class PathSanitizer {
         String normalizedRequest = requestedPath.replace('\\', '/');
         Path requested = Paths.get(normalizedRequest);
 
-        // Преобразование в абсолютный путь относительно текущего корня
+        // Преобразование в абсолютный путь
         if (requested.isAbsolute()) {
             target = requested.toAbsolutePath().normalize();
         } else {
-            target = root.resolve(normalizedRequest).toAbsolutePath().normalize();
+            // Для относительных путей используем primary root
+            target = primaryRoot.resolve(normalizedRequest).toAbsolutePath().normalize();
         }
 
-        // Проверка Path Traversal: итоговый путь обязан начинаться с префикса корня
-        if (!target.startsWith(root)) {
-            throw new SecurityException("Access denied: path is outside of working directory: " + requestedPath + " (Root: " + root + ")");
+        // Проверка Path Traversal: итоговый путь обязан начинаться с префикса одного из корней
+        boolean isWithinRoot = false;
+        for (Path root : roots) {
+            if (target.startsWith(root)) {
+                isWithinRoot = true;
+                break;
+            }
+        }
+
+        if (!isWithinRoot) {
+            String rootsInfo = roots.size() == 1
+                ? "(Root: " + roots.get(0) + ")"
+                : "(Roots: " + roots + ")";
+            throw new SecurityException("Access denied: path is outside of working directory: " + requestedPath + " " + rootsInfo);
         }
 
         // Проверка политик защиты инфраструктуры
@@ -95,6 +160,22 @@ public class PathSanitizer {
         }
 
         return target;
+    }
+
+    /**
+     * Находит корневую директорию, которой принадлежит указанный путь.
+     *
+     * @param path Путь для проверки.
+     * @return Корень, содержащий этот путь, или null если путь не принадлежит ни одному корню.
+     */
+    public static Path findContainingRoot(Path path) {
+        Path normalized = path.toAbsolutePath().normalize();
+        for (Path root : roots) {
+            if (normalized.startsWith(root)) {
+                return root;
+            }
+        }
+        return null;
     }
 
     /**
@@ -139,11 +220,12 @@ public class PathSanitizer {
     }
 
     /**
-     * Возвращает текущий абсолютный путь к корню рабочей директории.
+     * Возвращает основной (первый) корень рабочей директории.
+     * Для обратной совместимости с кодом, ожидающим единственный root.
      *
-     * @return Объект {@link Path} корня.
+     * @return Объект {@link Path} основного корня.
      */
     public static Path getRoot() {
-        return root;
+        return primaryRoot;
     }
 }

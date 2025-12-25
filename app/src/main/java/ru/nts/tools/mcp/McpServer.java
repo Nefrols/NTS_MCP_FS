@@ -28,12 +28,22 @@ import ru.nts.tools.mcp.tools.planning.*;
 import ru.nts.tools.mcp.tools.system.*;
 
 import java.util.Set;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
+import java.net.URI;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.FileWriter;
+import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Основной класс MCP сервера, оптимизированный для работы с виртуальными потоками Java 24.
@@ -59,14 +69,72 @@ public class McpServer {
 
     /**
      * Флаг включения отладочной информации в stderr.
+     * ВАЖНО: Некоторые клиенты (Antigravity) объединяют stderr и stdout,
+     * что приводит к ошибкам парсинга JSON. Отключаем по умолчанию.
+     * Включить можно через переменную окружения MCP_DEBUG=true
      */
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = "true".equalsIgnoreCase(System.getenv("MCP_DEBUG"));
+
+    /**
+     * Путь к файлу логов. Если установлен MCP_LOG_FILE, логи пишутся в файл.
+     * Это безопасный способ отладки для клиентов, объединяющих stderr/stdout.
+     */
+    private static final String LOG_FILE = System.getenv("MCP_LOG_FILE");
+    private static PrintWriter logWriter = null;
+
+    static {
+        if (LOG_FILE != null && !LOG_FILE.isBlank()) {
+            try {
+                logWriter = new PrintWriter(new FileWriter(LOG_FILE, true), true);
+            } catch (Exception e) {
+                // Ignore - logging disabled
+            }
+        }
+    }
+
+    /**
+     * Записывает сообщение в лог-файл (если настроен).
+     */
+    private static void log(String message) {
+        if (logWriter != null) {
+            logWriter.println("[" + java.time.LocalDateTime.now() + "] " + message);
+        }
+        if (DEBUG) {
+            System.err.println(message);
+        }
+    }
 
     /**
      * Множество известных валидных sessionId (для проверки).
      * Сессии создаются через nts_init и добавляются сюда.
      */
     private static final Set<String> validSessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Счетчик для генерации уникальных ID исходящих запросов к клиенту.
+     */
+    private static final AtomicLong outgoingRequestId = new AtomicLong(1000);
+
+    /**
+     * Карта ожидающих ответов на запросы, отправленные сервером клиенту.
+     * Key: request id, Value: CompletableFuture для получения результата.
+     */
+    private static final Map<Long, CompletableFuture<JsonNode>> pendingClientResponses = new ConcurrentHashMap<>();
+
+    /**
+     * Флаг, указывающий поддерживает ли клиент roots capability.
+     */
+    private static volatile boolean clientSupportsRoots = false;
+
+    /**
+     * Флаг, указывающий поддерживает ли клиент уведомления об изменении roots.
+     */
+    private static volatile boolean clientSupportsRootsListChanged = false;
+
+    /**
+     * Имя клиента (для логирования).
+     */
+    private static volatile String clientName = "";
 
     static {
         // Регистрация всех доступных инструментов сервера
@@ -106,6 +174,105 @@ public class McpServer {
     }
 
     /**
+     * Отправляет запрос клиенту и возвращает Future с результатом.
+     * Используется для bidirectional communication (server → client requests).
+     *
+     * @param method Метод запроса (например, "roots/list")
+     * @param params Параметры запроса (может быть null)
+     * @return CompletableFuture с результатом от клиента
+     */
+    public static CompletableFuture<JsonNode> sendClientRequest(String method, JsonNode params) {
+        long requestId = outgoingRequestId.getAndIncrement();
+        CompletableFuture<JsonNode> future = new CompletableFuture<>();
+        pendingClientResponses.put(requestId, future);
+
+        ObjectNode request = mapper.createObjectNode();
+        request.put("jsonrpc", "2.0");
+        request.put("id", requestId);
+        request.put("method", method);
+        if (params != null) {
+            request.set("params", params);
+        }
+
+        if (DEBUG) {
+            System.err.println("Sending request to client: " + method + " (id=" + requestId + ")");
+        }
+
+        sendResponse(request);
+        return future;
+    }
+
+    /**
+     * Запрашивает список roots у клиента.
+     * Вызывается после получения notifications/initialized если клиент объявил roots capability.
+     * Если клиент объявил capability - он обязан поддерживать roots/list запрос по протоколу MCP.
+     */
+    private static void requestRootsFromClient() {
+        if (!clientSupportsRoots) {
+            log("Client does not declare roots capability, skipping roots/list request");
+            return;
+        }
+
+        log("Requesting roots from client '" + clientName + "'...");
+
+        sendClientRequest("roots/list", null)
+            .thenAccept(result -> {
+                if (result != null && result.has("roots")) {
+                    processRootsResponse(result.get("roots"));
+                } else if (result != null) {
+                    // Некоторые клиенты возвращают roots напрямую
+                    processRootsResponse(result);
+                }
+            })
+            .exceptionally(ex -> {
+                log("Failed to get roots from client: " + ex.getMessage());
+                log("Falling back to PROJECT_ROOT environment variable");
+                return null;
+            });
+    }
+
+    /**
+     * Обрабатывает список roots, полученный от клиента.
+     * Устанавливает полученные roots в PathSanitizer.
+     *
+     * @param rootsArray JSON массив с объектами {uri: "file://...", name: "..."}
+     */
+    private static void processRootsResponse(JsonNode rootsArray) {
+        log("Processing roots response: " + rootsArray);
+
+        if (rootsArray == null || !rootsArray.isArray()) {
+            log("Invalid roots response: expected array, got " + (rootsArray == null ? "null" : rootsArray.getNodeType()));
+            return;
+        }
+
+        List<Path> roots = new ArrayList<>();
+        for (JsonNode rootNode : rootsArray) {
+            String uriStr = rootNode.path("uri").asText(null);
+            String name = rootNode.path("name").asText("unnamed");
+
+            if (uriStr != null && uriStr.startsWith("file://")) {
+                try {
+                    URI uri = new URI(uriStr);
+                    Path path = Paths.get(uri);
+                    roots.add(path.toAbsolutePath().normalize());
+                    log("Added root from client: " + path + " (" + name + ")");
+                } catch (Exception e) {
+                    log("Failed to parse root URI: " + uriStr + " - " + e.getMessage());
+                }
+            } else {
+                log("Skipping root with invalid URI: " + uriStr);
+            }
+        }
+
+        if (!roots.isEmpty()) {
+            ru.nts.tools.mcp.core.PathSanitizer.setRoots(roots);
+            log("PathSanitizer updated with " + roots.size() + " root(s) from client: " + roots);
+        } else {
+            log("No valid roots found in response");
+        }
+    }
+
+    /**
      * Точка входа в приложение. Инициализирует цикл чтения команд.
      * Использует Virtual Threads для предотвращения блокировок при тяжелых IO операциях.
      *
@@ -137,13 +304,11 @@ public class McpServer {
             }
         }
 
-        if (DEBUG) {
-            System.err.println("MCP Server starting with Virtual Threads support...");
-        }
+        log("MCP Server starting...");
 
         // Используем ExecutorService with virtual threads for processing each request.
         // Это позволяет серверу оставаться отзывчивым даже во время выполнения длительных задач.
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor(); BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor(); var reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
 
             String line;
             while ((line = reader.readLine()) != null) {
@@ -226,6 +391,31 @@ public class McpServer {
             String method = request.path("method").asText();
             JsonNode id = request.get("id");
 
+            // Проверяем, является ли это ответом на наш запрос к клиенту
+            // (сообщение без method, но с result или error и числовым id >= 1000)
+            if ((method == null || method.isEmpty()) && id != null && id.isNumber()) {
+                long responseId = id.asLong();
+                if (responseId >= 1000) {
+                    CompletableFuture<JsonNode> future = pendingClientResponses.remove(responseId);
+                    if (future != null) {
+                        if (request.has("error")) {
+                            JsonNode error = request.get("error");
+                            if (DEBUG) {
+                                System.err.println("Received error response for request " + responseId + ": " + error);
+                            }
+                            future.completeExceptionally(new RuntimeException(error.path("message").asText("Unknown error")));
+                        } else {
+                            JsonNode result = request.get("result");
+                            if (DEBUG) {
+                                System.err.println("Received response for request " + responseId);
+                            }
+                            future.complete(result);
+                        }
+                        return;
+                    }
+                }
+            }
+
             if (DEBUG) {
                 SessionContext ctx = SessionContext.current();
                 String sid = ctx != null ? ctx.getSessionId() : "none";
@@ -234,7 +424,7 @@ public class McpServer {
 
             // Подготовка базового каркаса ответа
             ObjectNode response = mapper.createObjectNode();
-            response.set("jsonrpc", mapper.convertValue("2.0", JsonNode.class));
+            response.put("jsonrpc", "2.0");
             if (id != null) {
                 response.set("id", id);
             }
@@ -243,20 +433,38 @@ public class McpServer {
                 // Диспетчеризация методов MCP протокола
                 switch (method) {
                     case "initialize" -> {
+                        var clientInfo = request.path("params").path("clientInfo");
+                        clientName = clientInfo.path("name").asText("unknown").toLowerCase();
                         if (DEBUG) {
-                            var clientInfo = request.path("params").path("clientInfo");
                             System.err.println("Client info: " + clientInfo.path("name").asText() + " (" + clientInfo.path("version").asText() + ")");
                             System.err.println("Client protocol version: " + request.path("params").path("protocolVersion").asText());
+                        }
+
+                        // Парсим client capabilities для определения поддержки roots
+                        JsonNode clientCapabilities = request.path("params").path("capabilities");
+                        JsonNode rootsCapability = clientCapabilities.path("roots");
+                        if (!rootsCapability.isMissingNode() && !rootsCapability.isNull()) {
+                            clientSupportsRoots = true;
+                            clientSupportsRootsListChanged = rootsCapability.path("listChanged").asBoolean(false);
+                            if (DEBUG) {
+                                System.err.println("Client declares roots capability (listChanged=" + clientSupportsRootsListChanged + ")");
+                            }
+                        } else {
+                            clientSupportsRoots = false;
+                            clientSupportsRootsListChanged = false;
+                            if (DEBUG) {
+                                System.err.println("Client does not declare roots capability");
+                            }
                         }
 
                         var result = mapper.createObjectNode();
                         result.put("protocolVersion", "2024-11-05");
                         var capabilities = result.putObject("capabilities");
-                        
+
                         // Объявляем поддержку инструментов с возможностью уведомлений об изменениях
                         var toolsCap = capabilities.putObject("tools");
                         toolsCap.put("listChanged", false);
-                        
+
                         capabilities.putObject("resources").put("listChanged", false).put("subscribe", false);
                         capabilities.putObject("prompts").put("listChanged", false);
                         capabilities.putObject("logging");
@@ -267,11 +475,24 @@ public class McpServer {
                         response.set("result", result);
                     }
                     case "notifications/initialized" -> {
-                        // Уведомление об успешной инициализации клиентом. 
+                        // Уведомление об успешной инициализации клиентом.
                         // По стандарту ответ на уведомление не отправляется.
                         if (DEBUG) {
                             System.err.println("Client initialized connection.");
                         }
+
+                        // Запрашиваем roots у клиента, если он их поддерживает
+                        if (clientSupportsRoots) {
+                            requestRootsFromClient();
+                        }
+                        return;
+                    }
+                    case "notifications/roots/list_changed" -> {
+                        // Клиент уведомляет об изменении списка roots
+                        if (DEBUG) {
+                            System.err.println("Client notified about roots list change, requesting updated roots...");
+                        }
+                        requestRootsFromClient();
                         return;
                     }
                     case "ping" -> {
@@ -342,6 +563,7 @@ public class McpServer {
                 }
             } catch (IllegalArgumentException e) {
                 // Ошибка неверных параметров
+                log("IllegalArgumentException: " + e.getMessage());
                 if (id != null) {
                     var error = mapper.createObjectNode();
                     error.put("code", -32602);
@@ -350,6 +572,10 @@ public class McpServer {
                 }
             } catch (Exception e) {
                 // Обработка внутренних ошибок инструментов
+                log("Exception in tool: " + e.getClass().getName() + ": " + e.getMessage());
+                if (logWriter != null) {
+                    e.printStackTrace(logWriter);
+                }
                 if (id != null) {
                     var error = mapper.createObjectNode();
                     error.put("code", -32603); // Internal error
@@ -364,8 +590,9 @@ public class McpServer {
             }
 
         } catch (Exception e) {
-            if (DEBUG) {
-                System.err.println("Failed to process message: " + e.getMessage());
+            log("Failed to process message: " + e.getMessage());
+            if (logWriter != null) {
+                e.printStackTrace(logWriter);
             }
         }
     }
@@ -379,12 +606,12 @@ public class McpServer {
      */
     private static synchronized void sendResponse(ObjectNode response) {
         try {
-            System.out.println(mapper.writeValueAsString(response));
+            String json = mapper.writeValueAsString(response);
+            log(">>> SEND: " + json);
+            System.out.print(json + "\n");
             System.out.flush();
         } catch (Exception e) {
-            if (DEBUG) {
-                System.err.println("Failed to send response: " + e.getMessage());
-            }
+            log("Failed to send response: " + e.getMessage());
         }
     }
 }
