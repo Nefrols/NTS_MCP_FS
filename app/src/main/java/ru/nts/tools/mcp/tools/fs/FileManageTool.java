@@ -118,6 +118,12 @@ public class FileManageTool implements McpTool {
             }
             TransactionManager.backup(path); // This will record that file didn't exist
             Files.writeString(path, content);
+
+            // InfinityRange: отмечаем файл как созданный в транзакции
+            // Это отключает проверку границ токена для последующих правок
+            TransactionManager.markFileCreatedInTransaction(path);
+            TransactionManager.markFileAccessedInTransaction(path);
+
             TransactionManager.commit();
         } catch (Exception e) {
             TransactionManager.rollback();

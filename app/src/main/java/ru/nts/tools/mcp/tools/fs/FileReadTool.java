@@ -211,6 +211,9 @@ public class FileReadTool implements McpTool {
         // Регистрируем доступ и получаем токен
         LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, crc32, lineCount);
 
+        // Session Tokens: отмечаем файл как разблокированный в транзакции
+        TransactionManager.markFileAccessedInTransaction(path);
+
         // Извлекаем контент
         String resultText = extractLines(lines, startLine, endLine);
 

@@ -259,4 +259,152 @@ class BatchToolsTest {
         Exception ex = assertThrows(Exception.class, () -> batchTool.execute(params));
         assertTrue(ex.getMessage().contains("nonexistent") || ex.getCause().getMessage().contains("nonexistent"));
     }
+
+    // ============ Virtual FS Context: умная адресация строк ============
+
+    @Test
+    void testSmartAddressingPrevEnd() throws Exception {
+        // Тест $PREV_END: после редактирования следующая вставка использует позицию
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Создание файла с 3 строками
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "c");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "smart.txt");
+        createParams.put("content", "Line 1\nLine 2\nLine 3");
+
+        // Шаг 2: Редактирование строки 2
+        ObjectNode editAction = actions.addObject();
+        editAction.put("tool", "nts_edit_file");
+        ObjectNode editParams = editAction.putObject("params");
+        editParams.put("path", "smart.txt");
+        editParams.put("startLine", 2);
+        editParams.put("endLine", 2);
+        editParams.put("content", "Modified 2");
+        editParams.put("accessToken", "{{c.token}}");
+
+        // Шаг 3: Вставка после предыдущей правки с $PREV_END+1
+        ObjectNode insertAction = actions.addObject();
+        insertAction.put("tool", "nts_edit_file");
+        ObjectNode insertParams = insertAction.putObject("params");
+        insertParams.put("path", "smart.txt");
+        insertParams.put("startLine", "$PREV_END+1"); // Должно разрешиться в строку 3
+        insertParams.put("operation", "insert_after");
+        insertParams.put("content", "Inserted");
+        insertParams.put("accessToken", "{{c.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        Path created = tempDir.resolve("smart.txt");
+        String content = Files.readString(created);
+        // Ожидаем: Line 1, Modified 2, Line 3, Inserted
+        assertTrue(content.contains("Line 1"));
+        assertTrue(content.contains("Modified 2"));
+        assertTrue(content.contains("Inserted"));
+    }
+
+    @Test
+    void testSmartAddressingLast() throws Exception {
+        // Тест $LAST: вставка в конец файла
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Создание файла
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "c");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "lastline.txt");
+        createParams.put("content", "First\nSecond");
+
+        // Шаг 2: Вставка в конец с $LAST
+        ObjectNode insertAction = actions.addObject();
+        insertAction.put("tool", "nts_edit_file");
+        ObjectNode insertParams = insertAction.putObject("params");
+        insertParams.put("path", "lastline.txt");
+        insertParams.put("startLine", "$LAST");
+        insertParams.put("operation", "insert_after");
+        insertParams.put("content", "Third");
+        insertParams.put("accessToken", "{{c.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        Path created = tempDir.resolve("lastline.txt");
+        String content = Files.readString(created);
+        assertTrue(content.endsWith("Third") || content.contains("Third"));
+    }
+
+    @Test
+    void testSmartAddressingWithOffset() throws Exception {
+        // Тест $PREV_END+2: смещение относительно предыдущей позиции
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Создаем файл с 5 строками
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "c");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "offset.txt");
+        createParams.put("content", "Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+
+        // Редактируем строку 2
+        ObjectNode edit1 = actions.addObject();
+        edit1.put("tool", "nts_edit_file");
+        ObjectNode edit1Params = edit1.putObject("params");
+        edit1Params.put("path", "offset.txt");
+        edit1Params.put("startLine", 2);
+        edit1Params.put("endLine", 2);
+        edit1Params.put("content", "MODIFIED");
+        edit1Params.put("accessToken", "{{c.token}}");
+
+        // Редактируем строку на 2 позиции дальше ($PREV_END+2 = 2+2 = 4)
+        ObjectNode edit2 = actions.addObject();
+        edit2.put("tool", "nts_edit_file");
+        ObjectNode edit2Params = edit2.putObject("params");
+        edit2Params.put("path", "offset.txt");
+        edit2Params.put("startLine", "$PREV_END+2");
+        edit2Params.put("endLine", "$PREV_END+2");
+        edit2Params.put("content", "ALSO MODIFIED");
+        edit2Params.put("accessToken", "{{c.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        Path created = tempDir.resolve("offset.txt");
+        String content = Files.readString(created);
+        assertTrue(content.contains("MODIFIED"));
+        assertTrue(content.contains("ALSO MODIFIED"));
+    }
+
+    @Test
+    void testSmartAddressingErrorOnFirstOperation() throws Exception {
+        // $PREV_END на первой операции с файлом должен вызвать ошибку
+        Path file = tempDir.resolve("existing.txt");
+        Files.writeString(file, "content");
+        String token = registerFullAccess(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        ObjectNode editAction = actions.addObject();
+        editAction.put("tool", "nts_edit_file");
+        ObjectNode editParams = editAction.putObject("params");
+        editParams.put("path", "existing.txt");
+        editParams.put("startLine", "$PREV_END"); // Ошибка: нет предыдущей операции
+        editParams.put("content", "x");
+        editParams.put("accessToken", token);
+
+        Exception ex = assertThrows(Exception.class, () -> batchTool.execute(params));
+        assertTrue(ex.getMessage().contains("no previous operation") ||
+                (ex.getCause() != null && ex.getCause().getMessage().contains("no previous operation")));
+    }
 }

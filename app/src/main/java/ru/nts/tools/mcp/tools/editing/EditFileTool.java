@@ -331,9 +331,14 @@ public class EditFileTool implements McpTool {
         }
 
         // Проверяем, что токен покрывает диапазон редактирования
-        if (!token.covers(editStart, editEnd)) {
+        // InfinityRange: для файлов, созданных в текущей транзакции, проверка границ отключена
+        boolean skipBoundaryCheck = TransactionManager.isFileCreatedInTransaction(path);
+        if (!skipBoundaryCheck && !token.covers(editStart, editEnd)) {
             throw new SecurityException(String.format("Token does not cover edit range [%d-%d]. Token covers [%d-%d]. " + "Read the required lines first with nts_file_read.", editStart, editEnd, token.startLine(), token.endLine()));
         }
+
+        // Session Tokens: отмечаем файл как разблокированный в транзакции
+        TransactionManager.markFileAccessedInTransaction(path);
 
         // Представление контента в виде списка строк для корректной манипуляции
         List<String> currentLines = new ArrayList<>(Arrays.asList(contentLines));

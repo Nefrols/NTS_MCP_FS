@@ -53,32 +53,33 @@ public class BatchToolsTool implements McpTool {
         return """
             Atomic transaction orchestrator - execute multiple tools as single operation.
 
-            KEY FEATURE: All-or-nothing execution
-            • If ANY action fails → ALL previous actions rolled back
-            • Perfect for complex workflows requiring consistency
+            KEY FEATURES:
+            • All-or-nothing: If ANY action fails → ALL rolled back
+            • Session Tokens: CRC check skipped within batch (no re-read needed)
+            • InfinityRange: Files created in batch have no line boundary checks
 
-            VARIABLE INTERPOLATION (token passing between steps):
-            Use {{stepN.property}} to reference results from previous steps:
-            • {{step1.token}}  - First LAT token from step 1 response
-            • {{step1.tokens}} - All tokens as comma-separated list
-            • {{step1.text}}   - Full text content of response
-            • {{myId.token}}   - Reference by action 'id' field
+            VARIABLE INTERPOLATION (token passing):
+            • {{step1.token}}  - First LAT token from step 1
+            • {{step1.tokens}} - All tokens comma-separated
+            • {{myId.token}}   - Reference by action 'id'
 
-            WORKFLOW EXAMPLE (read → edit):
+            SMART LINE ADDRESSING (Virtual FS Context):
+            For startLine/endLine, use special values that auto-calculate:
+            • $LAST           - Last line of the file
+            • $PREV_END       - End line of previous edit on this file
+            • $PREV_END+N     - N lines after previous edit (e.g., $PREV_END+1)
+            System tracks line deltas automatically across batch operations.
+
+            EXAMPLE (create + multi-insert):
             actions: [
-              {id: 'read', tool: 'nts_file_read', params: {path: 'App.java', startLine: 1, endLine: 50}},
-              {tool: 'nts_edit_file', params: {path: 'App.java', startLine: 10, content: 'new code', accessToken: '{{read.token}}'}}
+              {id: 'c', tool: 'nts_file_manage', params: {action: 'create', path: 'svc.java', content: 'class Svc {}'}},
+              {tool: 'nts_edit_file', params: {path: 'svc.java', startLine: 1, endLine: 1,
+                  content: 'class Svc {\\n  void m1() {}', accessToken: '{{c.token}}'}},
+              {tool: 'nts_edit_file', params: {path: 'svc.java', startLine: '$PREV_END+1',
+                  operation: 'insert_after', content: '  void m2() {}', accessToken: '{{c.token}}'}}
             ]
 
-            MULTI-FILE EXAMPLE:
-            actions: [
-              {id: 'cfg', tool: 'nts_file_read', params: {path: 'config.json', startLine: 1, endLine: 20}},
-              {id: 'main', tool: 'nts_file_read', params: {path: 'Main.java', startLine: 1, endLine: 100}},
-              {tool: 'nts_edit_file', params: {path: 'config.json', startLine: 5, content: '...', accessToken: '{{cfg.token}}'}},
-              {tool: 'nts_edit_file', params: {path: 'Main.java', startLine: 20, content: '...', accessToken: '{{main.token}}'}}
-            ]
-
-            LIMITATION: Only NTS MCP tools tracked. External tools not included in rollback.
+            LIMITATION: Only NTS MCP tools tracked in rollback.
             """;
     }
 
@@ -132,6 +133,9 @@ public class BatchToolsTool implements McpTool {
         // Хранилище результатов для интерполяции переменных
         Map<String, StepResult> stepResults = new HashMap<>();
 
+        // Virtual FS Context: отслеживание состояния файлов для умной адресации
+        Map<String, FileState> fileStates = new HashMap<>();
+
         try {
             ArrayNode results = mapper.createArrayNode();
             int index = 0;
@@ -142,8 +146,8 @@ public class BatchToolsTool implements McpTool {
                 String toolName = action.path("tool").asText();
                 JsonNode toolParams = action.path("params");
 
-                // Интерполяция переменных в параметрах
-                JsonNode interpolatedParams = interpolateParams(toolParams, stepResults);
+                // Интерполяция переменных и умная адресация
+                JsonNode interpolatedParams = interpolateParams(toolParams, stepResults, fileStates);
 
                 // Вызываем целевой инструмент через роутер.
                 // Благодаря поддержке вложенности в TransactionManager, вызовы commit()
@@ -163,6 +167,10 @@ public class BatchToolsTool implements McpTool {
                     if (actionId != null && !actionId.isEmpty()) {
                         stepResults.put(actionId, stepResult);
                     }
+
+                    // Virtual FS Context: обновляем состояние файла после операции
+                    updateFileState(toolName, interpolatedParams, stepResult, fileStates);
+
                 } catch (Exception e) {
                     throw new IllegalStateException(String.format(
                             "Batch execution failed at action #%d ('%s'). Error: %s. " +
@@ -195,10 +203,16 @@ public class BatchToolsTool implements McpTool {
     /** Паттерн для извлечения LAT токенов из текста */
     private static final Pattern TOKEN_PATTERN = Pattern.compile("LAT:[A-Za-z0-9+/=:]+");
 
+    /** Паттерн для извлечения количества строк из ответа */
+    private static final Pattern LINES_PATTERN = Pattern.compile("Lines?:\\s*(\\d+)|LINES:\\s*\\d+-\\d+\\s+of\\s+(\\d+)");
+
+    /** Паттерн для умной адресации: $LAST, $PREV_END, $PREV_END+N */
+    private static final Pattern SMART_LINE_PATTERN = Pattern.compile("\\$(LAST|PREV_END)(?:\\+(\\d+))?");
+
     /**
-     * Рекурсивно обрабатывает JSON-параметры, заменяя {{ref.prop}} на значения из предыдущих шагов.
+     * Рекурсивно обрабатывает JSON-параметры, заменяя переменные и умную адресацию.
      */
-    private JsonNode interpolateParams(JsonNode params, Map<String, StepResult> stepResults) {
+    private JsonNode interpolateParams(JsonNode params, Map<String, StepResult> stepResults, Map<String, FileState> fileStates) {
         if (params == null || params.isNull()) {
             return params;
         }
@@ -211,8 +225,22 @@ public class BatchToolsTool implements McpTool {
 
         if (params.isObject()) {
             ObjectNode result = mapper.createObjectNode();
+
+            // Извлекаем path для умной адресации строк
+            String filePath = params.path("path").asText(null);
+            FileState state = filePath != null ? fileStates.get(normalizePathKey(filePath)) : null;
+
             params.fields().forEachRemaining(entry -> {
-                result.set(entry.getKey(), interpolateParams(entry.getValue(), stepResults));
+                String key = entry.getKey();
+                JsonNode value = entry.getValue();
+
+                // Умная адресация для startLine и endLine
+                if (("startLine".equals(key) || "endLine".equals(key) || "line".equals(key)) && value.isTextual()) {
+                    int resolved = resolveSmartLine(value.asText(), state);
+                    result.put(key, resolved);
+                } else {
+                    result.set(key, interpolateParams(value, stepResults, fileStates));
+                }
             });
             return result;
         }
@@ -220,7 +248,7 @@ public class BatchToolsTool implements McpTool {
         if (params.isArray()) {
             ArrayNode result = mapper.createArrayNode();
             for (JsonNode item : params) {
-                result.add(interpolateParams(item, stepResults));
+                result.add(interpolateParams(item, stepResults, fileStates));
             }
             return result;
         }
@@ -302,4 +330,150 @@ public class BatchToolsTool implements McpTool {
      * Результат выполнения шага для интерполяции.
      */
     private record StepResult(String text, List<String> tokens) {}
+
+    // ============ Virtual FS Context: умная адресация строк ============
+
+    /**
+     * Состояние файла для отслеживания изменений в рамках батча.
+     * @param lineCount текущее количество строк в файле
+     * @param lastEditEndLine номер последней затронутой строки после последней правки
+     */
+    private record FileState(int lineCount, int lastEditEndLine) {}
+
+    /**
+     * Нормализует путь для использования как ключ в Map.
+     * Приводит к нижнему регистру и заменяет обратные слеши на прямые.
+     */
+    private String normalizePathKey(String path) {
+        if (path == null) return "";
+        return path.toLowerCase().replace('\\', '/');
+    }
+
+    /**
+     * Разрешает умную адресацию строк: $LAST, $PREV_END, $PREV_END+N.
+     *
+     * @param expr выражение (например, "$LAST", "$PREV_END+1")
+     * @param state текущее состояние файла (может быть null)
+     * @return вычисленный номер строки
+     */
+    private int resolveSmartLine(String expr, FileState state) {
+        if (expr == null || expr.isEmpty()) {
+            throw new IllegalArgumentException("Empty line expression");
+        }
+
+        Matcher matcher = SMART_LINE_PATTERN.matcher(expr);
+        if (!matcher.matches()) {
+            // Если не совпадает с паттерном, пробуем как число
+            try {
+                return Integer.parseInt(expr);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "Invalid line expression: '" + expr + "'. " +
+                        "Expected: number, $LAST, $PREV_END, or $PREV_END+N");
+            }
+        }
+
+        String keyword = matcher.group(1);  // LAST или PREV_END
+        String offsetStr = matcher.group(2); // число после + (может быть null)
+        int offset = offsetStr != null ? Integer.parseInt(offsetStr) : 0;
+
+        if (state == null) {
+            throw new IllegalArgumentException(
+                    "Cannot use '" + expr + "' - no previous operation on this file in batch. " +
+                    "Use numeric line number for the first operation.");
+        }
+
+        return switch (keyword) {
+            case "LAST" -> state.lineCount + offset;
+            case "PREV_END" -> state.lastEditEndLine + offset;
+            default -> throw new IllegalArgumentException("Unknown keyword: $" + keyword);
+        };
+    }
+
+    /**
+     * Обновляет состояние файла после выполнения операции.
+     * Отслеживает количество строк и позицию последней правки.
+     */
+    private void updateFileState(String toolName, JsonNode params, StepResult result, Map<String, FileState> fileStates) {
+        String path = params.path("path").asText(null);
+        if (path == null) return;
+
+        String key = normalizePathKey(path);
+        String text = result.text;
+
+        // Извлекаем информацию о файле из ответа
+        int lineCount = extractLineCount(text);
+        int lastEditEnd = extractLastEditEnd(params, text, fileStates.get(key));
+
+        if (lineCount > 0 || lastEditEnd > 0) {
+            // Если не удалось извлечь lineCount, используем предыдущее значение или lastEditEnd
+            FileState oldState = fileStates.get(key);
+            int finalLineCount = lineCount > 0 ? lineCount :
+                    (oldState != null ? oldState.lineCount : lastEditEnd);
+            int finalLastEnd = lastEditEnd > 0 ? lastEditEnd :
+                    (oldState != null ? oldState.lastEditEndLine : 1);
+
+            fileStates.put(key, new FileState(finalLineCount, finalLastEnd));
+        }
+    }
+
+    /**
+     * Извлекает количество строк из ответа инструмента.
+     */
+    private int extractLineCount(String text) {
+        if (text == null) return 0;
+
+        // Паттерн: "Lines: 42" или "LINES: 1-10 of 42"
+        Matcher matcher = LINES_PATTERN.matcher(text);
+        if (matcher.find()) {
+            String g1 = matcher.group(1);
+            String g2 = matcher.group(2);
+            if (g1 != null) return Integer.parseInt(g1);
+            if (g2 != null) return Integer.parseInt(g2);
+        }
+
+        // Альтернативный паттерн для create: "Lines: 5 |"
+        Pattern altPattern = Pattern.compile("Lines:\\s*(\\d+)\\s*\\|");
+        Matcher altMatcher = altPattern.matcher(text);
+        if (altMatcher.find()) {
+            return Integer.parseInt(altMatcher.group(1));
+        }
+
+        return 0;
+    }
+
+    /**
+     * Вычисляет позицию последней затронутой строки после операции.
+     */
+    private int extractLastEditEnd(JsonNode params, String text, FileState prevState) {
+        // Для edit операций берем endLine из параметров
+        if (params.has("endLine")) {
+            int endLine = params.get("endLine").asInt();
+            // Учитываем дельту от вставки/удаления строк
+            if (params.has("content")) {
+                String content = params.get("content").asText("");
+                int newLines = content.split("\n", -1).length;
+                String operation = params.path("operation").asText("replace");
+
+                if ("insert_after".equals(operation) || "insert_before".equals(operation)) {
+                    // При вставке endLine смещается на количество вставленных строк
+                    return endLine + newLines;
+                } else {
+                    // При замене endLine = startLine + newLines - 1
+                    int startLine = params.path("startLine").asInt(endLine);
+                    return startLine + newLines - 1;
+                }
+            }
+            return endLine;
+        }
+
+        // Для create операций возвращаем количество строк
+        if (params.has("content")) {
+            String content = params.get("content").asText("");
+            return content.isEmpty() ? 1 : content.split("\n", -1).length;
+        }
+
+        // По умолчанию используем предыдущее значение
+        return prevState != null ? prevState.lastEditEndLine : 1;
+    }
 }

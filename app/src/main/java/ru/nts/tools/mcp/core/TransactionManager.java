@@ -71,6 +71,43 @@ public class TransactionManager {
         return ctx().getJournal();
     }
 
+    // ==================== Session Tokens & InfinityRange API ====================
+
+    /**
+     * Проверяет, выполняется ли сейчас транзакция.
+     */
+    public static boolean isInTransaction() {
+        return ctx().isInTransaction();
+    }
+
+    /**
+     * Регистрирует файл как созданный в текущей транзакции (InfinityRange).
+     */
+    public static void markFileCreatedInTransaction(Path path) {
+        ctx().markFileCreatedInTransaction(path);
+    }
+
+    /**
+     * Проверяет, был ли файл создан в текущей транзакции.
+     */
+    public static boolean isFileCreatedInTransaction(Path path) {
+        return ctx().isFileCreatedInTransaction(path);
+    }
+
+    /**
+     * Регистрирует файл как разблокированный в текущей транзакции (Session Tokens).
+     */
+    public static void markFileAccessedInTransaction(Path path) {
+        ctx().markFileAccessedInTransaction(path);
+    }
+
+    /**
+     * Проверяет, был ли файл разблокирован в текущей транзакции.
+     */
+    public static boolean isFileAccessedInTransaction(Path path) {
+        return ctx().isFileAccessedInTransaction(path);
+    }
+
     /**
      * Сбрасывает состояние текущей сессии.
      */

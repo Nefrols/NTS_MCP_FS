@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
 import java.nio.charset.Charset;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import java.util.zip.CRC32C;
 
 /**
  * Инструмент для глобального поиска и замены текста во всем проекте.
@@ -51,7 +54,10 @@ public class ProjectReplaceTool implements McpTool {
             SAFETY:
             • Preview changes first with nts_file_search grep
             • All changes undoable via nts_session undo
-            • Tokens invalidated after replace - re-read if needed
+
+            TOKEN OUTPUT:
+            Returns affectedFiles with path, crc32c, lineCount, and accessToken for each modified file.
+            Use tokens in batch: {{stepN.affectedFiles}} or parse from output for subsequent edits.
 
             EXAMPLES:
             • Rename: pattern='OldClass', replacement='NewClass', include='**/*.java'
@@ -170,6 +176,8 @@ public class ProjectReplaceTool implements McpTool {
         }
 
         // 2. Выполнение замены в транзакции
+        List<AffectedFile> affectedFiles = new ArrayList<>();
+
         TransactionManager.startTransaction("Project Replace: '" + query + "' -> '" + replacement + "'", instruction);
         try {
             for (ReplaceTask task : tasks) {
@@ -183,8 +191,16 @@ public class ProjectReplaceTool implements McpTool {
                 }
 
                 FileUtils.safeWrite(task.path, newContent, task.charset);
-                // Инвалидируем токены для изменённых файлов
-                LineAccessTracker.invalidateFile(task.path);
+
+                // Вместо инвалидации — регистрируем новый токен доступа
+                long crc = calculateCRC32(task.path);
+                int lineCount = newContent.split("\n", -1).length;
+                LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, crc, lineCount);
+
+                // Session Tokens: отмечаем файл как разблокированный
+                TransactionManager.markFileAccessedInTransaction(task.path);
+
+                affectedFiles.add(new AffectedFile(task.path, crc, lineCount, token.encode(), task.count));
             }
             TransactionManager.commit();
         } catch (Exception e) {
@@ -196,11 +212,13 @@ public class ProjectReplaceTool implements McpTool {
         sb.append("Global replacement successful:\n");
         sb.append("- Pattern: ").append(query).append("\n");
         sb.append("- Replacement: ").append(replacement).append("\n");
-        sb.append("- Files affected: ").append(tasks.size()).append("\n");
+        sb.append("- Files affected: ").append(affectedFiles.size()).append("\n");
         sb.append("- Total occurrences: ").append(totalOccurrences).append("\n");
-        sb.append("\nModified files:\n");
-        for (ReplaceTask task : tasks) {
-            sb.append("  - ").append(root.relativize(task.path)).append(" (").append(task.count).append(")\n");
+        sb.append("\nAffected files with tokens:\n");
+        for (AffectedFile af : affectedFiles) {
+            sb.append(String.format("  [%s] %d occurrences | CRC32C: %X | Lines: %d\n",
+                    root.relativize(af.path), af.occurrences, af.crc32c, af.lineCount));
+            sb.append(String.format("    [TOKEN: %s]\n", af.token));
         }
 
         return createResponse(sb.toString().trim());
@@ -213,5 +231,23 @@ public class ProjectReplaceTool implements McpTool {
     }
 
     private record ReplaceTask(Path path, String originalContent, Charset charset, int count) {
+    }
+
+    private record AffectedFile(Path path, long crc32c, int lineCount, String token, int occurrences) {
+    }
+
+    /**
+     * Вычисляет CRC32C для файла.
+     */
+    private long calculateCRC32(Path path) throws Exception {
+        CRC32C crc = new CRC32C();
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = bis.read(buffer)) != -1) {
+                crc.update(buffer, 0, len);
+            }
+        }
+        return crc.getValue();
     }
 }

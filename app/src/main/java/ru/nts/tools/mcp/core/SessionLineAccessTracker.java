@@ -74,8 +74,28 @@ public class SessionLineAccessTracker {
 
     /**
      * Валидирует токен против текущего состояния файла.
+     *
+     * Session Tokens: Если файл был разблокирован в текущей транзакции,
+     * CRC-проверка пропускается и токен автоматически валиден (все изменения контролируемы).
+     *
+     * InfinityRange: Если файл создан в текущей транзакции,
+     * токен автоматически валиден (нет предыдущего состояния для сравнения).
      */
     public LineAccessToken.ValidationResult validateToken(LineAccessToken token, long currentCrc, int currentLineCount) {
+        Path path = token.path();
+
+        // Session Tokens + InfinityRange: внутри транзакции токен автоматически валиден
+        // для файлов с зарегистрированным доступом или созданных в транзакции
+        boolean sessionUnlocked = TransactionManager.isInTransaction() &&
+                (TransactionManager.isFileAccessedInTransaction(path) ||
+                 TransactionManager.isFileCreatedInTransaction(path));
+
+        if (sessionUnlocked) {
+            // Внутри транзакции токен для разблокированного файла всегда валиден
+            return LineAccessToken.ValidationResult.VALID;
+        }
+
+        // Обычная валидация вне транзакции
         if (token.fileCrc32c() != currentCrc) {
             return LineAccessToken.ValidationResult.CRC_MISMATCH;
         }
@@ -84,7 +104,7 @@ public class SessionLineAccessTracker {
         }
 
         synchronized (lock) {
-            TreeMap<Integer, LineAccessToken> fileTokens = tokens.get(token.path());
+            TreeMap<Integer, LineAccessToken> fileTokens = tokens.get(path);
             if (fileTokens == null) {
                 return LineAccessToken.ValidationResult.NOT_FOUND;
             }

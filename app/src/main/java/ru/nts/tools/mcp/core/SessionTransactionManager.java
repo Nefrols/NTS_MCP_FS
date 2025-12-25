@@ -14,6 +14,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Обеспечивает изоляцию undo/redo стеков между сессиями.
  *
  * Каждая сессия имеет собственный экземпляр этого класса.
+ *
+ * Поддерживает:
+ * - Session Tokens: внутри транзакции CRC-проверка токенов отключена
+ * - InfinityRange: для файлов, созданных в транзакции, проверка границ строк отключена
  */
 public class SessionTransactionManager {
 
@@ -36,6 +40,12 @@ public class SessionTransactionManager {
     // Per-thread состояние транзакции (для вложенных транзакций)
     private final ThreadLocal<Transaction> currentTransaction = new ThreadLocal<>();
     private final ThreadLocal<Integer> nestingLevel = ThreadLocal.withInitial(() -> 0);
+
+    // Файлы, созданные в текущей транзакции (InfinityRange)
+    private final ThreadLocal<Set<Path>> filesCreatedInTransaction = ThreadLocal.withInitial(HashSet::new);
+
+    // Файлы, к которым был получен доступ в текущей транзакции (Session Tokens)
+    private final ThreadLocal<Set<Path>> filesAccessedInTransaction = ThreadLocal.withInitial(HashSet::new);
 
     private Path getSnapshotDir() throws IOException {
         // Используем currentOrDefault() для согласованности
@@ -92,6 +102,8 @@ public class SessionTransactionManager {
             }
             currentTransaction.remove();
             nestingLevel.set(0);
+            filesCreatedInTransaction.get().clear();
+            filesAccessedInTransaction.get().clear();
         }
     }
 
@@ -108,7 +120,55 @@ public class SessionTransactionManager {
         } finally {
             currentTransaction.remove();
             nestingLevel.set(0);
+            filesCreatedInTransaction.get().clear();
+            filesAccessedInTransaction.get().clear();
         }
+    }
+
+    // ==================== Session Tokens & InfinityRange API ====================
+
+    /**
+     * Проверяет, выполняется ли сейчас транзакция (batch/edit).
+     * Используется для пропуска CRC-проверки токенов внутри транзакции.
+     */
+    public boolean isInTransaction() {
+        return currentTransaction.get() != null;
+    }
+
+    /**
+     * Регистрирует файл как созданный в текущей транзакции.
+     * Для таких файлов отключается проверка границ строк (InfinityRange).
+     */
+    public void markFileCreatedInTransaction(Path path) {
+        if (isInTransaction()) {
+            filesCreatedInTransaction.get().add(path.toAbsolutePath().normalize());
+        }
+    }
+
+    /**
+     * Проверяет, был ли файл создан в текущей транзакции.
+     * Для таких файлов не требуется проверка границ токена.
+     */
+    public boolean isFileCreatedInTransaction(Path path) {
+        return filesCreatedInTransaction.get().contains(path.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Регистрирует файл как "разблокированный" в текущей транзакции.
+     * Для таких файлов CRC-проверка пропускается до конца транзакции.
+     */
+    public void markFileAccessedInTransaction(Path path) {
+        if (isInTransaction()) {
+            filesAccessedInTransaction.get().add(path.toAbsolutePath().normalize());
+        }
+    }
+
+    /**
+     * Проверяет, был ли файл разблокирован в текущей транзакции.
+     * Для таких файлов CRC-проверка пропускается.
+     */
+    public boolean isFileAccessedInTransaction(Path path) {
+        return filesAccessedInTransaction.get().contains(path.toAbsolutePath().normalize());
     }
 
     public void createCheckpoint(String name) {
