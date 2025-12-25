@@ -97,7 +97,11 @@ public class EditFileTool implements McpTool {
         props.putObject("expectedContent").put("type", "string").put("description",
                 "SAFETY: Expected current content of target lines. Edit fails if mismatch. " +
                 "Uses fuzzy matching: ignores trailing whitespace, line ending differences (\\r\\n vs \\n). " +
-                "Error message shows actual content if different.");
+                "Use ignoreIndentation=true to also ignore leading whitespace differences.");
+
+        props.putObject("ignoreIndentation").put("type", "boolean").put("description",
+                "For expectedContent: ignore leading whitespace (spaces/tabs) differences. " +
+                "Useful when code formatters change indentation. Default: false.");
 
         // === BATCH OPERATIONS (single file, multiple edits) ===
         var ops = props.putObject("operations");
@@ -114,8 +118,10 @@ public class EditFileTool implements McpTool {
 
         // === UTILITY OPTIONS ===
         props.putObject("contextStartPattern").put("type", "string").put("description",
-                "Regex to find anchor line. startLine becomes relative offset from match. " +
-                "Example: pattern='def myFunc', startLine=2 → edits 2nd line after 'def myFunc'.");
+                "Regex to find anchor line. startLine becomes RELATIVE offset from match: " +
+                "0 = anchor line itself, 1 = next line, -1 = previous line. " +
+                "Example: pattern='public void foo', startLine=0 → edits the 'public void foo' line itself. " +
+                "Example: pattern='public void foo', startLine=1, endLine=3 → edits 3 lines AFTER the match.");
 
         props.putObject("instruction").put("type", "string").put("description",
                 "Human-readable change description for session journal. Shown in undo history.");
@@ -402,19 +408,33 @@ public class EditFileTool implements McpTool {
         String newText = op.path("content").asText(op.path("newText").asText(""));
         String expected = op.path("expectedContent").asText(null);
         String contextPattern = op.path("contextStartPattern").asText(null);
+        boolean ignoreIndentation = op.path("ignoreIndentation").asBoolean(false);
 
         // 1. Поиск якоря для относительной адресации (если указан паттерн)
-        int anchorLine = 0;
-        if (contextPattern != null) {
-            anchorLine = findAnchorLine(lines, contextPattern);
-            if (anchorLine == -1) {
+        // anchorLine: 0-based индекс найденной строки, или 0 если паттерн не указан
+        int anchorLineIdx = 0;  // 0-based индекс
+        boolean hasPattern = contextPattern != null;
+
+        if (hasPattern) {
+            anchorLineIdx = findAnchorLine(lines, contextPattern);
+            if (anchorLineIdx == -1) {
                 throw new IllegalArgumentException("Context pattern not found: " + contextPattern);
             }
         }
 
         // 2. Расчет абсолютных индексов (1-based)
-        int start = anchorLine + requestedStart + cumulativeOffset;
-        int end = anchorLine + requestedEnd + cumulativeOffset;
+        // Если есть паттерн: startLine - это ОТНОСИТЕЛЬНЫЙ офсет (0 = сама anchor строка)
+        // Если нет паттерна: startLine - это абсолютный номер строки
+        int start, end;
+        if (hasPattern) {
+            // anchor line в 1-based: anchorLineIdx + 1
+            // startLine=0 означает саму anchor строку
+            start = (anchorLineIdx + 1) + requestedStart + cumulativeOffset;
+            end = (anchorLineIdx + 1) + requestedEnd + cumulativeOffset;
+        } else {
+            start = requestedStart + cumulativeOffset;
+            end = requestedEnd + cumulativeOffset;
+        }
 
         // 3. Адаптация индексов под специфику типа операции
         if ("insert_before".equals(type)) {
@@ -443,8 +463,8 @@ public class EditFileTool implements McpTool {
                     .collect(Collectors.joining("\n"));
 
             // Fuzzy matching: нормализуем whitespace и line endings
-            String normActual = fuzzyNormalize(actual);
-            String normExpected = fuzzyNormalize(expected);
+            String normActual = fuzzyNormalize(actual, ignoreIndentation);
+            String normExpected = fuzzyNormalize(expected, ignoreIndentation);
 
             if (!normActual.equals(normExpected)) {
                 // Если не совпало — выбрасываем ошибку с подробным дампом текущих строк
@@ -452,7 +472,8 @@ public class EditFileTool implements McpTool {
                         "Content validation failed for range " + start + "-" + end + "!\n" +
                         "EXPECTED:\n[" + expected.replace("\r", "") + "]\n" +
                         "ACTUAL CONTENT IN FILE:\n[" + actual + "]\n" +
-                        "Please adjust your request using the actual text from the file.");
+                        "Please adjust your request using the actual text from the file." +
+                        (ignoreIndentation ? "" : "\n[TIP: Use ignoreIndentation=true if indentation differs]"));
             }
         }
 
@@ -513,19 +534,24 @@ public class EditFileTool implements McpTool {
      * - Trailing whitespace (пробелы в конце строк)
      * - Различия в переносах строк (\r\n vs \n)
      * - Пустые строки в конце
+     * - Leading whitespace (если ignoreIndentation=true)
      */
-    private String fuzzyNormalize(String text) {
+    private String fuzzyNormalize(String text, boolean ignoreIndentation) {
         if (text == null) return "";
 
         // Нормализуем line endings
         String normalized = text.replace("\r\n", "\n").replace("\r", "\n");
 
-        // Удаляем trailing whitespace с каждой строки
+        // Обрабатываем каждую строку
         String[] lines = normalized.split("\n", -1);
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < lines.length; i++) {
             if (i > 0) sb.append("\n");
-            sb.append(lines[i].stripTrailing());
+            String line = lines[i].stripTrailing();
+            if (ignoreIndentation) {
+                line = line.stripLeading();
+            }
+            sb.append(line);
         }
 
         // Удаляем trailing пустые строки
