@@ -315,6 +315,50 @@ class EditFileToolTest {
         assertTrue(ex.getMessage().contains("[BBB]"));
     }
 
+    @Test
+    void testContextStartPatternWithRelativeOffset() throws Exception {
+        // Тест: contextStartPattern + startLine: 0 должен правильно разрешаться для проверки токена
+        // Баг: раньше startLine=0 проверялся напрямую (0 < 1), а не как абсолютный номер строки
+        Path file = tempDir.resolve("pattern.java");
+        Files.writeString(file, """
+                package com.example;
+
+                public class MyClass {
+                    public void method1() {
+                        // line 5
+                    }
+
+                    public void targetMethod() {
+                        // line 9 - this is the anchor
+                    }
+
+                    public void method2() {
+                        // line 13
+                    }
+                }
+                """);
+
+        // Регистрируем доступ к строкам 8-10 (где targetMethod)
+        String token = registerAccess(file, 8, 10);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", "pattern.java");
+        params.put("contextStartPattern", "public void targetMethod");
+        params.put("startLine", 0);  // Относительный офсет: 0 = сама anchor строка
+        params.put("endLine", 0);    // То есть строка 8 (где найден паттерн)
+        params.put("content", "    public void renamedMethod() {");
+        params.put("accessToken", token);
+
+        // Должно успешно выполниться, а не падать с "Token does not cover edit range [0-0]"
+        var result = tool.execute(params);
+        String resultText = result.get("content").get(0).get("text").asText();
+        assertTrue(resultText.contains("Edits applied") || resultText.contains("applied"),
+                "Expected successful edit but got: " + resultText);
+
+        String content = Files.readString(file);
+        assertTrue(content.contains("renamedMethod"), "Method should be renamed");
+    }
+
     /**
      * Вспомогательный метод для расчета CRC32.
      */

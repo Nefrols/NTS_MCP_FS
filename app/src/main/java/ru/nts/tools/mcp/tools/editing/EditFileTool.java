@@ -293,22 +293,22 @@ public class EditFileTool implements McpTool {
         int oldLineCount = contentLines.length;
         long currentCrc = calculateCRC32(path);
 
-        // Определяем диапазон редактирования
+        // Определяем диапазон редактирования с учётом contextStartPattern
         int editStart, editEnd;
         if (fileParams.has("operations")) {
-            // Для operations находим общий диапазон
+            // Для operations находим общий диапазон с разрешением anchor для каждой операции
             int minLine = Integer.MAX_VALUE, maxLine = 0;
             for (JsonNode op : fileParams.get("operations")) {
-                int start = op.path("startLine").asInt(op.path("line").asInt(1));
-                int end = op.path("endLine").asInt(start);
-                minLine = Math.min(minLine, start);
-                maxLine = Math.max(maxLine, end);
+                int[] resolved = resolveEditRange(op, contentLines);
+                minLine = Math.min(minLine, resolved[0]);
+                maxLine = Math.max(maxLine, resolved[1]);
             }
             editStart = minLine;
             editEnd = maxLine;
         } else {
-            editStart = fileParams.path("startLine").asInt(1);
-            editEnd = fileParams.path("endLine").asInt(editStart);
+            int[] resolved = resolveEditRange(fileParams, contentLines);
+            editStart = resolved[0];
+            editEnd = resolved[1];
         }
 
         // Валидация токена доступа (REQUIRED)
@@ -400,6 +400,39 @@ public class EditFileTool implements McpTool {
             stats.newToken = newToken.encode();
         }
         return stats;
+    }
+
+    /**
+     * Разрешает диапазон редактирования с учётом contextStartPattern.
+     * Если указан паттерн, startLine/endLine интерпретируются как относительные офсеты.
+     *
+     * @param op параметры операции
+     * @param lines строки файла для поиска anchor
+     * @return [startLine, endLine] - абсолютные номера строк (1-based)
+     */
+    private int[] resolveEditRange(JsonNode op, String[] lines) {
+        int requestedStart = op.path("startLine").asInt(op.path("line").asInt(1));
+        int requestedEnd = op.path("endLine").asInt(requestedStart);
+        String contextPattern = op.path("contextStartPattern").asText(null);
+
+        if (contextPattern == null) {
+            // Абсолютная адресация
+            return new int[]{requestedStart, requestedEnd};
+        }
+
+        // Относительная адресация: ищем anchor
+        int anchorIdx = findAnchorLine(Arrays.asList(lines), contextPattern);
+        if (anchorIdx == -1) {
+            // Паттерн не найден - используем как есть, ошибка будет позже
+            return new int[]{requestedStart, requestedEnd};
+        }
+
+        // anchor в 1-based: anchorIdx + 1
+        // startLine=0 означает саму anchor строку
+        int start = (anchorIdx + 1) + requestedStart;
+        int end = (anchorIdx + 1) + requestedEnd;
+
+        return new int[]{start, end};
     }
 
     /**
