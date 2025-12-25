@@ -1,195 +1,206 @@
-# NTS MCP: The Agent's OS 🚀
+# 🛡️ NTS MCP FileSystem Server
+### Next Transactional Server for Model Context Protocol
 
-> **Verified by LLM:** I personally tested this tool suite. I created files, refactored code, renamed classes, and even accidentally nuked 134 files with a global replace—and **NTS Undo restored everything in seconds.** This is not just a file reader; it's a safety net and a power tool for agents.
+[![Java](https://img.shields.io/badge/Java-21%2B-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)]()
 
-[![Java Version](https://img.shields.io/badge/Java-25-orange.svg)](https://www.oracle.com/java/technologies/javase-jdk25-downloads.html)
-[![Protocol](https://img.shields.io/badge/MCP-1.0-blue.svg)](https://modelcontextprotocol.io)
-
-**NTS MCP** (Next Transactional Server) is the missing operating system layer for LLM agents. It transforms "blind" file editing into a **transactional, token-secured, and fully reversible** workflow.
-
----
-
-## 💎 Value for the User (Why Use This?)
-
-This server isn't just about giving the AI more power; it's about saving you time, money, and stress.
-
-### 💰 Extreme Token Economy
-*   **Zero-Cost Context:** The `grep` tool returns **access tokens** directly. The agent finds the code and can edit it immediately without a separate (and expensive) `read_file` call.
-*   **Precision Reading:** Agents can read specific line ranges with context anchors. No more dumping 5,000 lines of code into the context window just to change one variable.
-*   **Fewer Hallucinations:** Because the agent is forced to validate the file state via tokens, it fails *fast* if it's wrong, preventing long, token-burning loops of "I tried to edit but failed, let me try again."
-
-### 🛡️ Enterprise-Grade Safety
-*   **No "Half-Broken" Builds:** With **Atomic Batching**, the agent can apply changes to 10 files at once. If the 10th file fails, the previous 9 are rolled back instantly. Your project stays compilable.
-*   **The "Oops" Button:** Did the agent misunderstand you and delete your favorite module? **Deep Undo** brings it back instantly, even if files were moved or renamed.
-*   **Protected Infrastructure:** The server enforces a sandbox. Critical paths like `.git`, `.idea`, and `.env` files can be protected from accidental writes.
-
-### ⚡ High Performance
-*   **Java 25 Virtual Threads:** Built for modern concurrency. The server handles heavy I/O and search operations without blocking, keeping the agent interaction snappy.
-*   **Native Speed:** Search operations use optimized algorithms (similar to ripgrep) directly in memory.
+> **[English](#-english)** | **[Русский](#-russian)**
 
 ---
 
-## 🧠 Why This Matters to You (The Agent)
+<a name="-english"></a>
+## 🇬🇧 English
 
-As an LLM, you know the pain: you guess a line number, the file changed, your edit fails, or worse—you overwrite the wrong code. NTS solves this fundamentally.
+**NTS_MCP_FS** is an enterprise-grade File System server implementation for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/).
 
-### 1. 🛡️ Line Access Tokens (LATs) - Your "Safety Goggles"
-You never edit "blindly".
-1.  You `read` a file (or `grep` it).
-2.  NTS gives you a **Token** (e.g., `LAT:7704CA2D...`).
-3.  You pass this token to `edit`.
-4.  **Magic:** If the file changed in the background, the token is invalid. The server rejects your edit, preventing race conditions and hallucinations. You are *always* working on the latest version.
+It transforms standard file operations into a **Transactional OS for AI Agents**. Unlike basic tools that allow "blind" overwrites, NTS enforces **Optimistic Locking**, provides a **Persistent HUD**, and enables **Atomic Scripting** via programmable batches.
 
-### 2. ⏪ Deep Undo - The Time Machine
-I just ran a `project_replace` that modified **134 files** (including build artifacts I didn't mean to touch).
-*   **Without NTS:** I would be apologizing to the user and trying to `git checkout` my way out of hell.
-*   **With NTS:** I called `nts_session(action='undo')`. **Done.** Every file, every timestamp, every bit of content restored.
-*   *Bonus:* It tracks **file moves**. If you rename `Agent.java` to `SuperAgent.java` and then want to undo the *content* change from 3 steps ago, NTS finds `SuperAgent.java` and applies the undo there.
+### 🚀 Key Differentiators
 
-### 3. ⚡ Atomic Batching - "All or Nothing"
-Refactoring is risky. You want to Create File A, Rename File B, and Edit File C. If step 2 fails, you leave the project in a broken state.
-With `nts_batch_tools`, you send **one** JSON payload. The server executes all of them. If *any* fail, *none* happen.
-*   *Cool Feature:* You can pass variables! Create a file in Step 1, get its ID, and use `{{step1.path}}` in Step 2.
-
----
-
-## 🛠️ The Toolset
-
-| Tool | Capability | Agent "Superpower" |
+| Feature | Standard MCP Server | NTS_MCP_FS |
 | :--- | :--- | :--- |
-| **`nts_file_search`** | Smart Grep & Tree | Returns **Tokens** directly. You don't need to read the file again to edit it. |
-| **`nts_edit_file`** | Secured Editing | Requires tokens. Supports `insert_before`, `insert_after`, `replace`, `delete`. |
-| **`nts_batch_tools`** | Atomic Transactions | Chain multiple tools. Perfect for scaffolding or complex refactors. |
-| **`nts_session`** | Undo/Redo/Checkpoint | The ultimate safety net. Create a checkpoint before a risky task. |
-| **`nts_project_replace`** | Global Regex Replace | Powerful (use with caution!), but fully undoable. |
-| **`nts_todo`** | Persistence | A built-in HUD for your plan. Keeps you on track across context windows. |
-| **`nts_gradle_task`** | Build Integration | Run builds, tests, and get clean error reports. |
-| **`nts_git`** | VCS Integration | Check status, log, diff, and commit your work. |
+| **Integrity** | Blind Overwrites (Last Write Wins) | **Line Access Tokens (LATs)** - Optimistic Locking |
+| **Operations** | One file at a time | **Programmable Atomic Batches** (Multi-file Scripting) |
+| **Context** | Stateless (Agent forgets plan) | **AI-HUD & Built-in TODOs** (Persistent Context) |
+| **Safety** | Basic Ctrl+Z (if any) | **Deep Undo & Checkpoints** (Tracks file moves) |
+| **Performance** | Blocking I/O | **Java Virtual Threads** & Memory-Mapped I/O |
 
 ---
 
-## 🚀 Getting Started
+### 🧠 Advanced Features Deep Dive
 
-### Prerequisites
-*   **JDK 25+** (Required for Virtual Threads).
-
-### Installation
-1.  **Build:**
-    ```bash
-    ./gradlew shadowJar
-    ```
-2.  **Integrate:**
-    ```bash
-    integrate.bat
-    ```
-    This script automatically configures your `gemini`, `claude`, or `cursor` config files to use the NTS server.
-
-### Usage Tip
-Always start your session with:
-```json
-{ "tool": "nts_init", "params": {} }
+#### 1. 📟 Agent HUD (Heads-Up Display)
+The server injects a status header into *every* tool response. The Agent never loses context.
+```text
+[HUD sid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Session: 5 edits | Unlocked: 3 files
 ```
-Save the `sessionId` and pass it to **every** subsequent call.
+*   **Session Context:** Reminds the agent of the active Session ID.
+*   **Progress Tracking:** Shows current TODO status (Done/Pending) and the *next* active task.
+*   **Safety Stats:** Shows how many files are currently unlocked for editing.
 
-<br><br>
+#### 2. 📜 Programmable Atomic Batches (Scripting)
+The `nts_batch_tools` is not just a list of commands; it's a scripting engine for the file system.
+*   **Atomic Transactions:** 10 operations in one request. If the 10th fails, the previous 9 are rolled back instantly. The project is never left in a broken state.
+*   **Variable Interpolation:** Pass data between steps. Create a file in Step 1, then reference its path in Step 2 using `{{step1.path}}`.
+*   **Virtual Addressing:** Use variables like `$LAST` or `$PREV_END+1` to insert code relative to previous edits without calculating line numbers.
 
----
+**Example Script:** "Create a service, rename it, and add a method"
+```json
+"actions": [
+  { "id": "cre", "tool": "nts_file_manage", "params": { "action": "create", "path": "Temp.java", "content": "class Svc {}" } },
+  { "tool": "nts_file_manage", "params": { "action": "rename", "path": "{{cre.path}}", "newName": "UserService.java" } },
+  { "tool": "nts_edit_file", "params": { "path": "{{cre.path}}", "startLine": "$LAST", "operation": "insert_after", "content": "void login() {}", "accessToken": "{{cre.token}}" } }
+]
+```
+*Note: `{{cre.path}}` automatically resolves to `UserService.java` after the rename step!*
 
-# NTS MCP: Операционная Система Агента 🚀
+#### 3. 🔒 Enterprise Security & Sandboxing
+*   **Optimistic Locking (LATs):** Agents *must* read a file to get a token (`LAT:...`) before editing. If the file changes externally, the token expires. No more race conditions.
+*   **Strict Sandboxing:** All paths are normalized and pinned to the project root. Impossible to escape via `../../`.
+*   **Infrastructure Protection:** Automatically blocks modification of `.git`, `.env`, and build configs unless explicitly allowed.
+*   **OOM Protection:** Prevents reading massive files (>10MB) that would crash the context window.
 
-> **Проверено LLM:** Я лично протестировал этот набор инструментов. Я создавал файлы, рефакторил код, переименовывал классы и даже случайно снес 134 файла глобальной заменой — и **NTS Undo восстановил все за секунды.** Это не просто читалка файлов; это страховочный трос и мощный инструмент для агентов.
+#### 4. ⏪ State Management: Checkpoints & Deep Undo
+*   **Session Journal:** Logs every logical step (not just file IO).
+*   **Checkpoints:** Agent can run `nts_session checkpoint('pre-refactor')` and safely `rollback` if the approach fails.
+*   **Deep Undo:** The system tracks **File Lineage**. If you move `FileA -> FileB` and then hit Undo, NTS knows to restore content to `FileA`.
+*   **Git Integration:** Can create Git stashes as emergency fallbacks (`git_checkpoint`).
 
-[![Java Version](https://img.shields.io/badge/Java-25-orange.svg)](https://www.oracle.com/java/technologies/javase-jdk25-downloads.html)
-[![Protocol](https://img.shields.io/badge/MCP-1.0-blue.svg)](https://modelcontextprotocol.io)
-
-**NTS MCP** (Next Transactional Server) — это недостающий слой операционной системы для LLM-агентов. Он превращает "слепое" редактирование файлов в **транзакционный, защищенный токенами и полностью обратимый** рабочий процесс.
-
----
-
-## 💎 Преимущества для Пользователя
-
-Этот сервер не просто дает ИИ больше власти; он экономит ваше время, деньги и нервы.
-
-### 💰 Экстремальная Экономия Токенов
-*   **Нулевая стоимость контекста:** Инструмент `grep` возвращает **токены доступа** сразу. Агент находит код и может сразу его редактировать, без отдельного (и дорогого) вызова `read_file`.
-*   **Точечное чтение:** Агенты могут читать конкретные диапазоны строк. Больше не нужно загружать в контекст 5000 строк кода, чтобы изменить одну переменную.
-*   **Меньше галлюцинаций:** Поскольку агент обязан валидировать состояние файла через токены, он ошибается *быстро*, предотвращая долгие циклы "я попытался, но не вышло, дай попробую еще раз", которые сжигают ваш лимит токенов.
-
-### 🛡️ Безопасность Enterprise-уровня
-*   **Никаких "полусломанных" билдов:** С **Атомарными Пакетами** агент может применить изменения к 10 файлам сразу. Если 10-й файл сбойнет, предыдущие 9 откатятся мгновенно. Ваш проект всегда компилируется.
-*   **Кнопка "Ой!":** Агент вас неправильно понял и удалил важный модуль? **Deep Undo** вернет его мгновенно, даже если файлы были перемещены или переименованы.
-*   **Защищенная инфраструктура:** Сервер обеспечивает песочницу. Критические пути (как `.git`, `.idea`) защищены от случайной записи.
-
-### ⚡ Высокая Производительность
-*   **Java 25 Virtual Threads:** Построен на современных виртуальных потоках. Сервер обрабатывает тяжелый I/O и поиск без блокировок, обеспечивая мгновенную реакцию агента.
-*   **Нативная скорость:** Операции поиска используют оптимизированные алгоритмы (аналог ripgrep) прямо в памяти.
-
----
-
-## 🧠 Почему это важно для тебя (Агента)
-
-Как LLM, ты знаешь эту боль: ты угадываешь номер строки, файл меняется, твоя правка ломается или, что еще хуже, ты перезаписываешь не тот код. NTS решает эту проблему фундаментально.
-
-### 1. 🛡️ Токены Доступа к Строкам (LATs) — Твои "Защитные Очки"
-Ты никогда не редактируешь "вслепую".
-1.  Ты `читаешь` файл (или делаешь `grep`).
-2.  NTS дает тебе **Токен** (например, `LAT:7704CA2D...`).
-3.  Ты передаешь этот токен в `edit`.
-4.  **Магия:** Если файл изменился в фоне, токен становится недействительным. Сервер отклоняет твою правку, предотвращая гонки и галлюцинации. Ты *всегда* работаешь с последней версией.
-
-### 2. ⏪ Глубокий Откат (Deep Undo) — Машина Времени
-Я только что запустил `project_replace`, который изменил **134 файла** (включая артефакты сборки, которые я не хотел трогать).
-*   **Без NTS:** Я бы извинялся перед пользователем и пытался выбраться из этого ада через `git checkout`.
-*   **С NTS:** Я вызвал `nts_session(action='undo')`. **Готово.** Каждый файл, каждая метка времени, каждый бит контента восстановлен.
-*   *Бонус:* Он отслеживает **перемещения файлов**. Если ты переименовал `Agent.java` в `SuperAgent.java`, а затем хочешь отменить изменение *контента* 3 шага назад, NTS найдет `SuperAgent.java` и применит отмену там.
-
-### 3. ⚡ Атомарные Пакеты (Atomic Batching) — "Всё или Ничего"
-Рефакторинг — это риск. Ты хочешь создать файл A, переименовать файл B и отредактировать файл C. Если шаг 2 упадет, ты оставишь проект в сломанном состоянии.
-С `nts_batch_tools` ты отправляешь **один** JSON-пакет. Сервер выполняет их все. Если *хоть один* упадет, *ничего* не произойдет.
-*   *Крутая фича:* Можно передавать переменные! Создай файл на шаге 1, получи его ID и используй `{{step1.path}}` на шаге 2.
+#### 5. ✅ Built-in TODO System
+A specialized tool (`nts_todo`) allows the agent to maintain a Markdown-based plan.
+*   The active plan state is fed into the **HUD**.
+*   Keeps the agent focused on one task at a time.
+*   Auto-updates status (`todo`, `done`, `failed`) in the file system.
 
 ---
 
-## 🛠️ Инструментарий
+### 📦 Installation & Usage
 
-| Инструмент | Возможность | "Суперсила" Агента |
+**Prerequisites:** Java 21+ (JDK 25 recommended for max performance).
+
+#### 1. Quick Start (Auto-Integration)
+Build and run the integrator to automatically configure Claude Desktop, Cursor, or other clients.
+
+```bash
+./gradlew shadowJar
+java -jar app/build/libs/app-all.jar --integrate
+```
+
+#### 2. Manual Configuration
+Add to your `mcp-config.json`:
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/absolute/path/to/nts-mcp-fs/app/build/libs/app-all.jar"
+      ]
+    }
+  }
+}
+```
+
+---
+
+<a name="-russian"></a>
+## 🇷🇺 Русский
+
+**NTS_MCP_FS** — это сервер реализации [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) уровня Enterprise.
+
+Он превращает работу с файлами в **Транзакционную ОС для ИИ-агентов**. В отличие от простых инструментов, допускающих "слепую" перезапись, NTS обеспечивает **Оптимистичную блокировку**, предоставляет **Постоянный HUD** и позволяет создавать **Атомарные скрипты** через программируемые батчи.
+
+### 🚀 Ключевые отличия
+
+| Функция | Обычный MCP Сервер | NTS_MCP_FS |
 | :--- | :--- | :--- |
-| **`nts_file_search`** | Умный Grep и Дерево | Возвращает **Токены** сразу. Тебе не нужно читать файл заново, чтобы отредактировать его. |
-| **`nts_edit_file`** | Защищенное Редактирование | Требует токены. Поддерживает `insert_before`, `insert_after`, `replace`, `delete`. |
-| **`nts_batch_tools`** | Атомарные Транзакции | Цепочки инструментов. Идеально для скаффолдинга или сложного рефакторинга. |
-| **`nts_session`** | Undo/Redo/Чекпоинты | Максимальная страховка. Создай чекпоинт перед рискованной задачей. |
-| **`nts_project_replace`** | Глобальная Regex Замена | Мощно (используй с осторожностью!), но полностью обратимо. |
-| **`nts_todo`** | Планирование | Встроенный HUD для твоего плана. Держит тебя в курсе через контекстные окна. |
-| **`nts_gradle_task`** | Интеграция сборки | Запускай билды, тесты и получай чистые отчеты об ошибках. |
-| **`nts_git`** | VCS Интеграция | Проверяй статус, логи, дифы и коммить свою работу. |
+| **Целостность** | Слепая перезапись (кто последний, тот и прав) | **Line Access Tokens (LATs)** - Оптимистичная блокировка |
+| **Операции** | По одному файлу за раз | **Программируемые Атомарные Батчи** (Скриптинг) |
+| **Контекст** | Нет памяти (Агент забывает план) | **AI-HUD и Встроенный TODO** (Постоянный контекст) |
+| **Безопасность** | Ctrl+Z (если повезет) | **Deep Undo и Чекпоинты** (Учет перемещений файлов) |
+| **Скорость** | Блокирующий I/O | **Java Virtual Threads** и Memory-Mapped I/O |
 
 ---
 
-## 🚀 С чего начать
+### 🧠 Подробный обзор функций
 
-### Требования
-*   **JDK 25+** (Необходим для виртуальных потоков).
-
-### Установка
-1.  **Сборка:**
-    ```bash
-    ./gradlew shadowJar
-    ```
-2.  **Интеграция:**
-    ```bash
-    integrate.bat
-    ```
-    Этот скрипт автоматически настроит конфиги `gemini`, `claude` или `cursor` для использования сервера NTS.
-
-### Совет по использованию
-Всегда начинай сессию с:
-```json
-{ "tool": "nts_init", "params": {} }
+#### 1. 📟 HUD для Агента (Heads-Up Display)
+Сервер внедряет строку статуса в *каждый* ответ инструмента. Агент никогда не теряет контекст.
+```text
+[HUD sid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Session: 5 edits | Unlocked: 3 files
 ```
-Сохрани `sessionId` и передавай его в **каждый** последующий вызов.
+*   **Контекст сессии:** Напоминает агенту ID активной сессии.
+*   **Трекинг прогресса:** Показывает состояние TODO (Готово/В ожидании) и *следующую* задачу.
+*   **Статус безопасности:** Показывает, сколько файлов открыто для редактирования.
+
+#### 2. 📜 Программируемые Атомарные Батчи (Скриптинг)
+Инструмент `nts_batch_tools` — это не просто список команд, это движок скриптинга файловой системы.
+*   **Атомарные транзакции:** 10 действий в одном запросе. Если 10-е упадет, предыдущие 9 откатятся мгновенно. Проект никогда не останется "сломанным".
+*   **Интерполяция переменных:** Передача данных между шагами. Создайте файл на Шаге 1 и используйте его путь на Шаге 2 через `{{step1.path}}`.
+*   **Виртуальная адресация:** Используйте переменные `$LAST` (конец файла) или `$PREV_END+1` (вставка сразу после предыдущей правки), чтобы не высчитывать номера строк вручную.
+
+**Пример скрипта:** "Создать сервис, переименовать и добавить метод"
+```json
+"actions": [
+  { "id": "cre", "tool": "nts_file_manage", "params": { "action": "create", "path": "Temp.java", "content": "class Svc {}" } },
+  { "tool": "nts_file_manage", "params": { "action": "rename", "path": "{{cre.path}}", "newName": "UserService.java" } },
+  { "tool": "nts_edit_file", "params": { "path": "{{cre.path}}", "startLine": "$LAST", "operation": "insert_after", "content": "void login() {}", "accessToken": "{{cre.token}}" } }
+]
+```
+*Заметьте: `{{cre.path}}` автоматически превратится в `UserService.java` после шага переименования!*
+
+#### 3. 🔒 Корпоративная безопасность и Песочница
+*   **Оптимистичная блокировка (LATs):** Агент *обязан* прочитать файл и получить токен (`LAT:...`) перед правкой. Если файл изменился извне — токен сгорает. Никаких состояний гонки (Race Conditions).
+*   **Строгая песочница:** Все пути нормализуются и привязываются к корню проекта. Выход через `../../` невозможен.
+*   **Защита инфраструктуры:** Блокировка изменений `.git`, `.env` и конфигов сборки (можно настроить).
+*   **Защита от OOM:** Блокировка чтения гигантских файлов (>10MB), способных обрушить контекстное окно модели.
+
+#### 4. ⏪ Управление состоянием: Чекпоинты и Deep Undo
+*   **Журнал сессии:** Логирует каждый логический шаг.
+*   **Чекпоинты:** Агент может создать `nts_session checkpoint('pre-refactor')` и безопасно сделать `rollback`, если гипотеза не сработала.
+*   **Deep Undo (Умный откат):** Система отслеживает **Родословную файлов (Lineage)**. Если переместить `FileA -> FileB` и нажать Undo, NTS поймет, что контент нужно вернуть в `FileA`.
+*   **Git интеграция:** Возможность создавать Git stashes как аварийные точки сохранения (`git_checkpoint`).
+
+#### 5. ✅ Встроенная система TODO
+Специальный инструмент `nts_todo` позволяет агенту вести план в формате Markdown.
+*   Активный план транслируется в **HUD**.
+*   Удерживает фокус агента на одной задаче.
+*   Автоматически обновляет статусы (`todo`, `done`, `failed`) в файле.
 
 ---
 
-## 📄 Лицензия
-Copyright © 2025 Aristo. **Apache 2.0**.
-*Создано для агентов завтрашнего дня.*
+### 📦 Установка и запуск
+
+**Требования:** Java 21+ (рекомендуется JDK 25 для максимальной производительности).
+
+#### 1. Быстрый старт (Авто-интеграция)
+Соберите проект и запустите интегратор для автоматической настройки клиентов (Claude Desktop, Cursor и др.).
+
+```bash
+./gradlew shadowJar
+java -jar app/build/libs/app-all.jar --integrate
+```
+
+#### 2. Ручная конфигурация
+Добавьте этот блок в ваш `mcp-config.json`:
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/абсолютный/путь/к/nts-mcp-fs/app/build/libs/app-all.jar"
+      ]
+    }
+  }
+}
+```
+
+---
+
+<p align="center">
+  <sub>Built with ❤️ by <a href="https://github.com/Nefrols">Nefrols</a></sub>
+</p>
