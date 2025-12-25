@@ -407,4 +407,163 @@ class BatchToolsTest {
         assertTrue(ex.getMessage().contains("no previous operation") ||
                 (ex.getCause() != null && ex.getCause().getMessage().contains("no previous operation")));
     }
+
+    // ============ Session References: {{id.path}} для rename/move ============
+
+    @Test
+    void testSessionReferencesPathInterpolation() throws Exception {
+        // Тест базовой интерполяции {{id.path}}
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Создание файла
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "file");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "original.txt");
+        createParams.put("content", "Hello");
+
+        // Шаг 2: Редактирование с использованием {{file.path}}
+        ObjectNode editAction = actions.addObject();
+        editAction.put("tool", "nts_edit_file");
+        ObjectNode editParams = editAction.putObject("params");
+        editParams.put("path", "{{file.path}}"); // Должно разрешиться в "original.txt"
+        editParams.put("startLine", 1);
+        editParams.put("content", "Modified");
+        editParams.put("accessToken", "{{file.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        Path created = tempDir.resolve("original.txt");
+        assertEquals("Modified", Files.readString(created));
+    }
+
+    @Test
+    void testSessionReferencesAfterRename() throws Exception {
+        // Тест: create → rename → edit с использованием {{id.path}} который автоматически обновляется
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Создание файла
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "svc");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "Service.java");
+        createParams.put("content", "class Service {}");
+
+        // Шаг 2: Переименование с {{svc.path}}
+        ObjectNode renameAction = actions.addObject();
+        renameAction.put("tool", "nts_file_manage");
+        ObjectNode renameParams = renameAction.putObject("params");
+        renameParams.put("action", "rename");
+        renameParams.put("path", "{{svc.path}}");
+        renameParams.put("newName", "UserService.java");
+
+        // Шаг 3: Редактирование с {{svc.path}} - должен автоматически разрешиться в UserService.java
+        ObjectNode editAction = actions.addObject();
+        editAction.put("tool", "nts_edit_file");
+        ObjectNode editParams = editAction.putObject("params");
+        editParams.put("path", "{{svc.path}}"); // Должно разрешиться в "UserService.java" после rename!
+        editParams.put("startLine", 1);
+        editParams.put("content", "class UserService {}");
+        editParams.put("accessToken", "{{svc.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        // Проверяем что старый файл удалён, новый создан и отредактирован
+        assertFalse(Files.exists(tempDir.resolve("Service.java")));
+        Path renamed = tempDir.resolve("UserService.java");
+        assertTrue(Files.exists(renamed));
+        assertEquals("class UserService {}", Files.readString(renamed));
+    }
+
+    @Test
+    void testSessionReferencesAfterMove() throws Exception {
+        // Тест: create → move → edit с использованием {{id.path}}
+        Files.createDirectories(tempDir.resolve("subdir"));
+
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Шаг 1: Создание файла
+        ObjectNode createAction = actions.addObject();
+        createAction.put("id", "f");
+        createAction.put("tool", "nts_file_manage");
+        ObjectNode createParams = createAction.putObject("params");
+        createParams.put("action", "create");
+        createParams.put("path", "file.txt");
+        createParams.put("content", "Original");
+
+        // Шаг 2: Перемещение
+        ObjectNode moveAction = actions.addObject();
+        moveAction.put("tool", "nts_file_manage");
+        ObjectNode moveParams = moveAction.putObject("params");
+        moveParams.put("action", "move");
+        moveParams.put("path", "{{f.path}}");
+        moveParams.put("targetPath", "subdir/moved.txt");
+
+        // Шаг 3: Редактирование по новому пути
+        ObjectNode editAction = actions.addObject();
+        editAction.put("tool", "nts_edit_file");
+        ObjectNode editParams = editAction.putObject("params");
+        editParams.put("path", "{{f.path}}"); // Должно разрешиться в "subdir/moved.txt"
+        editParams.put("startLine", 1);
+        editParams.put("content", "Moved and Edited");
+        editParams.put("accessToken", "{{f.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        assertFalse(Files.exists(tempDir.resolve("file.txt")));
+        Path moved = tempDir.resolve("subdir/moved.txt");
+        assertTrue(Files.exists(moved));
+        assertEquals("Moved and Edited", Files.readString(moved));
+    }
+
+    @Test
+    void testMultipleFilesSessionReferences() throws Exception {
+        // Тест: работа с несколькими файлами через разные id
+        ObjectNode params = mapper.createObjectNode();
+        ArrayNode actions = params.putArray("actions");
+
+        // Создаём два файла
+        ObjectNode create1 = actions.addObject();
+        create1.put("id", "a");
+        create1.put("tool", "nts_file_manage");
+        create1.putObject("params").put("action", "create").put("path", "a.txt").put("content", "A");
+
+        ObjectNode create2 = actions.addObject();
+        create2.put("id", "b");
+        create2.put("tool", "nts_file_manage");
+        create2.putObject("params").put("action", "create").put("path", "b.txt").put("content", "B");
+
+        // Редактируем оба через их id
+        ObjectNode edit1 = actions.addObject();
+        edit1.put("tool", "nts_edit_file");
+        edit1.putObject("params")
+                .put("path", "{{a.path}}")
+                .put("startLine", 1)
+                .put("content", "AA")
+                .put("accessToken", "{{a.token}}");
+
+        ObjectNode edit2 = actions.addObject();
+        edit2.put("tool", "nts_edit_file");
+        edit2.putObject("params")
+                .put("path", "{{b.path}}")
+                .put("startLine", 1)
+                .put("content", "BB")
+                .put("accessToken", "{{b.token}}");
+
+        var result = batchTool.execute(params);
+        assertTrue(result.get("content").get(0).get("text").asText().contains("successful"));
+
+        assertEquals("AA", Files.readString(tempDir.resolve("a.txt")));
+        assertEquals("BB", Files.readString(tempDir.resolve("b.txt")));
+    }
 }

@@ -213,6 +213,8 @@ public class FileManageTool implements McpTool {
             Files.move(src, dest);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(src, dest);
+            // Session Tokens: отмечаем новый путь как разблокированный
+            TransactionManager.markFileAccessedInTransaction(dest);
             TransactionManager.commit();
         } catch (Exception e) {
             TransactionManager.rollback();
@@ -230,6 +232,8 @@ public class FileManageTool implements McpTool {
             Files.move(path, newPath);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(path, newPath);
+            // Session Tokens: отмечаем новый путь как разблокированный
+            TransactionManager.markFileAccessedInTransaction(newPath);
             TransactionManager.commit();
         } catch (Exception e) {
             TransactionManager.rollback();

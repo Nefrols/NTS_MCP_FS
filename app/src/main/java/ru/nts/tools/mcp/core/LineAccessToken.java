@@ -103,7 +103,13 @@ public record LineAccessToken(Path path,          // Абсолютный нор
 
         Path normalizedPath = expectedPath.toAbsolutePath().normalize();
         String expectedHash = hashPath(normalizedPath);
-        if (!expectedHash.equals(parts[1])) {
+
+        // Session Tokens: пропускаем проверку пути если файл разблокирован в транзакции
+        // Это позволяет использовать токен после rename/move в рамках батча
+        boolean skipPathCheck = TransactionManager.isInTransaction() &&
+                TransactionManager.isFileAccessedInTransaction(normalizedPath);
+
+        if (!skipPathCheck && !expectedHash.equals(parts[1])) {
             throw new SecurityException("Token path mismatch: token was issued for a different file");
         }
 

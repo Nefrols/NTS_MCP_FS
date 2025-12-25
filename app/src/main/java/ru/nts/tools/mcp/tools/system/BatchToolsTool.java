@@ -58,25 +58,31 @@ public class BatchToolsTool implements McpTool {
             • Session Tokens: CRC check skipped within batch (no re-read needed)
             • InfinityRange: Files created in batch have no line boundary checks
 
-            VARIABLE INTERPOLATION (token passing):
+            VARIABLE INTERPOLATION (token & path passing):
             • {{step1.token}}  - First LAT token from step 1
             • {{step1.tokens}} - All tokens comma-separated
             • {{myId.token}}   - Reference by action 'id'
+            • {{myId.path}}    - Current file path (auto-updates after rename/move!)
+
+            SESSION REFERENCES (path tracking after rename/move):
+            Use {{id.path}} to reference a file that was renamed/moved:
+            actions: [
+              {id: 'f', tool: 'nts_file_manage', params: {action: 'create', path: 'Old.java', ...}},
+              {tool: 'nts_file_manage', params: {action: 'rename', path: '{{f.path}}', newName: 'New.java'}},
+              {tool: 'nts_edit_file', params: {path: '{{f.path}}', ...}}  // ← auto-resolves to 'New.java'!
+            ]
 
             SMART LINE ADDRESSING (Virtual FS Context):
             For startLine/endLine, use special values that auto-calculate:
             • $LAST           - Last line of the file
             • $PREV_END       - End line of previous edit on this file
             • $PREV_END+N     - N lines after previous edit (e.g., $PREV_END+1)
-            System tracks line deltas automatically across batch operations.
 
-            EXAMPLE (create + multi-insert):
+            EXAMPLE (create + rename + edit):
             actions: [
-              {id: 'c', tool: 'nts_file_manage', params: {action: 'create', path: 'svc.java', content: 'class Svc {}'}},
-              {tool: 'nts_edit_file', params: {path: 'svc.java', startLine: 1, endLine: 1,
-                  content: 'class Svc {\\n  void m1() {}', accessToken: '{{c.token}}'}},
-              {tool: 'nts_edit_file', params: {path: 'svc.java', startLine: '$PREV_END+1',
-                  operation: 'insert_after', content: '  void m2() {}', accessToken: '{{c.token}}'}}
+              {id: 'svc', tool: 'nts_file_manage', params: {action: 'create', path: 'Service.java', content: 'class Service {}'}},
+              {tool: 'nts_file_manage', params: {action: 'rename', path: '{{svc.path}}', newName: 'UserService.java'}},
+              {tool: 'nts_edit_file', params: {path: '{{svc.path}}', startLine: 1, content: 'class UserService {}', accessToken: '{{svc.token}}'}}
             ]
 
             LIMITATION: Only NTS MCP tools tracked in rollback.
@@ -162,11 +168,14 @@ public class BatchToolsTool implements McpTool {
                     results.add(result);
 
                     // Сохраняем результат для интерполяции в следующих шагах
-                    StepResult stepResult = parseStepResult(result);
+                    StepResult stepResult = parseStepResult(result, interpolatedParams);
                     stepResults.put(stepKey, stepResult);
                     if (actionId != null && !actionId.isEmpty()) {
                         stepResults.put(actionId, stepResult);
                     }
+
+                    // Session References: обновляем path при rename/move
+                    updatePathAfterRenameMove(toolName, interpolatedParams, stepResults);
 
                     // Virtual FS Context: обновляем состояние файла после операции
                     updateFileState(toolName, interpolatedParams, stepResult, fileStates);
@@ -283,9 +292,10 @@ public class BatchToolsTool implements McpTool {
                 case "token" -> stepResult.tokens.isEmpty() ? "" : stepResult.tokens.get(0);
                 case "tokens" -> String.join(",", stepResult.tokens);
                 case "text" -> stepResult.text;
+                case "path" -> stepResult.path != null ? stepResult.path : "";
                 default -> throw new IllegalArgumentException(
                         "Unknown property '" + prop + "' in {{" + ref + "." + prop + "}}. " +
-                        "Supported: token, tokens, text");
+                        "Supported: token, tokens, text, path");
             };
 
             matcher.appendReplacement(result, Matcher.quoteReplacement(value));
@@ -296,10 +306,13 @@ public class BatchToolsTool implements McpTool {
     }
 
     /**
-     * Парсит результат выполнения инструмента, извлекая текст и токены.
+     * Парсит результат выполнения инструмента, извлекая текст, токены и путь.
      * Обрабатывает все элементы content[] (HUD в [0], результат в [1+]).
+     *
+     * @param result ответ инструмента
+     * @param params интерполированные параметры вызова (для извлечения path)
      */
-    private StepResult parseStepResult(JsonNode result) {
+    private StepResult parseStepResult(JsonNode result, JsonNode params) {
         StringBuilder allText = new StringBuilder();
         List<String> tokens = new ArrayList<>();
 
@@ -323,13 +336,74 @@ public class BatchToolsTool implements McpTool {
             }
         }
 
-        return new StepResult(allText.toString(), tokens);
+        // Извлекаем путь из параметров
+        String path = params.path("path").asText(null);
+
+        return new StepResult(allText.toString(), tokens, path);
+    }
+
+    /**
+     * Обновляет path во всех StepResult, которые ссылались на переименованный/перемещённый файл.
+     * Вызывается после успешного выполнения rename/move.
+     *
+     * @param toolName имя инструмента
+     * @param params параметры вызова (уже интерполированные)
+     * @param stepResults хранилище результатов шагов
+     */
+    private void updatePathAfterRenameMove(String toolName, JsonNode params, Map<String, StepResult> stepResults) {
+        if (!"nts_file_manage".equals(toolName)) {
+            return;
+        }
+
+        String action = params.path("action").asText("");
+        String oldPath = params.path("path").asText(null);
+        if (oldPath == null) return;
+
+        String newPath = null;
+
+        if ("rename".equals(action)) {
+            String newName = params.path("newName").asText(null);
+            if (newName != null) {
+                // Вычисляем новый путь: заменяем имя файла в oldPath
+                int lastSep = Math.max(oldPath.lastIndexOf('/'), oldPath.lastIndexOf('\\'));
+                if (lastSep >= 0) {
+                    newPath = oldPath.substring(0, lastSep + 1) + newName;
+                } else {
+                    newPath = newName;
+                }
+            }
+        } else if ("move".equals(action)) {
+            newPath = params.path("targetPath").asText(null);
+        }
+
+        if (newPath == null) return;
+
+        // Обновляем path во всех StepResult, которые ссылались на oldPath
+        String normalizedOld = normalizePathKey(oldPath);
+        for (StepResult sr : stepResults.values()) {
+            if (sr.path != null && normalizePathKey(sr.path).equals(normalizedOld)) {
+                sr.path = newPath;
+            }
+        }
     }
 
     /**
      * Результат выполнения шага для интерполяции.
+     * @param text полный текст ответа
+     * @param tokens список LAT токенов
+     * @param path текущий путь к файлу (обновляется при rename/move)
      */
-    private record StepResult(String text, List<String> tokens) {}
+    private static class StepResult {
+        final String text;
+        final List<String> tokens;
+        String path; // Мутабельный: обновляется при rename/move
+
+        StepResult(String text, List<String> tokens, String path) {
+            this.text = text;
+            this.tokens = tokens;
+            this.path = path;
+        }
+    }
 
     // ============ Virtual FS Context: умная адресация строк ============
 
