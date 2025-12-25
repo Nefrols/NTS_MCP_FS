@@ -123,6 +123,20 @@ public class McpServer {
             return;
         }
 
+        // Пытаемся получить корень проекта из переменной окружения PROJECT_ROOT.
+        // Это важно, так как при запуске через MCP клиенты (Gemini, Claude) могут иметь произвольный CWD.
+        String projectRoot = System.getenv("PROJECT_ROOT");
+        if (projectRoot != null && !projectRoot.isBlank()) {
+            ru.nts.tools.mcp.core.PathSanitizer.setRoot(java.nio.file.Paths.get(projectRoot));
+            if (DEBUG) {
+                System.err.println("Project root set from PROJECT_ROOT env: " + projectRoot);
+            }
+        } else {
+            if (DEBUG) {
+                System.err.println("No PROJECT_ROOT env found, using default: " + ru.nts.tools.mcp.core.PathSanitizer.getRoot());
+            }
+        }
+
         if (DEBUG) {
             System.err.println("MCP Server starting with Virtual Threads support...");
         }

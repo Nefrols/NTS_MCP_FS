@@ -52,7 +52,7 @@ public class McpIntegrator {
     /**
      * Имя сервера в конфигурации клиентов.
      */
-    private static final String SERVER_NAME = "NTS-FileSystem-Server";
+    private static final String SERVER_NAME = "NTS-FileSystem-MCP";
 
     /**
      * Запись о поддерживаемом клиенте.
@@ -117,14 +117,15 @@ public class McpIntegrator {
                             continue;
                         }
 
-                        if (isIntegrated(client.configPath())) {
+                if (isIntegrated(client.configPath())) {
                             uninstall(client.configPath());
                         } else {
-                            if (buildProject(projectRoot)) {
+                            if (isRunningFromJar() || buildProject(projectRoot)) {
                                 install(client.configPath(), projectRoot);
                             }
                         }
                     } else {
+
                         System.out.println("Invalid choice.");
                     }
                 } catch (NumberFormatException e) {
@@ -217,7 +218,36 @@ public class McpIntegrator {
     }
 
     /**
+     * Проверяет, запущено ли приложение из JAR файла.
+     * Используется для предотвращения лишних сборок проекта во время интеграции.
+     */
+    private static boolean isRunningFromJar() {
+        try {
+            var res = McpIntegrator.class.getResource("McpIntegrator.class");
+            return res != null && "jar".equals(res.getProtocol());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Возвращает путь к JAR файлу, в котором запущен этот класс.
+     *
+     * @return Путь к JAR или null, если запущено не из JAR.
+     */
+    private static Path getRunningJarPath() {
+        try {
+            var location = McpIntegrator.class.getProtectionDomain().getCodeSource().getLocation();
+            if (location == null) return null;
+            return Paths.get(location.toURI()).toAbsolutePath().normalize();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Создает страховую копию файла с временной меткой.
+
      * 
      * @param file Файл для бэкапа.
      * @throws IOException При ошибках копирования.
@@ -295,12 +325,17 @@ public class McpIntegrator {
     private static ObjectNode createServerNode(Path projectRoot) {
         ObjectNode server = mapper.createObjectNode();
         
-        // Формируем путь к shadow JAR
-        Path jarPath = projectRoot.resolve("app/build/libs/app-all.jar");
-        
-        if (!Files.exists(jarPath)) {
-            System.err.println("Warning: Shadow JAR not found at: " + jarPath);
-            System.err.println("Make sure you run 'Build' or 'gradlew shadowJar' manually.");
+        Path jarPath;
+        if (isRunningFromJar()) {
+            jarPath = getRunningJarPath();
+            System.out.println("Using running JAR for integration: " + jarPath);
+        } else {
+            // Формируем путь к shadow JAR относительно корня проекта
+            jarPath = projectRoot.resolve("app/build/libs/app-all.jar");
+            if (!Files.exists(jarPath)) {
+                System.err.println("Warning: Shadow JAR not found at: " + jarPath);
+                System.err.println("Make sure you run 'Build' or 'gradlew shadowJar' manually.");
+            }
         }
 
         server.put("command", "java");
