@@ -341,10 +341,6 @@ public class McpIntegrator {
         server.put("command", "java");
         server.putArray("args").add("-jar").add(jarPath.toString());
 
-        // Пробрасываем корень проекта в переменные окружения
-        ObjectNode env = server.putObject("env");
-        env.put("PROJECT_ROOT", projectRoot.toString());
-        
         return server;
     }
 }

@@ -133,7 +133,7 @@ public class McpServer {
             }
         } else {
             if (DEBUG) {
-                System.err.println("No PROJECT_ROOT env found, using default: " + ru.nts.tools.mcp.core.PathSanitizer.getRoot());
+                System.err.println("No PROJECT_ROOT env found, using CWD as root: " + ru.nts.tools.mcp.core.PathSanitizer.getRoot());
             }
         }
 
