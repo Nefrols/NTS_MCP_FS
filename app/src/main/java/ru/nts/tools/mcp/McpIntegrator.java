@@ -36,7 +36,7 @@ import java.util.Scanner;
 /**
  * Утилита для автоматической интеграции и управления MCP сервером в клиентских приложениях.
  * Поддерживает:
- * 1. Обнаружение установленных клиентов (Gemini, LM Studio, Claude, Cursor).
+  * 1. Обнаружение установленных клиентов (Gemini, LM Studio, Claude, Cursor, Antigravity, Copilot).
  * 2. Интерактивное добавление и удаление сервера из конфигураций.
  * 3. Сборку оптимизированного shadow JAR.
  * 4. Создание локального конфигурационного файла в корне проекта.
@@ -84,26 +84,27 @@ public class McpIntegrator {
                     System.out.printf("%d. [ %-10s ] %-10s (%s)\n", i + 1, status, client.name(), client.configPath());
                 }
 
+                int nextAction = clients.size() + 1;
                 System.out.println("\nActions:");
-                System.out.println("1-5. Install/Uninstall for specific client");
-                System.out.println("6.   Build and Create local mcp-config.json in project root");
-                System.out.println("7.   Build project only (shadowJar)");
-                System.out.println("8.   Exit");
+                System.out.printf("1-%d. Install/Uninstall for specific client\n", clients.size());
+                System.out.printf("%d.   Build and Create local mcp-config.json in project root\n", nextAction++);
+                System.out.printf("%d.   Build project only (shadowJar)\n", nextAction++);
+                System.out.printf("%d.   Exit\n", nextAction);
                 System.out.print("> ");
 
                 if (!scanner.hasNextLine()) break;
                 String choiceStr = scanner.nextLine();
 
-                if ("8".equals(choiceStr)) {
+                if (String.valueOf(nextAction).equals(choiceStr)) {
                     System.out.println("Exiting...");
                     break;
                 }
 
-                if ("6".equals(choiceStr)) {
+                if (String.valueOf(nextAction - 2).equals(choiceStr)) {
                     if (buildProject(projectRoot)) createLocalConfig(projectRoot);
                     continue;
                 }
-                if ("7".equals(choiceStr)) {
+                if (String.valueOf(nextAction - 1).equals(choiceStr)) {
                     buildProject(projectRoot);
                     continue;
                 }
@@ -141,28 +142,36 @@ public class McpIntegrator {
     /**
      * Собирает список путей к конфигурациям известных MCP клиентов.
      */
-    private static List<ClientInfo> discoverClients() {
-        List<ClientInfo> clients = new ArrayList<>();
-        String userHome = System.getProperty("user.home");
+         private static List<ClientInfo> discoverClients() {
+             List<ClientInfo> clients = new ArrayList<>();
+             String userHome = System.getProperty("user.home");
 
-        // Gemini
-        clients.add(new ClientInfo("Gemini CLI", Paths.get(userHome, ".gemini", "settings.json")));
+             // Gemini
+             clients.add(new ClientInfo("Gemini CLI", Paths.get(userHome, ".gemini", "settings.json")));
 
-        // Claude Code
-        clients.add(new ClientInfo("Claude Code", Paths.get(userHome, ".claude.json")));
+             // Claude Code
+             clients.add(new ClientInfo("Claude Code", Paths.get(userHome, ".claude.json")));
 
-        // Qwen
-        clients.add(new ClientInfo("Qwen CLI", Paths.get(userHome, ".qwen", "settings.json")));
+             // Qwen
+             clients.add(new ClientInfo("Qwen CLI", Paths.get(userHome, ".qwen", "settings.json")));
 
-        // Cursor
-        clients.add(new ClientInfo("Cursor", Paths.get(userHome, ".cursor", "mcp.json")));
-        
-        // LM Studio
-        clients.add(new ClientInfo("LM Studio", Paths.get(userHome, ".lmstudio", "mcp.json")));
+             // Cursor
+             clients.add(new ClientInfo("Cursor", Paths.get(userHome, ".cursor", "mcp.json")));
+             
+             // LM Studio
+             clients.add(new ClientInfo("LM Studio", Paths.get(userHome, ".lmstudio", "mcp.json")));
 
-        return clients;
-    }
+             // Antigravity
+             clients.add(new ClientInfo("Antigravity", Paths.get(userHome, ".gemini", "antigravity", "mcp_config.json")));
 
+             // GitHub Copilot (VS Code)
+             String appData = System.getenv("APPDATA");
+             if (appData != null) {
+                 clients.add(new ClientInfo("Copilot (VS Code)", Paths.get(appData, "Code", "User", "mcp.json")));
+             }
+
+             return clients;
+         }
     /**
      * Проверяет, зарегистрирован ли уже наш сервер в указанном файле конфигурации.
      * 
