@@ -124,6 +124,113 @@ public class GitUtils {
     }
 
     /**
+     * Проверяет, является ли указанная директория Git-репозиторием.
+     *
+     * @param path путь к директории
+     * @return true если это Git-репозиторий
+     */
+    public static boolean isGitRepo(Path path) {
+        try {
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(
+                    List.of("git", "-C", path.toString(), "rev-parse", "--is-inside-work-tree"),
+                    DEFAULT_GIT_TIMEOUT);
+            return result.exitCode() == 0 && result.output().trim().equals("true");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Создаёт Git stash как контрольную точку для последующего восстановления.
+     * Используется как fallback для Deep Undo при невозможности восстановить файлы.
+     *
+     * @param message описание stash-контрольной точки
+     * @return ID stash'а или null при ошибке
+     */
+    public static String createStashCheckpoint(String message) {
+        try {
+            // Сохраняем все изменения включая untracked файлы
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(
+                    List.of("git", "stash", "push", "-u", "-m", "NTS-MCP: " + message),
+                    10);
+            if (result.exitCode() == 0) {
+                // Получаем ID последнего stash
+                ProcessExecutor.ExecutionResult listResult = ProcessExecutor.execute(
+                        List.of("git", "stash", "list", "--format=%gd", "-n", "1"),
+                        DEFAULT_GIT_TIMEOUT);
+                if (listResult.exitCode() == 0) {
+                    return listResult.output().trim();
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Восстанавливает файлы из Git (HEAD или stash).
+     *
+     * @param paths список путей для восстановления
+     * @param stashId ID stash для восстановления (null = HEAD)
+     * @return сообщение о результате
+     */
+    public static String restoreFiles(List<Path> paths, String stashId) {
+        try {
+            Path root = PathSanitizer.getRoot();
+            List<String> relativePaths = paths.stream()
+                    .map(p -> root.relativize(p.toAbsolutePath().normalize()).toString())
+                    .toList();
+
+            StringBuilder result = new StringBuilder();
+
+            if (stashId != null) {
+                // Восстановление из stash
+                for (String relPath : relativePaths) {
+                    ProcessExecutor.ExecutionResult r = ProcessExecutor.execute(
+                            List.of("git", "checkout", stashId, "--", relPath),
+                            10);
+                    if (r.exitCode() == 0) {
+                        result.append("Restored from stash: ").append(relPath).append("\n");
+                    } else {
+                        result.append("Failed to restore: ").append(relPath).append("\n");
+                    }
+                }
+            } else {
+                // Восстановление из HEAD
+                for (String relPath : relativePaths) {
+                    ProcessExecutor.ExecutionResult r = ProcessExecutor.execute(
+                            List.of("git", "checkout", "HEAD", "--", relPath),
+                            10);
+                    if (r.exitCode() == 0) {
+                        result.append("Restored from HEAD: ").append(relPath).append("\n");
+                    } else {
+                        result.append("Failed to restore: ").append(relPath).append("\n");
+                    }
+                }
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return "Git restore failed: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Получает хеш текущего HEAD.
+     * Используется для определения, были ли сделаны коммиты.
+     */
+    public static String getHeadCommit() {
+        try {
+            ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(
+                    List.of("git", "rev-parse", "HEAD"),
+                    DEFAULT_GIT_TIMEOUT);
+            return result.exitCode() == 0 ? result.output().trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Преобразует технические коды статуса Git (из формата porcelain) в понятные для LLM описания.
      *
      * @param x Код статуса в индексе.

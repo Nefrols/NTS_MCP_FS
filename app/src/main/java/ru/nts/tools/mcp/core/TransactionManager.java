@@ -51,6 +51,14 @@ public class TransactionManager {
         return ctx().undo();
     }
 
+    /**
+     * Выполняет умный откат с поддержкой Path Lineage.
+     * @return детальный результат отката
+     */
+    public static UndoResult smartUndo() throws IOException {
+        return ctx().smartUndo();
+    }
+
     public static String redo() throws IOException {
         return ctx().redo();
     }
@@ -106,6 +114,32 @@ public class TransactionManager {
      */
     public static boolean isFileAccessedInTransaction(Path path) {
         return ctx().isFileAccessedInTransaction(path);
+    }
+
+    // ==================== Path Lineage API ====================
+
+    /**
+     * Записывает перемещение файла в FileLineageTracker.
+     * Вызывается при move/rename операциях для отслеживания цепочек перемещений.
+     */
+    public static void recordFileMove(Path oldPath, Path newPath) {
+        ctx().recordFileMove(oldPath, newPath);
+    }
+
+    /**
+     * Регистрирует файл в FileLineageTracker.
+     * Возвращает уникальный ID файла для отслеживания.
+     */
+    public static String registerFile(Path path) {
+        return ctx().registerFile(path);
+    }
+
+    /**
+     * Обновляет CRC файла в FileLineageTracker.
+     * Вызывается после редактирования для корректного поиска по CRC.
+     */
+    public static void updateFileCrc(Path path) {
+        ctx().updateFileCrc(path);
     }
 
     /**

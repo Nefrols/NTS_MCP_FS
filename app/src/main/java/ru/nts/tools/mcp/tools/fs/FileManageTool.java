@@ -119,6 +119,8 @@ public class FileManageTool implements McpTool {
             TransactionManager.backup(path); // This will record that file didn't exist
             Files.writeString(path, content);
 
+            // Path Lineage: регистрируем файл для отслеживания
+            TransactionManager.registerFile(path);
             // InfinityRange: отмечаем файл как созданный в транзакции
             // Это отключает проверку границ токена для последующих правок
             TransactionManager.markFileCreatedInTransaction(path);
@@ -213,6 +215,8 @@ public class FileManageTool implements McpTool {
             Files.move(src, dest);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(src, dest);
+            // Path Lineage: записываем перемещение для Deep Undo
+            TransactionManager.recordFileMove(src, dest);
             // Session Tokens: отмечаем новый путь как разблокированный
             TransactionManager.markFileAccessedInTransaction(dest);
             TransactionManager.commit();
@@ -232,6 +236,8 @@ public class FileManageTool implements McpTool {
             Files.move(path, newPath);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(path, newPath);
+            // Path Lineage: записываем перемещение для Deep Undo
+            TransactionManager.recordFileMove(path, newPath);
             // Session Tokens: отмечаем новый путь как разблокированный
             TransactionManager.markFileAccessedInTransaction(newPath);
             TransactionManager.commit();

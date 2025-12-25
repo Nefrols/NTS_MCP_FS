@@ -171,6 +171,33 @@ public class SessionTransactionManager {
         return filesAccessedInTransaction.get().contains(path.toAbsolutePath().normalize());
     }
 
+    /**
+     * Записывает перемещение файла в FileLineageTracker.
+     * Вызывается при move/rename операциях.
+     */
+    public void recordFileMove(Path oldPath, Path newPath) {
+        SessionContext ctx = SessionContext.currentOrDefault();
+        ctx.lineage().recordMove(oldPath, newPath);
+    }
+
+    /**
+     * Регистрирует файл в FileLineageTracker.
+     * Вызывается при создании или первом доступе к файлу.
+     */
+    public String registerFile(Path path) {
+        SessionContext ctx = SessionContext.currentOrDefault();
+        return ctx.lineage().registerFile(path);
+    }
+
+    /**
+     * Обновляет CRC файла в FileLineageTracker.
+     * Вызывается после редактирования файла.
+     */
+    public void updateFileCrc(Path path) {
+        SessionContext ctx = SessionContext.currentOrDefault();
+        ctx.lineage().updateCrc(path);
+    }
+
     public void createCheckpoint(String name) {
         synchronized (undoStack) {
             undoStack.add(new Checkpoint(name, LocalDateTime.now()));
@@ -207,6 +234,63 @@ public class SessionTransactionManager {
     public String undo() throws IOException {
         synchronized (undoStack) {
             return undoInternal();
+        }
+    }
+
+    /**
+     * Выполняет умный откат с поддержкой Path Lineage.
+     * Использует SmartUndoEngine для:
+     * - Отслеживания перемещённых файлов
+     * - Частичного отката dirty directories
+     * - Поиска "потерянных" файлов по CRC
+     * - Рекомендаций Git recovery
+     *
+     * @return детальный результат отката
+     */
+    public UndoResult smartUndo() throws IOException {
+        synchronized (undoStack) {
+            if (undoStack.isEmpty()) {
+                return UndoResult.nothingToUndo();
+            }
+
+            TransactionEntry entry = undoStack.get(undoStack.size() - 1);
+            if (entry instanceof Checkpoint cp) {
+                undoStack.remove(undoStack.size() - 1);
+                return UndoResult.builder()
+                        .status(UndoResult.Status.SUCCESS)
+                        .message("Passed checkpoint: " + cp.name())
+                        .build();
+            }
+
+            Transaction tx = (Transaction) entry;
+            SessionContext ctx = SessionContext.currentOrDefault();
+            FileLineageTracker lineage = ctx.lineage();
+
+            SmartUndoEngine engine = new SmartUndoEngine(lineage, PathSanitizer.getRoot());
+            String description = tx.instruction != null ? tx.instruction : tx.description;
+
+            // Создаём redo транзакцию до отката
+            Transaction redoTx = new Transaction("REDO: " + tx.description, tx.instruction, LocalDateTime.now());
+            for (Path path : tx.getAffectedPaths()) {
+                redoTx.addFile(path, getSnapshotDir());
+            }
+
+            // Выполняем умный откат
+            UndoResult result = engine.smartUndo(tx.getSnapshotsMap(), description);
+
+            // Если откат успешен или частичен - обновляем стеки
+            if (result.isSuccess() || result.isPartial()) {
+                undoStack.remove(undoStack.size() - 1);
+                synchronized (redoStack) {
+                    redoStack.add(redoTx);
+                }
+                totalUndos.incrementAndGet();
+            } else if (result.isFailed()) {
+                // STUCK - помечаем транзакцию
+                tx.setStatus(Status.STUCK);
+            }
+
+            return result;
         }
     }
 
@@ -530,6 +614,10 @@ public class SessionTransactionManager {
 
         public Set<Path> getAffectedPaths() {
             return snapshots.keySet();
+        }
+
+        public Map<Path, Path> getSnapshotsMap() {
+            return Collections.unmodifiableMap(snapshots);
         }
 
         public Status getStatus() {

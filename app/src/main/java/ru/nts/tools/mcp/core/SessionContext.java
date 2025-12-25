@@ -33,6 +33,7 @@ public class SessionContext {
     private final SessionTransactionManager transactionManager;
     private final SessionLineAccessTracker lineAccessTracker;
     private final SessionSearchTracker searchTracker;
+    private final FileLineageTracker fileLineageTracker;
     private volatile String activeTodoFile;
 
     // Текущий вызываемый инструмент (для диагностики)
@@ -46,6 +47,7 @@ public class SessionContext {
         this.transactionManager = new SessionTransactionManager();
         this.lineAccessTracker = new SessionLineAccessTracker();
         this.searchTracker = new SessionSearchTracker();
+        this.fileLineageTracker = new FileLineageTracker();
     }
 
     // ==================== Static API ====================
@@ -146,6 +148,10 @@ public class SessionContext {
         return searchTracker;
     }
 
+    public FileLineageTracker lineage() {
+        return fileLineageTracker;
+    }
+
     public String getActiveTodoFile() {
         return activeTodoFile;
     }
@@ -197,6 +203,7 @@ public class SessionContext {
         transactionManager.reset();
         lineAccessTracker.reset();
         searchTracker.clear();
+        fileLineageTracker.reset();
         activeTodoFile = null;
     }
 
