@@ -105,12 +105,11 @@ public class McpServer {
         return sessionId != null && validSessions.contains(sessionId);
     }
 
-
     /**
      * Точка входа в приложение. Инициализирует цикл чтения команд.
      * Использует Virtual Threads для предотвращения блокировок при тяжелых IO операциях.
      *
-     * @param args Аргументы командной строки (не используются).
+     * @param args Аргументы командной строки.
      */
     public static void main(String[] args) {
         // Принудительно устанавливаем UTF-8 для стандартных потоков вывода, 
@@ -119,11 +118,16 @@ public class McpServer {
         System.setOut(new java.io.PrintStream(System.out, true, StandardCharsets.UTF_8));
         System.setErr(new java.io.PrintStream(System.err, true, StandardCharsets.UTF_8));
 
+        if (args.length > 0 && (args[0].equalsIgnoreCase("integrate") || args[0].equalsIgnoreCase("--integrate"))) {
+            McpIntegrator.run();
+            return;
+        }
+
         if (DEBUG) {
             System.err.println("MCP Server starting with Virtual Threads support...");
         }
 
-        // Используем ExecutorService с виртуальными потоками для обработки каждого запроса.
+        // Используем ExecutorService with virtual threads for processing each request.
         // Это позволяет серверу оставаться отзывчивым даже во время выполнения длительных задач.
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor(); BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
 

@@ -1,0 +1,41 @@
+[
+  {
+    "name": "ru.nts.tools.mcp.McpServer",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true,
+    "allPublicFields": true
+  },
+  {
+    "name": "ru.nts.tools.mcp.McpIntegrator",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "ru.nts.tools.mcp.core.McpRouter",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "ru.nts.tools.mcp.core.McpTool",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.fasterxml.jackson.databind.ObjectMapper",
+    "allPublicConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.fasterxml.jackson.databind.JsonNode",
+    "allPublicMethods": true
+  }
+]

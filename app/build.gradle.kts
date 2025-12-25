@@ -17,6 +17,7 @@
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     application
+    id("com.gradleup.shadow") version "9.3.0"
 }
 
 repositories {
@@ -50,6 +51,13 @@ application {
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+}
+
+// Configure shadowJar task
+tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
+    archiveBaseName.set("app")
+    archiveClassifier.set("all")
+    archiveVersion.set("")
 }
 
 tasks.named<Test>("test") {

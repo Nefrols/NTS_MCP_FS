@@ -38,12 +38,9 @@ import java.util.Scanner;
  * Поддерживает:
  * 1. Обнаружение установленных клиентов (Gemini, LM Studio, Claude, Cursor).
  * 2. Интерактивное добавление и удаление сервера из конфигураций.
- * 3. Сборку оптимизированного дистрибутива (installDist).
+ * 3. Сборку оптимизированного shadow JAR.
  * 4. Создание локального конфигурационного файла в корне проекта.
  * 5. Автоматическое создание бэкапов перед изменением настроек.
- * <p>
- * Использование дистрибутива вместо Gradle Wrapper обеспечивает мгновенный запуск
- * и исключает "засорение" стандартного вывода служебными сообщениями сборщика.
  */
 public class McpIntegrator {
 
@@ -65,10 +62,8 @@ public class McpIntegrator {
     /**
      * Точка входа утилиты управления интеграциями.
      * Проводит поиск доступных клиентов и предлагает действия по управлению соединением.
-     * 
-     * @param args Аргументы командной строки.
      */
-    public static void main(String[] args) {
+    public static void run() {
         System.out.println("=== MCP Connection Manager ===");
         
         try (Scanner scanner = new Scanner(System.in)) {
@@ -92,7 +87,7 @@ public class McpIntegrator {
                 System.out.println("\nActions:");
                 System.out.println("1-5. Install/Uninstall for specific client");
                 System.out.println("6.   Build and Create local mcp-config.json in project root");
-                System.out.println("7.   Build project only (installDist)");
+                System.out.println("7.   Build project only (shadowJar)");
                 System.out.println("8.   Exit");
                 System.out.print("> ");
 
@@ -235,20 +230,19 @@ public class McpIntegrator {
     }
 
     /**
-     * Запускает сборку дистрибутива через Gradle Task 'installDist'.
-     * Создает в app/build/install/app готовую структуру с бинарными файлами и всеми зависимостями.
+     * Запускает сборку shadow JAR.
      * 
      * @param projectRoot Корень проекта.
      * @return true если сборка прошла успешно.
      */
     private static boolean buildProject(Path projectRoot) {
-        System.out.println("\nStarting build process (installDist)...");
+        System.out.println("\nStarting build process (shadowJar)...");
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         String gradlew = isWindows ? "gradlew.bat" : "./gradlew";
         Path gradlewPath = projectRoot.resolve(gradlew);
 
         try {
-            ProcessBuilder pb = new ProcessBuilder(gradlewPath.toString(), "installDist", "--quiet");
+            ProcessBuilder pb = new ProcessBuilder(gradlewPath.toString(), "shadowJar", "--quiet");
             pb.directory(projectRoot.toFile());
             pb.redirectErrorStream(true);
             Process process = pb.start();
@@ -293,26 +287,24 @@ public class McpIntegrator {
     }
 
     /**
-     * Создает узел конфигурации сервера, указывающий на скомпилированный бинарный файл дистрибутива.
+     * Создает узел конфигурации сервера, указывающий на shadow JAR.
      * 
      * @param projectRoot Путь к проекту.
      * @return Объект JSON с параметрами запуска.
      */
     private static ObjectNode createServerNode(Path projectRoot) {
         ObjectNode server = mapper.createObjectNode();
-        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         
-        // Формируем путь к исполняемому скрипту в папке installDist
-        Path binPath = projectRoot.resolve("app/build/install/app/bin");
-        Path executable = binPath.resolve(isWindows ? "app.bat" : "app");
+        // Формируем путь к shadow JAR
+        Path jarPath = projectRoot.resolve("app/build/libs/app-all.jar");
         
-        if (!Files.exists(executable)) {
-            System.err.println("Warning: Binary executable not found at: " + executable);
-            System.err.println("Make sure you chose a 'Build' option or run 'gradlew installDist' manually.");
+        if (!Files.exists(jarPath)) {
+            System.err.println("Warning: Shadow JAR not found at: " + jarPath);
+            System.err.println("Make sure you run 'Build' or 'gradlew shadowJar' manually.");
         }
 
-        server.put("command", executable.toString());
-        server.putArray("args"); // В дистрибутиве аргументы для запуска основного класса уже встроены в скрипку
+        server.put("command", "java");
+        server.putArray("args").add("-jar").add(jarPath.toString());
 
         // Пробрасываем корень проекта в переменные окружения
         ObjectNode env = server.putObject("env");
