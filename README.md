@@ -1,9 +1,11 @@
 # 🛡️ NTS MCP FileSystem Server
 ### Next Transactional Server for Model Context Protocol
 
-[![Java](https://img.shields.io/badge/Java-21%2B-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Java](https://img.shields.io/badge/Java-25%2B-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)]()
+[![Tools](https://img.shields.io/badge/MCP%20Tools-15-purple?style=for-the-badge)]()
+[![Languages](https://img.shields.io/badge/Languages-12-blue?style=for-the-badge)]()
 
 > **[English](#-english)** | **[Русский](#-russian)**
 
@@ -24,6 +26,7 @@ It transforms standard file operations into a **Transactional OS for AI Agents**
 | **Operations** | One file at a time | **Programmable Atomic Batches** (Multi-file Scripting) |
 | **Context** | Stateless (Agent forgets plan) | **AI-HUD & Built-in TODOs** (Persistent Context) |
 | **Safety** | Basic Ctrl+Z (if any) | **Deep Undo & Checkpoints** (Tracks file moves) |
+| **Code Intelligence** | None | **LSP Navigation & Semantic Refactoring** (12 languages) |
 | **Performance** | Blocking I/O | **Java Virtual Threads** & Memory-Mapped I/O |
 
 ---
@@ -73,11 +76,59 @@ A specialized tool (`nts_todo`) allows the agent to maintain a Markdown-based pl
 *   Keeps the agent focused on one task at a time.
 *   Auto-updates status (`todo`, `done`, `failed`) in the file system.
 
+#### 6. 🧭 LSP Navigation (Tree-sitter)
+The `nts_code_navigate` tool provides IDE-like code intelligence powered by Tree-sitter.
+*   **Go to Definition:** Jump to where a symbol is defined.
+*   **Find References:** Locate all usages across the project.
+*   **Hover:** Get type, signature, and documentation for any symbol.
+*   **List Symbols:** File outline with all definitions.
+*   **12 Languages:** Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML.
+
+#### 7. 🔄 Semantic Refactoring
+The `nts_code_refactor` tool performs intelligent code transformations.
+*   **Rename:** Updates ALL references across the entire project automatically.
+*   **Generate:** Create getters, setters, constructors, builders, toString, equals/hashCode.
+*   **Extract Method:** Pull code into a new method with proper parameters.
+*   **Inline:** Replace method/variable with its body/value.
+*   **Preview Mode:** Review diff before applying (`preview: true`).
+
+```json
+{
+  "action": "rename",
+  "path": "src/User.java",
+  "symbol": "getName",
+  "newName": "getFullName",
+  "preview": true
+}
+```
+
+---
+
+### 🛠️ Available Tools (15)
+
+| Category | Tool | Description |
+| :--- | :--- | :--- |
+| **Session** | `nts_init` | Initialize session (call FIRST) |
+| | `nts_session` | Undo/Redo, Checkpoints, Rollback |
+| **File System** | `nts_file_read` | Read files with LAT tokens |
+| | `nts_file_manage` | Create, delete, move, rename |
+| | `nts_file_search` | Glob, grep, project structure |
+| | `nts_compare_files` | Unified diff between files |
+| **Editing** | `nts_edit_file` | Line-based editing with tokens |
+| | `nts_project_replace` | Global search & replace |
+| **Navigation** | `nts_code_navigate` | Go to definition, find references |
+| **Refactoring** | `nts_code_refactor` | Rename, generate, extract, inline |
+| **External** | `nts_git` | Git operations (status, diff, commit) |
+| | `nts_gradle_task` | Build automation |
+| **Planning** | `nts_todo` | Task tracking with HUD integration |
+| **System** | `nts_batch_tools` | Atomic multi-tool transactions |
+| | `nts_task` | Background task monitoring |
+
 ---
 
 ### 📦 Installation & Usage
 
-**Prerequisites:** Java 21+ (JDK 25 recommended for max performance).
+**Prerequisites:** Java 25+ (Virtual Threads, enhanced performance).
 
 #### 1. Quick Start (Auto-Integration)
 Build and run the integrator to automatically configure Claude Desktop, Cursor, or other clients.
@@ -120,6 +171,7 @@ Add to your `mcp-config.json`:
 | **Операции** | По одному файлу за раз | **Программируемые Атомарные Батчи** (Скриптинг) |
 | **Контекст** | Нет памяти (Агент забывает план) | **AI-HUD и Встроенный TODO** (Постоянный контекст) |
 | **Безопасность** | Ctrl+Z (если повезет) | **Deep Undo и Чекпоинты** (Учет перемещений файлов) |
+| **Интеллект кода** | Отсутствует | **LSP-навигация и Семантический рефакторинг** (12 языков) |
 | **Скорость** | Блокирующий I/O | **Java Virtual Threads** и Memory-Mapped I/O |
 
 ---
@@ -169,11 +221,59 @@ Add to your `mcp-config.json`:
 *   Удерживает фокус агента на одной задаче.
 *   Автоматически обновляет статусы (`todo`, `done`, `failed`) в файле.
 
+#### 6. 🧭 LSP-навигация (Tree-sitter)
+Инструмент `nts_code_navigate` обеспечивает IDE-подобную навигацию на базе Tree-sitter.
+*   **Go to Definition:** Переход к определению символа.
+*   **Find References:** Поиск всех использований по проекту.
+*   **Hover:** Информация о типе, сигнатуре и документации.
+*   **List Symbols:** Структура файла со всеми определениями.
+*   **12 языков:** Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML.
+
+#### 7. 🔄 Семантический рефакторинг
+Инструмент `nts_code_refactor` выполняет интеллектуальные преобразования кода.
+*   **Rename:** Переименование с автоматическим обновлением ВСЕХ ссылок по проекту.
+*   **Generate:** Генерация getters, setters, конструкторов, builder, toString, equals/hashCode.
+*   **Extract Method:** Извлечение кода в метод с правильными параметрами.
+*   **Inline:** Встраивание метода/переменной.
+*   **Preview Mode:** Просмотр изменений перед применением (`preview: true`).
+
+```json
+{
+  "action": "rename",
+  "path": "src/User.java",
+  "symbol": "getName",
+  "newName": "getFullName",
+  "preview": true
+}
+```
+
+---
+
+### 🛠️ Доступные инструменты (15)
+
+| Категория | Инструмент | Описание |
+| :--- | :--- | :--- |
+| **Сессия** | `nts_init` | Инициализация сессии (вызвать ПЕРВЫМ) |
+| | `nts_session` | Undo/Redo, Чекпоинты, Откат |
+| **Файлы** | `nts_file_read` | Чтение файлов с LAT-токенами |
+| | `nts_file_manage` | Создание, удаление, перемещение |
+| | `nts_file_search` | Glob, grep, структура проекта |
+| | `nts_compare_files` | Unified diff между файлами |
+| **Редактирование** | `nts_edit_file` | Построчное редактирование с токенами |
+| | `nts_project_replace` | Глобальный поиск и замена |
+| **Навигация** | `nts_code_navigate` | Go to definition, find references |
+| **Рефакторинг** | `nts_code_refactor` | Rename, generate, extract, inline |
+| **Внешние** | `nts_git` | Git операции (status, diff, commit) |
+| | `nts_gradle_task` | Автоматизация сборки |
+| **Планирование** | `nts_todo` | Трекинг задач с HUD-интеграцией |
+| **Система** | `nts_batch_tools` | Атомарные мульти-операции |
+| | `nts_task` | Мониторинг фоновых задач |
+
 ---
 
 ### 📦 Установка и запуск
 
-**Требования:** Java 21+ (рекомендуется JDK 25 для максимальной производительности).
+**Требования:** Java 25+ (Virtual Threads, улучшенная производительность).
 
 #### 1. Быстрый старт (Авто-интеграция)
 Соберите проект и запустите интегратор для автоматической настройки клиентов (Claude Desktop, Cursor и др.).
