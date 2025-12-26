@@ -37,22 +37,44 @@ public record LineAccessToken(Path path,          // Абсолютный нор
     private static final HexFormat HEX = HexFormat.of().withUpperCase();
 
     /**
-     * Результат валидации токена.
+     * Результат валидации токена с детальной диагностикой.
      */
     public enum ValidationResult {
         /** Токен валиден */
-        VALID("Token is valid"),
+        VALID("Token is valid", null),
+
         /** CRC файла не совпадает (файл изменён) */
-        CRC_MISMATCH("File content has changed (CRC mismatch)"),
+        CRC_MISMATCH(
+            "File content has changed since token was issued (CRC mismatch)",
+            "Possible causes: (1) File was modified by external process, " +
+            "(2) 'undo' operation reverted changes, " +
+            "(3) Another tool modified the file. " +
+            "Solution: Re-read the file with nts_file_read to get a fresh token."
+        ),
+
         /** Количество строк изменилось */
-        LINE_COUNT_MISMATCH("File structure changed (line count mismatch)"),
+        LINE_COUNT_MISMATCH(
+            "File structure changed since token was issued (line count mismatch)",
+            "Possible causes: (1) Lines were added or removed by another operation, " +
+            "(2) 'undo' operation changed file structure. " +
+            "Solution: Re-read the affected range with nts_file_read."
+        ),
+
         /** Токен не найден в реестре */
-        NOT_FOUND("Token not found or expired");
+        NOT_FOUND(
+            "Token not registered or has expired",
+            "Possible causes: (1) Session was reset via nts_session reset, " +
+            "(2) Token was never issued for this range, " +
+            "(3) Token format is corrupted. " +
+            "Solution: Read the file range first with nts_file_read to obtain a valid token."
+        );
 
         private final String message;
+        private final String suggestion;
 
-        ValidationResult(String message) {
+        ValidationResult(String message, String suggestion) {
             this.message = message;
+            this.suggestion = suggestion;
         }
 
         public boolean valid() {
@@ -61,6 +83,23 @@ public record LineAccessToken(Path path,          // Абсолютный нор
 
         public String message() {
             return message;
+        }
+
+        /**
+         * Возвращает подсказку для исправления ситуации.
+         */
+        public String suggestion() {
+            return suggestion;
+        }
+
+        /**
+         * Возвращает полное сообщение с подсказкой.
+         */
+        public String fullMessage() {
+            if (suggestion == null) {
+                return message;
+            }
+            return message + " | " + suggestion;
         }
     }
 

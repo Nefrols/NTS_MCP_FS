@@ -23,6 +23,8 @@ import ru.nts.tools.mcp.core.*;
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -120,6 +122,11 @@ public class EditFileTool implements McpTool {
                 "For expectedContent: ignore leading whitespace (spaces/tabs) differences. " +
                 "Useful when code formatters change indentation. Default: false.");
 
+        props.putObject("autoIndent").put("type", "boolean").put("description",
+                "Auto-apply indentation from surrounding code to inserted content. " +
+                "When true, detects indentation from previous line and applies to new content. " +
+                "Default: false (content inserted exactly as provided).");
+
         // === BATCH OPERATIONS (single file, multiple edits) ===
         var ops = props.putObject("operations");
         ops.put("type", "array").put("description",
@@ -205,6 +212,11 @@ public class EditFileTool implements McpTool {
                 statusMsg.append(String.format("  Operations: %d (Ins: %d, Del: %d, Repl: %d)\n", stats.total(), stats.inserts, stats.deletes, stats.replaces));
                 if (!dryRun) {
                     statusMsg.append(String.format("  CRC32C: %X | Lines: %d\n", stats.crc32, stats.newLineCount));
+                    // Уведомление об автоматической смене кодировки
+                    if (stats.encodingChanged) {
+                        statusMsg.append(String.format("  [ENCODING CHANGED: %s -> %s]\n",
+                                stats.originalEncoding, stats.newEncoding));
+                    }
                     statusMsg.append(String.format("  [NEW TOKEN: %s]\n", stats.newToken));
                 }
 
@@ -262,6 +274,11 @@ public class EditFileTool implements McpTool {
             sb.append("\nOperations: ").append(stats.total());
             if (!dryRun) {
                 sb.append(String.format(" | New CRC32C: %X | Lines: %d", stats.crc32, stats.newLineCount));
+                // Уведомление об автоматической смене кодировки
+                if (stats.encodingChanged) {
+                    sb.append(String.format("\n[ENCODING CHANGED: %s -> %s (auto-switched for non-ASCII content)]",
+                            stats.originalEncoding, stats.newEncoding));
+                }
                 sb.append("\n[NEW TOKEN: ").append(stats.newToken).append("]");
             }
 
@@ -364,7 +381,7 @@ public class EditFileTool implements McpTool {
         // Проверяем валидность токена
         var validation = LineAccessTracker.validateToken(token, currentCrc, oldLineCount);
         if (!validation.valid()) {
-            throw new SecurityException("Token validation failed: " + validation.message() + " Re-read the file with nts_file_read to get a new token.");
+            throw new SecurityException("Token validation failed: " + validation.fullMessage());
         }
 
         // Проверяем, что токен покрывает диапазон редактирования
@@ -410,18 +427,22 @@ public class EditFileTool implements McpTool {
                     .collect(Collectors.joining(lineSeparator));
             // Сохранение итогового состояния на диск
             if (!dryRun) {
-                FileUtils.safeWrite(path, newContent, charset);
+                // Автоматическое переключение на UTF-8 если контент содержит non-ASCII
+                Charset writeCharset = autoSwitchEncodingIfNeeded(charset, newContent, stats);
+                FileUtils.safeWrite(path, newContent, writeCharset);
             }
         } else if (fileParams.has("startLine")) {
             // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
-                        newContent = currentLines.stream()
-                                .map(l -> l.endsWith("\r") ? l.substring(0, l.length() - 1) : l)
-                                .collect(Collectors.joining(lineSeparator));
-                        // Сохранение итогового состояния на диск
-                        if (!dryRun) {
-                            FileUtils.safeWrite(path, newContent, charset);
-                        }
+            newContent = currentLines.stream()
+                    .map(l -> l.endsWith("\r") ? l.substring(0, l.length() - 1) : l)
+                    .collect(Collectors.joining(lineSeparator));
+            // Сохранение итогового состояния на диск
+            if (!dryRun) {
+                // Автоматическое переключение на UTF-8 если контент содержит non-ASCII
+                Charset writeCharset = autoSwitchEncodingIfNeeded(charset, newContent, stats);
+                FileUtils.safeWrite(path, newContent, writeCharset);
+            }
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }
@@ -488,6 +509,7 @@ public class EditFileTool implements McpTool {
         String expected = op.path("expectedContent").asText(null);
         String contextPattern = op.path("contextStartPattern").asText(null);
         boolean ignoreIndentation = op.path("ignoreIndentation").asBoolean(false);
+        boolean autoIndent = op.path("autoIndent").asBoolean(false);
 
         // 1. Поиск якоря для относительной адресации (если указан паттерн)
         // anchorLine: 0-based индекс найденной строки, или 0 если паттерн не указан
@@ -556,11 +578,14 @@ public class EditFileTool implements McpTool {
             }
         }
 
-        // 6. Определение отступа для вставляемого кода (Auto-indentation)
+        // 6. Определение отступа для вставляемого кода (Auto-indentation - только если autoIndent=true)
         int oldLineCount = (end >= start) ? (end - start + 1) : 0;
-        // Берем отступ либо от строки выше, либо от текущей первой строки диапазона
-        int indentLineIdx = (start > 1) ? (start - 2) : (start - 1);
-        String indentation = (indentLineIdx >= 0 && indentLineIdx < lines.size()) ? getIndentation(lines.get(indentLineIdx)) : "";
+        String indentation = "";
+        if (autoIndent) {
+            // Берем отступ либо от строки выше, либо от текущей первой строки диапазона
+            int indentLineIdx = (start > 1) ? (start - 2) : (start - 1);
+            indentation = (indentLineIdx >= 0 && indentLineIdx < lines.size()) ? getIndentation(lines.get(indentLineIdx)) : "";
+        }
 
         // 7. Манипуляция списком строк
         for (int i = 0; i < oldLineCount; i++) {
@@ -568,9 +593,9 @@ public class EditFileTool implements McpTool {
         }
 
         if (newText != null) {
-            // Применяем отступ к каждой строке нового текста
-            String indentedText = applyIndentation(newText, indentation);
-            String[] newLines = indentedText.split("\n", -1);
+            // Применяем отступ только если autoIndent=true
+            String textToInsert = autoIndent ? applyIndentation(newText, indentation) : newText;
+            String[] newLines = textToInsert.split("\n", -1);
             for (int i = 0; i < newLines.length; i++) {
                 lines.add(start - 1 + i, newLines[i]);
             }
@@ -671,6 +696,54 @@ public class EditFileTool implements McpTool {
     }
 
     /**
+     * Проверяет, содержит ли строка символы, выходящие за пределы ASCII (0-127).
+     *
+     * @param text проверяемая строка
+     * @return true если найден хотя бы один non-ASCII символ
+     */
+    private boolean containsNonAscii(String text) {
+        if (text == null) return false;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) > 127) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Проверяет, может ли данная кодировка закодировать строку.
+     *
+     * @param charset кодировка для проверки
+     * @param text текст для кодирования
+     * @return true если кодировка способна представить все символы текста
+     */
+    private boolean canEncode(Charset charset, String text) {
+        if (text == null || text.isEmpty()) return true;
+        CharsetEncoder encoder = charset.newEncoder();
+        return encoder.canEncode(text);
+    }
+
+    /**
+     * Автоматически переключает кодировку на UTF-8, если текущая не может закодировать контент.
+     *
+     * @param currentCharset текущая кодировка файла
+     * @param content контент для записи
+     * @param stats статистика редактирования (для записи изменения кодировки)
+     * @return кодировку для записи (либо текущую, либо UTF-8)
+     */
+    private Charset autoSwitchEncodingIfNeeded(Charset currentCharset, String content, FileEditStats stats) {
+        // Если контент содержит non-ASCII и текущая кодировка не может его закодировать
+        if (containsNonAscii(content) && !canEncode(currentCharset, content)) {
+            stats.encodingChanged = true;
+            stats.originalEncoding = currentCharset.name();
+            stats.newEncoding = StandardCharsets.UTF_8.name();
+            return StandardCharsets.UTF_8;
+        }
+        return currentCharset;
+    }
+
+    /**
      * Вспомогательный объект для агрегации статистики изменений по файлу.
      */
     private static class FileEditStats {
@@ -682,6 +755,10 @@ public class EditFileTool implements McpTool {
         String diff = "";
         String newToken = null;
         int newLineCount = 0;
+        // Поля для отслеживания изменения кодировки
+        boolean encodingChanged = false;
+        String originalEncoding = null;
+        String newEncoding = null;
 
         FileEditStats(Path path) {
             this.path = path;

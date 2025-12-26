@@ -19,6 +19,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
+import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractor;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
+import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
 
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
@@ -107,6 +111,13 @@ public class FileReadTool implements McpTool {
         props.putObject("contextRange").put("type", "integer").put("description",
                 "Lines before AND after the anchor match. Default: 0 (only matching line).");
 
+        props.putObject("symbol").put("type", "string").put("description",
+                "Read specific symbol (class, method, function) by name. Uses tree-sitter for precise boundaries. " +
+                "Combines nts_code_navigate + read in one call. Returns symbol content with TOKEN.");
+
+        props.putObject("symbolKind").put("type", "string").put("description",
+                "Filter by symbol kind: 'class', 'method', 'function', 'field'. Used with 'symbol' param.");
+
         var ranges = props.putObject("ranges");
         ranges.put("type", "array").put("description",
                 "Read multiple non-contiguous sections. Each range gets its own token. " +
@@ -164,9 +175,12 @@ public class FileReadTool implements McpTool {
         boolean hasLine = params.has("line");
         boolean hasRanges = params.has("ranges");
         boolean hasPattern = params.has("contextStartPattern");
+        boolean hasSymbol = params.has("symbol");
 
-        if (!hasStartLine && !hasLine && !hasRanges && !hasPattern) {
-            throw new IllegalArgumentException("Reading entire file is not allowed. Specify one of: " + "startLine/endLine, line, ranges, or contextStartPattern. " + "Use action='info' to get file metadata first.");
+        if (!hasStartLine && !hasLine && !hasRanges && !hasPattern && !hasSymbol) {
+            throw new IllegalArgumentException("Reading entire file is not allowed. Specify one of: " +
+                    "startLine/endLine, line, ranges, contextStartPattern, or symbol. " +
+                    "Use action='info' to get file metadata first.");
         }
 
         // Загружаем файл с учетом принудительной кодировки если указана
@@ -190,7 +204,19 @@ public class FileReadTool implements McpTool {
 
         // Определяем диапазон
         int startLine, endLine;
-        if (hasLine) {
+        SymbolInfo foundSymbol = null;
+
+        if (hasSymbol) {
+            // Чтение по имени символа через tree-sitter
+            String symbolName = params.get("symbol").asText();
+            String kindFilter = params.path("symbolKind").asText(null);
+            foundSymbol = findSymbolInFile(path, content, symbolName, kindFilter);
+            if (foundSymbol == null) {
+                throw new IllegalArgumentException("Symbol '" + symbolName + "' not found in " + path.getFileName());
+            }
+            startLine = foundSymbol.location().startLine();
+            endLine = foundSymbol.location().endLine();
+        } else if (hasLine) {
             startLine = endLine = params.get("line").asInt();
         } else if (hasPattern) {
             String patternStr = params.get("contextStartPattern").asText();
@@ -239,6 +265,12 @@ public class FileReadTool implements McpTool {
 
         // Извлекаем контент
         String resultText = extractLines(lines, startLine, endLine);
+
+        // Если читали по символу, добавляем информацию о символе
+        if (foundSymbol != null) {
+            return createSymbolReadResponse(path, lineCount, fileData.charset().name(), crc32,
+                    startLine, endLine, resultText, newToken.encode(), foundSymbol);
+        }
 
         return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, resultText, newToken.encode());
     }
@@ -342,6 +374,74 @@ public class FileReadTool implements McpTool {
 
     // ============ Вспомогательные методы ============
 
+    /**
+     * Ищет символ в файле по имени с использованием tree-sitter.
+     */
+    private SymbolInfo findSymbolInFile(Path path, String content, String symbolName, String kindFilter) {
+        String langId = LanguageDetector.detect(path).orElse(null);
+        if (langId == null) {
+            return null;
+        }
+
+        try {
+            TreeSitterManager treeManager = TreeSitterManager.getInstance();
+            SymbolExtractor extractor = SymbolExtractor.getInstance();
+            var tree = treeManager.parse(content, langId);
+
+            List<SymbolInfo> symbols = extractor.extractDefinitions(tree, path, content, langId);
+
+            // Фильтруем по имени и виду
+            List<SymbolInfo> matches = symbols.stream()
+                    .filter(s -> s.name().equals(symbolName))
+                    .filter(s -> kindFilter == null || matchesKind(s, kindFilter))
+                    .toList();
+
+            if (matches.isEmpty()) {
+                return null;
+            }
+            if (matches.size() == 1) {
+                return matches.get(0);
+            }
+
+            // Если несколько совпадений, предпочитаем более конкретные типы (метод > класс)
+            return matches.stream()
+                    .min((a, b) -> {
+                        // Порядок предпочтения: METHOD > FUNCTION > FIELD > CLASS
+                        int priorityA = getKindPriority(a.kind());
+                        int priorityB = getKindPriority(b.kind());
+                        return Integer.compare(priorityA, priorityB);
+                    })
+                    .orElse(matches.get(0));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean matchesKind(SymbolInfo symbol, String kind) {
+        return switch (kind.toLowerCase()) {
+            case "class" -> symbol.kind() == SymbolInfo.SymbolKind.CLASS;
+            case "interface" -> symbol.kind() == SymbolInfo.SymbolKind.INTERFACE;
+            case "method" -> symbol.kind() == SymbolInfo.SymbolKind.METHOD;
+            case "function" -> symbol.kind() == SymbolInfo.SymbolKind.FUNCTION;
+            case "field" -> symbol.kind() == SymbolInfo.SymbolKind.FIELD;
+            case "property" -> symbol.kind() == SymbolInfo.SymbolKind.PROPERTY;
+            case "variable" -> symbol.kind() == SymbolInfo.SymbolKind.VARIABLE;
+            case "enum" -> symbol.kind() == SymbolInfo.SymbolKind.ENUM;
+            case "struct" -> symbol.kind() == SymbolInfo.SymbolKind.STRUCT;
+            default -> true;
+        };
+    }
+
+    private int getKindPriority(SymbolInfo.SymbolKind kind) {
+        return switch (kind) {
+            case METHOD, FUNCTION -> 1;
+            case FIELD, PROPERTY -> 2;
+            case VARIABLE -> 3;
+            case CLASS, INTERFACE, STRUCT, ENUM -> 4;
+            default -> 5;
+        };
+    }
+
     private int findPatternLine(String[] lines, String patternStr) {
         Pattern pattern = Pattern.compile(patternStr);
         for (int i = 0; i < lines.length; i++) {
@@ -380,6 +480,31 @@ public class FileReadTool implements McpTool {
         sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n", path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
         sb.append(String.format("[TOKEN: %s]\n\n", token));
         sb.append(content);
+
+        return createResponse(sb.toString());
+    }
+
+    private JsonNode createSymbolReadResponse(Path path, int totalLines, String encoding, long crc32,
+                                               int startLine, int endLine, String content, String token,
+                                               SymbolInfo symbol) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("[SYMBOL: %s | KIND: %s", symbol.name(), symbol.kind().getDisplayName()));
+        if (symbol.parentName() != null) {
+            sb.append(" | PARENT: ").append(symbol.parentName());
+        }
+        sb.append("]\n");
+        sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n",
+                path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
+        sb.append(String.format("[TOKEN: %s]\n", token));
+
+        if (symbol.signature() != null) {
+            sb.append("[SIGNATURE: ").append(symbol.signature()).append("]\n");
+        }
+        if (symbol.documentation() != null) {
+            sb.append("[DOC: ").append(symbol.documentation().replace("\n", " ").trim()).append("]\n");
+        }
+
+        sb.append("\n").append(content);
 
         return createResponse(sb.toString());
     }

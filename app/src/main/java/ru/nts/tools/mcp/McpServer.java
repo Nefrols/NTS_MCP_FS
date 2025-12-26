@@ -26,6 +26,8 @@ import ru.nts.tools.mcp.tools.session.*;
 import ru.nts.tools.mcp.tools.external.*;
 import ru.nts.tools.mcp.tools.planning.*;
 import ru.nts.tools.mcp.tools.system.*;
+import ru.nts.tools.mcp.tools.navigation.*;
+import ru.nts.tools.mcp.tools.refactoring.CodeRefactorTool;
 
 import java.util.Set;
 import java.util.List;
@@ -156,6 +158,12 @@ public class McpServer {
 
         router.registerTool(new ProjectReplaceTool());
         router.registerTool(new TodoTool());
+
+        // Code navigation with tree-sitter
+        router.registerTool(new CodeNavigateTool());
+
+        // Code refactoring with tree-sitter
+        router.registerTool(new CodeRefactorTool());
     }
 
     /**

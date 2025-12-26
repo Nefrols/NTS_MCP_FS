@@ -113,13 +113,11 @@ public class EncodingUtils {
                  }
              }
 
-             // --- FIX: Улучшенная логика для кириллицы и CJK ---
              if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
                  if (!isValidUtf8(allBytes)) {
                      charset = Charset.forName("windows-1251");
                  }
              }
-             // --------------------------------------------
 
              allBytes = stripBom(allBytes, charset);
 
@@ -192,7 +190,6 @@ public class EncodingUtils {
                     }
                 }
 
-                // --- FIX: Улучшенная логика для кириллицы и CJK ---
                 if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
                     byte[] actualBytes = new byte[bytesRead];
                     System.arraycopy(buffer, 0, actualBytes, 0, bytesRead);
@@ -200,7 +197,6 @@ public class EncodingUtils {
                         return Charset.forName("windows-1251");
                     }
                 }
-                // --------------------------------------------
                 
                 return charset;
             }

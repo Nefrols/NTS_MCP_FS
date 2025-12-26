@@ -6,9 +6,35 @@ guava = "33.4.6-jre"
 junit-jupiter = "5.12.1"
 jackson = "2.18.2"
 juniversalchardet = "2.5.0"
+tree-sitter = "0.25.3"
+tree-sitter-java = "0.23.4"
+tree-sitter-kotlin = "0.3.8.1"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.23.4"
+tree-sitter-go = "0.23.3"
+tree-sitter-rust = "0.23.1"
+tree-sitter-c = "0.23.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-c-sharp = "0.23.1"
+tree-sitter-php = "0.23.11"
+tree-sitter-html = "0.23.2"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit-jupiter" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 juniversalchardet = { module = "com.github.albfernandez:juniversalchardet", version.ref = "juniversalchardet" }
+tree-sitter = { module = "io.github.bonede:tree-sitter", version.ref = "tree-sitter" }
+tree-sitter-java = { module = "io.github.bonede:tree-sitter-java", version.ref = "tree-sitter-java" }
+tree-sitter-kotlin = { module = "io.github.bonede:tree-sitter-kotlin", version.ref = "tree-sitter-kotlin" }
+tree-sitter-javascript = { module = "io.github.bonede:tree-sitter-javascript", version.ref = "tree-sitter-javascript" }
+tree-sitter-typescript = { module = "io.github.bonede:tree-sitter-typescript", version.ref = "tree-sitter-typescript" }
+tree-sitter-python = { module = "io.github.bonede:tree-sitter-python", version.ref = "tree-sitter-python" }
+tree-sitter-go = { module = "io.github.bonede:tree-sitter-go", version.ref = "tree-sitter-go" }
+tree-sitter-rust = { module = "io.github.bonede:tree-sitter-rust", version.ref = "tree-sitter-rust" }
+tree-sitter-c = { module = "io.github.bonede:tree-sitter-c", version.ref = "tree-sitter-c" }
+tree-sitter-cpp = { module = "io.github.bonede:tree-sitter-cpp", version.ref = "tree-sitter-cpp" }
+tree-sitter-c-sharp = { module = "io.github.bonede:tree-sitter-c-sharp", version.ref = "tree-sitter-c-sharp" }
+tree-sitter-php = { module = "io.github.bonede:tree-sitter-php", version.ref = "tree-sitter-php" }
+tree-sitter-html = { module = "io.github.bonede:tree-sitter-html", version.ref = "tree-sitter-html" }

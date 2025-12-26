@@ -35,6 +35,21 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.jackson.databind)
     implementation(libs.juniversalchardet)
+
+    // Tree-sitter for LSP-like code navigation
+    implementation(libs.tree.sitter)
+    implementation(libs.tree.sitter.java)
+    implementation(libs.tree.sitter.kotlin)
+    implementation(libs.tree.sitter.javascript)
+    implementation(libs.tree.sitter.typescript)
+    implementation(libs.tree.sitter.python)
+    implementation(libs.tree.sitter.go)
+    implementation(libs.tree.sitter.rust)
+    implementation(libs.tree.sitter.c)
+    implementation(libs.tree.sitter.cpp)
+    implementation(libs.tree.sitter.c.sharp)
+    implementation(libs.tree.sitter.php)
+    implementation(libs.tree.sitter.html)
 }
 
 // Apply a specific Java toolchain to ease working on different environments.

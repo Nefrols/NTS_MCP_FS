@@ -20,8 +20,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.*;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
 import java.nio.charset.Charset;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -64,9 +62,11 @@ public class ProjectReplaceTool implements McpTool {
             - Include/exclude globs to limit scope
             - Binary files automatically skipped
             - Report shows affected files with occurrence counts
+            - DRY RUN MODE: Preview unified diff without modifying files
+            - AUTO-CHECKPOINT: Session checkpoint created before changes
 
             SAFETY:
-            - Preview changes first with nts_file_search grep
+            - Use dryRun=true to preview changes first
             - All changes undoable via nts_session undo
 
             TOKEN OUTPUT:
@@ -74,10 +74,11 @@ public class ProjectReplaceTool implements McpTool {
             Use tokens in batch: {{stepN.affectedFiles}} or parse from output for subsequent edits.
 
             EXAMPLES:
+            - Preview: pattern='OldClass', replacement='NewClass', dryRun=true
             - Rename: pattern='OldClass', replacement='NewClass', include='**/*.java'
             - Regex: pattern='log\\.(info|debug)', replacement='logger.$1', isRegex=true
 
-            WARNING: Powerful tool - verify pattern matches expected text first!
+            WARNING: Powerful tool - use dryRun=true first to verify pattern matches!
             """;
     }
 
@@ -104,6 +105,14 @@ public class ProjectReplaceTool implements McpTool {
                 "Interpret pattern as regex. Default: false (literal match). " +
                 "Use for: wildcards (.*), groups ((foo|bar)), special chars (\\d+).");
 
+        props.putObject("dryRun").put("type", "boolean").put("description",
+                "Preview mode: shows unified diff without modifying files. Default: false. " +
+                "RECOMMENDED: Always use dryRun=true first to verify changes before applying.");
+
+        props.putObject("maxPreviewMatches").put("type", "integer").put("description",
+                "Maximum matches to show in dryRun mode per file. Default: 10. " +
+                "Set higher to see more context, lower for large projects.");
+
         props.putObject("include").put("type", "string").put("description",
                 "Glob to limit scope. Examples: 'src/**/*.java', '**/*.ts', 'app/models/*.py'. " +
                 "Omit to search entire project.");
@@ -127,6 +136,8 @@ public class ProjectReplaceTool implements McpTool {
         String query = params.get("pattern").asText();
         String replacement = params.get("replacement").asText();
         boolean isRegex = params.path("isRegex").asBoolean(false);
+        boolean dryRun = params.path("dryRun").asBoolean(false);
+        int maxPreviewMatches = params.path("maxPreviewMatches").asInt(10);
         String includeGlob = params.path("include").asText(null);
         String excludeGlob = params.path("exclude").asText(null);
         String instruction = params.path("instruction").asText(null);
@@ -202,7 +213,19 @@ public class ProjectReplaceTool implements McpTool {
             return createResponse("No matches found. No files modified.");
         }
 
-        // 2. Выполнение замены в транзакции
+        // 2. Режим dryRun - генерация unified diff без изменений
+        if (dryRun) {
+            return generateDryRunDiff(tasks, query, replacement, isRegex, pattern, root, totalOccurrences, maxPreviewMatches);
+        }
+
+        // 3. Автоматический checkpoint перед массовой заменой
+        try {
+            TransactionManager.createCheckpoint("auto_project_replace_" + System.currentTimeMillis());
+        } catch (Exception e) {
+            // Checkpoint не критичен, продолжаем
+        }
+
+        // 4. Выполнение замены в транзакции
         List<AffectedFile> affectedFiles = new ArrayList<>();
 
         TransactionManager.startTransaction("Project Replace: '" + query + "' -> '" + replacement + "'", instruction);
@@ -217,11 +240,15 @@ public class ProjectReplaceTool implements McpTool {
                     newContent = task.originalContent.replace(query, replacement);
                 }
 
+                // Вычисляем CRC32C от байтов, которые будем записывать
+                // (до записи, для консистентности)
+                byte[] contentBytes = newContent.getBytes(task.charset);
+                long crc = calculateCRC32FromBytes(contentBytes);
+                int lineCount = newContent.split("\n", -1).length;
+
                 FileUtils.safeWrite(task.path, newContent, task.charset);
 
-                // Вместо инвалидации — регистрируем новый токен доступа
-                long crc = calculateCRC32(task.path);
-                int lineCount = newContent.split("\n", -1).length;
+                // Регистрируем токен доступа с корректной CRC
                 LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, crc, lineCount);
 
                 // Session Tokens: отмечаем файл как разблокированный
@@ -251,6 +278,99 @@ public class ProjectReplaceTool implements McpTool {
         return createResponse(sb.toString().trim());
     }
 
+    /**
+     * Генерирует unified diff для режима dryRun.
+     */
+    private JsonNode generateDryRunDiff(List<ReplaceTask> tasks, String query, String replacement,
+                                          boolean isRegex, Pattern pattern, Path root,
+                                          int totalOccurrences, int maxMatchesPerFile) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== DRY RUN MODE - No files modified ===\n\n");
+        sb.append("Pattern: ").append(query).append("\n");
+        sb.append("Replacement: ").append(replacement).append("\n");
+        sb.append("Files to modify: ").append(tasks.size()).append("\n");
+        sb.append("Total occurrences: ").append(totalOccurrences).append("\n\n");
+
+        int shownFiles = 0;
+        int maxFilesToShow = 20; // Ограничиваем количество файлов в preview
+
+        for (ReplaceTask task : tasks) {
+            if (shownFiles >= maxFilesToShow) {
+                sb.append(String.format("\n... and %d more file(s) not shown\n",
+                        tasks.size() - maxFilesToShow));
+                break;
+            }
+
+            Path relPath = root.relativize(task.path);
+            String[] originalLines = task.originalContent.split("\n", -1);
+
+            // Применяем замену для генерации diff
+            String newContent;
+            if (isRegex) {
+                newContent = pattern.matcher(task.originalContent).replaceAll(replacement);
+            } else {
+                newContent = task.originalContent.replace(query, replacement);
+            }
+            String[] newLines = newContent.split("\n", -1);
+
+            sb.append("--- a/").append(relPath).append("\n");
+            sb.append("+++ b/").append(relPath).append("\n");
+
+            // Генерация унифицированного diff с контекстом
+            int matchesShown = 0;
+            int contextLines = 2; // Строки контекста до/после изменения
+
+            for (int i = 0; i < originalLines.length && matchesShown < maxMatchesPerFile; i++) {
+                String origLine = originalLines[i];
+                String newLine = (i < newLines.length) ? newLines[i] : "";
+
+                // Проверяем, содержит ли строка паттерн
+                boolean hasMatch;
+                if (isRegex) {
+                    hasMatch = pattern.matcher(origLine).find();
+                } else {
+                    hasMatch = origLine.contains(query);
+                }
+
+                if (hasMatch && !origLine.equals(newLine)) {
+                    matchesShown++;
+
+                    // Заголовок хунка
+                    int startLine = Math.max(1, i + 1 - contextLines);
+                    sb.append(String.format("@@ -%d,%d +%d,%d @@\n",
+                            startLine, Math.min(contextLines * 2 + 1, originalLines.length - startLine + 1),
+                            startLine, Math.min(contextLines * 2 + 1, newLines.length - startLine + 1)));
+
+                    // Контекст до
+                    for (int j = Math.max(0, i - contextLines); j < i; j++) {
+                        sb.append(" ").append(originalLines[j]).append("\n");
+                    }
+
+                    // Измененные строки
+                    sb.append("-").append(origLine).append("\n");
+                    sb.append("+").append(newLine).append("\n");
+
+                    // Контекст после
+                    for (int j = i + 1; j <= Math.min(i + contextLines, originalLines.length - 1); j++) {
+                        sb.append(" ").append(originalLines[j]).append("\n");
+                    }
+                }
+            }
+
+            if (matchesShown >= maxMatchesPerFile && task.count > maxMatchesPerFile) {
+                sb.append(String.format("... %d more match(es) in this file\n",
+                        task.count - maxMatchesPerFile));
+            }
+
+            sb.append("\n");
+            shownFiles++;
+        }
+
+        sb.append("\n=== To apply changes, re-run without dryRun=true ===\n");
+
+        return createResponse(sb.toString().trim());
+    }
+
     private JsonNode createResponse(String msg) {
         ObjectNode res = mapper.createObjectNode();
         res.putArray("content").addObject().put("type", "text").put("text", msg);
@@ -264,17 +384,13 @@ public class ProjectReplaceTool implements McpTool {
     }
 
     /**
-     * Вычисляет CRC32C для файла.
+     * Вычисляет CRC32C из массива байтов.
+     * Более консистентный метод - вычисляет CRC от тех же байтов,
+     * которые будут записаны в файл.
      */
-    private long calculateCRC32(Path path) throws Exception {
+    private long calculateCRC32FromBytes(byte[] bytes) {
         CRC32C crc = new CRC32C();
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
-        }
+        crc.update(bytes, 0, bytes.length);
         return crc.getValue();
     }
 }

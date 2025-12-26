@@ -19,10 +19,24 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.Set;
+import java.util.concurrent.*;
+
 /**
  * Базовый интерфейс для реализации инструментов (Tools) в рамках Model Context Protocol.
  */
 public interface McpTool {
+
+    /**
+     * Таймаут по умолчанию для выполнения инструментов (30 секунд).
+     */
+    int DEFAULT_TIMEOUT_SECONDS = 30;
+
+    /**
+     * Инструменты, исключённые из глобального таймаута.
+     * nts_git и nts_gradle_task используют свои внутренние таймауты.
+     */
+    Set<String> TIMEOUT_EXEMPT_TOOLS = Set.of("nts_git", "nts_gradle_task");
 
     String getName();
     String getDescription();
@@ -40,12 +54,31 @@ public interface McpTool {
     }
 
     /**
-     * Обертка над execute для обеспечения информативной обратной связи при ошибках и внедрения HUD.
+     * Обертка над execute для обеспечения информативной обратной связи при ошибках,
+     * глобального таймаута и внедрения HUD.
      */
     default JsonNode executeWithFeedback(JsonNode params) {
         JsonNode response;
         try {
-            response = execute(params);
+            // Проверяем, нужен ли таймаут для этого инструмента
+            // Не применяем таймаут если:
+            // 1. Инструмент в списке исключений (git, gradle)
+            // 2. Уже находимся внутри транзакции (batch операции)
+            //    - В этом случае таймаут с отдельным потоком нарушит ThreadLocal состояние транзакции
+            boolean skipTimeout = TIMEOUT_EXEMPT_TOOLS.contains(getName()) ||
+                    TransactionManager.isInTransaction();
+
+            if (skipTimeout) {
+                // Без таймаута
+                response = execute(params);
+            } else {
+                // Выполняем с таймаутом
+                response = executeWithTimeout(params, DEFAULT_TIMEOUT_SECONDS);
+            }
+        } catch (TimeoutException e) {
+            response = createErrorResponse("TIMEOUT_EXCEEDED",
+                    "Tool execution exceeded " + DEFAULT_TIMEOUT_SECONDS + " seconds timeout. " +
+                    "Consider breaking down the operation into smaller parts.");
         } catch (IllegalArgumentException e) {
             response = createErrorResponse("INVALID_ARGUMENTS", "Invalid request parameters: " + e.getMessage());
         } catch (SecurityException e) {
@@ -78,6 +111,50 @@ public interface McpTool {
         }
 
         return response;
+    }
+
+    /**
+     * Выполняет инструмент с ограничением по времени.
+     * Сохраняет контекст сессии при переключении потоков.
+     *
+     * @param params параметры вызова
+     * @param timeoutSeconds таймаут в секундах
+     * @return результат выполнения
+     * @throws TimeoutException если время выполнения превысило таймаут
+     * @throws Exception другие исключения от execute()
+     */
+    private JsonNode executeWithTimeout(JsonNode params, int timeoutSeconds) throws Exception {
+        // Захватываем контекст текущей сессии для передачи в worker thread
+        SessionContext parentContext = SessionContext.currentOrDefault();
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<JsonNode> future = executor.submit(() -> {
+                // Устанавливаем контекст сессии в worker thread
+                SessionContext.setCurrent(parentContext);
+                try {
+                    return execute(params);
+                } finally {
+                    // Очищаем контекст в worker thread
+                    SessionContext.clearCurrent();
+                }
+            });
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw e;
+        } catch (ExecutionException e) {
+            // Разворачиваем исключение из Future
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw new RuntimeException(cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Tool execution was interrupted", e);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private JsonNode createErrorResponse(String type, String message) {
