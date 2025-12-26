@@ -18,10 +18,8 @@ package ru.nts.tools.mcp.tools.planning;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import ru.nts.tools.mcp.core.McpTool;
-import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
-import ru.nts.tools.mcp.core.TodoManager;
+import ru.nts.tools.mcp.core.*;
+import java.nio.charset.StandardCharsets;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -147,7 +145,7 @@ public class TodoTool implements McpTool {
         Path todoFile = todoDir.resolve(fileName);
 
         String fullContent = "# TODO: " + title + "\n\n" + content;
-        Files.writeString(todoFile, fullContent);
+        FileUtils.safeWrite(todoFile, fullContent, StandardCharsets.UTF_8);
 
         TodoManager.setSessionTodo(fileName);
 
@@ -172,7 +170,7 @@ public class TodoTool implements McpTool {
             return createResponse("TODO file not found: " + fileName);
         }
 
-        String content = Files.readString(targetFile);
+        String content = EncodingUtils.readTextFile(targetFile).content();
         return createResponse("### Current Plan: " + fileName + "\n\n" + content);
     }
 
@@ -197,9 +195,9 @@ public class TodoTool implements McpTool {
         String resultMsg;
         if (params.has("id")) {
             resultMsg = updateItem(targetFile, params);
-        } else if (params.has("content")) {
-            Files.writeString(targetFile, params.get("content").asText());
-            resultMsg = "Plan overwritten: " + fileName;
+                    } else if (params.has("content")) {
+                        FileUtils.safeWrite(targetFile, params.get("content").asText(), StandardCharsets.UTF_8);
+                        resultMsg = "Plan overwritten: " + fileName;
         } else {
             throw new IllegalArgumentException("Must provide 'content' or 'id' + 'status' for update.");
         }
@@ -212,7 +210,7 @@ public class TodoTool implements McpTool {
         String status = params.path("status").asText("todo");
         String comment = params.path("comment").asText(null);
 
-        List<String> lines = Files.readAllLines(file);
+        List<String> lines = new ArrayList<>(java.util.Arrays.asList(EncodingUtils.readTextFile(file).content().split("\n", -1)));
         List<String> newLines = new ArrayList<>();
         int currentId = 0;
         boolean found = false;
@@ -241,7 +239,7 @@ public class TodoTool implements McpTool {
 
         if (!found) throw new IllegalArgumentException("Task with ID " + targetId + " not found in plan.");
 
-        Files.writeString(file, String.join("\n", newLines));
+        FileUtils.safeWrite(file, String.join("\n", newLines), StandardCharsets.UTF_8);
         return String.format("Task #%d updated to '%s' in %s", targetId, status, file.getFileName());
     }
 

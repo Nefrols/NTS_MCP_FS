@@ -39,51 +39,102 @@ public class EncodingUtils {
     }
 
     /**
-     * Считывает полный текст файла за один проход с автоопределением кодировки.
+     * Считывает полный текст файла за один проход с принудительно указанной кодировкой.
      *
-     * @param path Путь к целевому файлу.
-     * @return Объект {@link TextFileContent} с текстом файла.
-     * @throws IOException Если файл недоступен или является бинарным.
+     * @param path    Путь к целевому файлу.
+     * @param charset Кодировка для декодирования.
+     * @return Объект {@link TextFileContent}.
+     * @throws IOException Если файл недоступен.
      */
-    public static TextFileContent readTextFile(Path path) throws IOException {
-        byte[] allBytes = FileUtils.safeReadAllBytes(path);
+         public static TextFileContent readTextFile(Path path, Charset charset) throws IOException {
+             byte[] allBytes = FileUtils.safeReadAllBytes(path);
+             allBytes = stripBom(allBytes, charset);
+             return new TextFileContent(new String(allBytes, charset), charset);
+         }
 
-        UniversalDetector detector = new UniversalDetector(null);
-        detector.handleData(allBytes, 0, allBytes.length);
-        detector.dataEnd();
+         private static byte[] stripBom(byte[] allBytes, Charset charset) {
+             if (allBytes.length < 2) return allBytes;
 
-        String encoding = detector.getDetectedCharset();
-        Charset charset = StandardCharsets.UTF_8;
+             String name = charset.name().toUpperCase();
+             if (!name.startsWith("UTF-")) return allBytes; // BOM только для UTF
 
-        if (encoding != null) {
-            try {
-                charset = Charset.forName(encoding);
-            } catch (Exception ignored) {
-            }
-        }
+             int offset = 0;
+             if (name.equals("UTF-8")) {
+                 if (allBytes.length >= 3 && (allBytes[0] & 0xFF) == 0xEF && (allBytes[1] & 0xFF) == 0xBB && (allBytes[2] & 0xFF) == 0xBF) {
+                     offset = 3;
+                 }
+             } else if (name.equals("UTF-16BE")) {
+                 if ((allBytes[0] & 0xFF) == 0xFE && (allBytes[1] & 0xFF) == 0xFF) offset = 2;
+             } else if (name.equals("UTF-16LE")) {
+                 if ((allBytes[0] & 0xFF) == 0xFF && (allBytes[1] & 0xFF) == 0xFE) offset = 2;
+             } else if (name.equals("UTF-16")) {
+                 if ((allBytes[0] & 0xFF) == 0xFE && (allBytes[1] & 0xFF) == 0xFF) offset = 2;
+                 else if ((allBytes[0] & 0xFF) == 0xFF && (allBytes[1] & 0xFF) == 0xFE) offset = 2;
+             } else if (name.equals("UTF-32BE")) {
+                 if (allBytes.length >= 4 && (allBytes[0] & 0xFF) == 0x00 && (allBytes[1] & 0xFF) == 0x00 && (allBytes[2] & 0xFF) == 0xFE && (allBytes[3] & 0xFF) == 0xFF) offset = 4;
+             } else if (name.equals("UTF-32LE")) {
+                 if (allBytes.length >= 4 && (allBytes[0] & 0xFF) == 0xFF && (allBytes[1] & 0xFF) == 0xFE && (allBytes[2] & 0xFF) == 0x00 && (allBytes[3] & 0xFF) == 0x00) offset = 4;
+             } else if (name.equals("UTF-32")) {
+                 if (allBytes.length >= 4) {
+                     if ((allBytes[0] & 0xFF) == 0x00 && (allBytes[1] & 0xFF) == 0x00 && (allBytes[2] & 0xFF) == 0xFE && (allBytes[3] & 0xFF) == 0xFF) offset = 4;
+                     else if ((allBytes[0] & 0xFF) == 0xFF && (allBytes[1] & 0xFF) == 0xFE && (allBytes[2] & 0xFF) == 0x00 && (allBytes[3] & 0xFF) == 0x00) offset = 4;
+                 }
+             }
 
-        // --- FIX: Улучшенная логика для кириллицы и CJK ---
-        if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
-            if (!isValidUtf8(allBytes)) {
-                if (encoding == null) {
-                    charset = Charset.forName("windows-1251");
-                }
-            }
-        }
-        // --------------------------------------------
+             if (offset > 0) {
+                 byte[] withoutBom = new byte[allBytes.length - offset];
+                 System.arraycopy(allBytes, offset, withoutBom, 0, withoutBom.length);
+                 return withoutBom;
+             }
+             return allBytes;
+         }
 
-        // Проверка на бинарный файл (наличие NULL-байтов), кроме многобайтовых кодировок UTF
-        if (!charset.name().startsWith("UTF-16") && !charset.name().startsWith("UTF-32")) {
-            int checkLimit = Math.min(allBytes.length, 8192);
-            for (int i = 0; i < checkLimit; i++) {
-                if (allBytes[i] == 0) {
-                    throw new IOException("Обнаружен бинарный файл (содержит NULL байты).");
-                }
-            }
-        }
+         /**
+          * Считывает полный текст файла за один проход с автоопределением кодировки.
+          *
+          * @param path Путь к целевому файлу.
+          * @return Объект {@link TextFileContent} с текстом файла.
+          * @throws IOException Если файл недоступен или является бинарным.
+          */
+         public static TextFileContent readTextFile(Path path) throws IOException {
+             byte[] allBytes = FileUtils.safeReadAllBytes(path);
 
-        return new TextFileContent(new String(allBytes, charset), charset);
-    }
+             UniversalDetector detector = new UniversalDetector(null);
+             detector.handleData(allBytes, 0, allBytes.length);
+             detector.dataEnd();
+
+             String encoding = detector.getDetectedCharset();
+             Charset charset = StandardCharsets.UTF_8;
+
+             if (encoding != null) {
+                 try {
+                     charset = Charset.forName(encoding);
+                 } catch (Exception ignored) {
+                 }
+             }
+
+             // --- FIX: Улучшенная логика для кириллицы и CJK ---
+             if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
+                 if (!isValidUtf8(allBytes)) {
+                     charset = Charset.forName("windows-1251");
+                 }
+             }
+             // --------------------------------------------
+
+             allBytes = stripBom(allBytes, charset);
+
+             // Проверка на бинарный файл (наличие NULL-байтов), кроме многобайтовых кодировок UTF
+             if (!charset.name().startsWith("UTF-16") && !charset.name().startsWith("UTF-32")) {
+                 int checkLimit = Math.min(allBytes.length, 8192);
+                 for (int i = 0; i < checkLimit; i++) {
+                     if (allBytes[i] == 0) {
+                         throw new IOException("Обнаружен бинарный файл (содержит NULL байты).");
+                     }
+                 }
+             }
+
+             return new TextFileContent(new String(allBytes, charset), charset);
+         }
 
     /**
      * Проверяет, является ли массив байтов валидной последовательностью UTF-8.
@@ -146,9 +197,7 @@ public class EncodingUtils {
                     byte[] actualBytes = new byte[bytesRead];
                     System.arraycopy(buffer, 0, actualBytes, 0, bytesRead);
                     if (!isValidUtf8(actualBytes)) {
-                        if (encoding == null) {
-                            return Charset.forName("windows-1251");
-                        }
+                        return Charset.forName("windows-1251");
                     }
                 }
                 // --------------------------------------------

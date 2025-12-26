@@ -89,6 +89,8 @@ public class FileReadTool implements McpTool {
         props.putObject("path").put("type", "string").put("description",
                 "File path (relative to project root or absolute).");
 
+        props.putObject("encoding").put("type", "string").put("description",
+                "Optional: Force specific encoding (e.g. 'UTF-8', 'windows-1251'). If omitted, auto-detection is used.");
         props.putObject("startLine").put("type", "integer").put("description",
                 "First line to read (1-based). REQUIRED for 'read' unless using 'line', 'ranges', or 'contextStartPattern'.");
 
@@ -167,8 +169,15 @@ public class FileReadTool implements McpTool {
             throw new IllegalArgumentException("Reading entire file is not allowed. Specify one of: " + "startLine/endLine, line, ranges, or contextStartPattern. " + "Use action='info' to get file metadata first.");
         }
 
-        // Загружаем файл
-        EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
+        // Загружаем файл с учетом принудительной кодировки если указана
+        EncodingUtils.TextFileContent fileData;
+        if (params.has("encoding")) {
+            Charset forcedCharset = Charset.forName(params.get("encoding").asText());
+            fileData = EncodingUtils.readTextFile(path, forcedCharset);
+        } else {
+            fileData = EncodingUtils.readTextFile(path);
+        }
+        
         String content = fileData.content();
         String[] lines = content.split("\n", -1);
         int lineCount = lines.length;

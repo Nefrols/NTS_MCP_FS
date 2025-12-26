@@ -115,6 +115,8 @@ public class ProjectReplaceTool implements McpTool {
         props.putObject("instruction").put("type", "string").put("description",
                 "Description for session journal. Example: 'Rename UserService to AccountService'. " +
                 "Shown in nts_session journal output.");
+                        props.putObject("encoding").put("type", "string").put("description",
+                                "Optional: Output encoding (e.g. 'UTF-8', 'windows-1251'). If specified, all modified files will be converted to this encoding.");
 
         schema.putArray("required").add("pattern").add("replacement");
         return schema;
@@ -138,6 +140,13 @@ public class ProjectReplaceTool implements McpTool {
         List<ReplaceTask> tasks = new ArrayList<>();
         int totalOccurrences = 0;
 
+        Charset forcedCharset = null;
+        if (params.has("encoding")) {
+            try {
+                forcedCharset = Charset.forName(params.get("encoding").asText());
+            } catch (Exception ignored) {}
+        }
+
         // 1. Предварительное сканирование
         try (Stream<Path> walk = Files.walk(root)) {
             Iterable<Path> iterable = walk.filter(p -> Files.isRegularFile(p) && !PathSanitizer.isProtected(p))::iterator;
@@ -158,7 +167,10 @@ public class ProjectReplaceTool implements McpTool {
                     PathSanitizer.checkFileSize(p);
 
                     // Эффективное чтение с детекцией кодировки и проверкой на бинарность
-                    EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(p);
+                    EncodingUtils.TextFileContent fileData = (forcedCharset != null) 
+                            ? EncodingUtils.readTextFile(p, forcedCharset) 
+                            : EncodingUtils.readTextFile(p);
+                    
                     String content = fileData.content();
                     int count = 0;
 
@@ -176,7 +188,8 @@ public class ProjectReplaceTool implements McpTool {
                     }
 
                     if (count > 0) {
-                        tasks.add(new ReplaceTask(p, content, fileData.charset(), count));
+                        Charset outputCharset = (forcedCharset != null) ? forcedCharset : fileData.charset();
+                        tasks.add(new ReplaceTask(p, content, outputCharset, count));
                         totalOccurrences += count;
                     }
                 } catch (Exception ignored) {

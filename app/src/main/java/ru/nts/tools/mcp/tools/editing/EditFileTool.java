@@ -104,6 +104,9 @@ public class EditFileTool implements McpTool {
                 "Last line to replace (1-based, inclusive). Omit to replace single line. " +
                 "Example: startLine=5, endLine=10 replaces 6 lines with 'content'.");
 
+        props.putObject("encoding").put("type", "string").put("description",
+                "Optional: Force output encoding (e.g. 'UTF-8', 'windows-1251'). " +
+                "If specified, the file will be saved in this encoding (conversion).");
         props.putObject("content").put("type", "string").put("description",
                 "New content. Can be multi-line (use \\n). Replaces entire [startLine..endLine] range. " +
                 "For insert: becomes new lines. For delete: leave empty or use operations.");
@@ -300,12 +303,32 @@ public class EditFileTool implements McpTool {
         PathSanitizer.checkFileSize(path);
 
         // Чтение файла и определение кодировки за один проход
-        EncodingUtils.TextFileContent fileData = EncodingUtils.readTextFile(path);
+        EncodingUtils.TextFileContent fileData;
+        if (fileParams.has("encoding")) {
+            try {
+                Charset forced = Charset.forName(fileParams.get("encoding").asText());
+                fileData = EncodingUtils.readTextFile(path, forced);
+            } catch (Exception e) {
+                fileData = EncodingUtils.readTextFile(path);
+            }
+        } else {
+            fileData = EncodingUtils.readTextFile(path);
+        }
+        
         Charset charset = fileData.charset();
+        if (fileParams.has("encoding")) {
+            try {
+                charset = Charset.forName(fileParams.get("encoding").asText());
+            } catch (Exception ignored) {}
+        }
+        
         String content = fileData.content();
         String[] contentLines = content.split("\n", -1);
         int oldLineCount = contentLines.length;
         long currentCrc = calculateCRC32(path);
+
+        // Определение разделителя строк
+        String lineSeparator = content.contains("\r\n") ? "\r\n" : "\n";
 
         // Определяем диапазон редактирования с учётом contextStartPattern
         int editStart, editEnd;
@@ -382,7 +405,9 @@ public class EditFileTool implements McpTool {
                 applyTypedOperation(currentLines, opNode, 0, stats);
             }
 
-            newContent = String.join("\n", currentLines);
+            newContent = currentLines.stream()
+                    .map(l -> l.endsWith("\r") ? l.substring(0, l.length() - 1) : l)
+                    .collect(Collectors.joining(lineSeparator));
             // Сохранение итогового состояния на диск
             if (!dryRun) {
                 FileUtils.safeWrite(path, newContent, charset);
@@ -390,11 +415,13 @@ public class EditFileTool implements McpTool {
         } else if (fileParams.has("startLine")) {
             // Одиночная правка по индексам
             applyTypedOperation(currentLines, fileParams, 0, stats);
-            newContent = String.join("\n", currentLines);
-            // Сохранение итогового состояния на диск
-            if (!dryRun) {
-                FileUtils.safeWrite(path, newContent, charset);
-            }
+                        newContent = currentLines.stream()
+                                .map(l -> l.endsWith("\r") ? l.substring(0, l.length() - 1) : l)
+                                .collect(Collectors.joining(lineSeparator));
+                        // Сохранение итогового состояния на диск
+                        if (!dryRun) {
+                            FileUtils.safeWrite(path, newContent, charset);
+                        }
         } else {
             throw new IllegalArgumentException("Insufficient parameters for file: " + pathStr);
         }

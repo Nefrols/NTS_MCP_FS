@@ -535,14 +535,14 @@ public class SessionTransactionManager {
             for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
                 Path original = entry.getKey();
                 Path snapshot = entry.getValue();
-                try {
-                    String oldContent = (snapshot != null) ? Files.readString(snapshot) : "";
-                    String newContent = Files.exists(original) ? Files.readString(original) : "";
-                    if (!oldContent.equals(newContent)) {
-                        stats.put(original, calculateStats(oldContent, newContent));
-                    }
-                } catch (IOException ignored) {
-                }
+                                try {
+                                    String oldContent = (snapshot != null) ? EncodingUtils.readTextFile(snapshot).content() : "";
+                                    String newContent = Files.exists(original) ? EncodingUtils.readTextFile(original).content() : "";
+                                    if (!oldContent.equals(newContent)) {
+                                        stats.put(original, calculateStats(oldContent, newContent));
+                                    }
+                                } catch (IOException ignored) {
+                                }
             }
         }
 

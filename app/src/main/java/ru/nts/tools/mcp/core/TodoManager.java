@@ -126,7 +126,7 @@ public class TodoManager {
         }
 
         try {
-            List<String> lines = Files.readAllLines(activeFile);
+            List<String> lines = java.util.Arrays.asList(EncodingUtils.readTextFile(activeFile).content().split("\n", -1));
             String title = "Untitled";
             int done = 0;
             int failed = 0;
@@ -183,7 +183,8 @@ public class TodoManager {
         }
 
         try {
-            for (String line : Files.readAllLines(activeFile)) {
+            List<String> lines = java.util.Arrays.asList(EncodingUtils.readTextFile(activeFile).content().split("\n", -1));
+            for (String line : lines) {
                 Matcher m = TODO_ITEM_PATTERN.matcher(line);
                 if (m.find()) {
                     String marker = m.group(2);

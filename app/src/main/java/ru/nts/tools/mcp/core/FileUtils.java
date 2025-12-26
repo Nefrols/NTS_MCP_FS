@@ -97,7 +97,23 @@ public class FileUtils {
         Path backupFile = path.resolveSibling(path.getFileName() + ".old");
 
         executeWithRetry(() -> {
-            Files.writeString(tempFile, content, charset, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            java.nio.charset.CharsetEncoder encoder = charset.newEncoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+            
+            java.nio.ByteBuffer buffer;
+            try {
+                buffer = encoder.encode(java.nio.CharBuffer.wrap(content));
+            } catch (java.nio.charset.CharacterCodingException e) {
+                throw new java.io.IOException("Cannot write file in " + charset.name() + " encoding: " +
+                        "content contains unmappable characters (e.g. emojis or special symbols not supported by this encoding). " +
+                        "Try to use ASCII characters or common symbols, or change the file encoding if possible.", e);
+            }
+            
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            
+            Files.write(tempFile, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             if (Files.exists(path)) {
                 Files.move(path, backupFile, StandardCopyOption.REPLACE_EXISTING);
             }
