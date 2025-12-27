@@ -19,6 +19,7 @@ tree-sitter-cpp = "0.23.4"
 tree-sitter-c-sharp = "0.23.1"
 tree-sitter-php = "0.23.11"
 tree-sitter-html = "0.23.2"
+json-schema-validator = "1.5.4"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
@@ -38,3 +39,4 @@ tree-sitter-cpp = { module = "io.github.bonede:tree-sitter-cpp", version.ref = "
 tree-sitter-c-sharp = { module = "io.github.bonede:tree-sitter-c-sharp", version.ref = "tree-sitter-c-sharp" }
 tree-sitter-php = { module = "io.github.bonede:tree-sitter-php", version.ref = "tree-sitter-php" }
 tree-sitter-html = { module = "io.github.bonede:tree-sitter-html", version.ref = "tree-sitter-html" }
+json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }

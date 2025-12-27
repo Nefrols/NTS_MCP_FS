@@ -133,12 +133,26 @@ public class EditFileTool implements McpTool {
                 "Multiple edits on SAME file in one call. Auto-sorted bottom-up (safe index handling). " +
                 "Each: {operation, startLine, [endLine], [content]}. " +
                 "Operations: 'replace' (default), 'insert_before', 'insert_after', 'delete'.");
+        var opItems = ops.putObject("items");
+        opItems.put("type", "object");
+        var opItemProps = opItems.putObject("properties");
+        opItemProps.putObject("operation").put("type", "string").put("description", "Operation type: replace, insert_before, insert_after, delete");
+        opItemProps.putObject("startLine").put("type", "integer").put("description", "Start line (1-based)");
+        opItemProps.putObject("endLine").put("type", "integer").put("description", "End line (1-based, inclusive)");
+        opItemProps.putObject("content").put("type", "string").put("description", "New content for replace/insert operations");
 
         // === MULTI-FILE ATOMIC EDIT ===
         var edits = props.putObject("edits");
         edits.put("type", "array").put("description",
                 "ATOMIC multi-file edit: ALL succeed or ALL rollback. Each item: {path, accessToken, startLine/operations, content}. " +
                 "Use for refactoring across files (e.g., rename method + update all call sites).");
+        var editItems = edits.putObject("items");
+        editItems.put("type", "object");
+        var editItemProps = editItems.putObject("properties");
+        editItemProps.putObject("path").put("type", "string").put("description", "Target file path");
+        editItemProps.putObject("accessToken").put("type", "string").put("description", "Access token from nts_file_read");
+        editItemProps.putObject("startLine").put("type", "integer").put("description", "Start line (1-based)");
+        editItemProps.putObject("content").put("type", "string").put("description", "New content");
 
         // === UTILITY OPTIONS ===
         props.putObject("contextStartPattern").put("type", "string").put("description",
