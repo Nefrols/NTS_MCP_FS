@@ -59,7 +59,7 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 *Note: `{{cre.path}}` automatically resolves to `UserService.java` after the rename step!*
 
 #### 3. 🔒 Enterprise Security & Sandboxing
-*   **Optimistic Locking (LATs):** Agents *must* read a file to get a token (`LAT:...`) before editing. If the file changes externally, the token expires. No more race conditions.
+*   **Optimistic Locking (LATs):** Agents *must* read a file to get a token (`LAT:...`) before editing. If the file changes externally, the token expires and the external change is automatically recorded in file history. No more race conditions.
 *   **Strict Sandboxing:** All paths are normalized and pinned to the project root. Impossible to escape via `../../`.
 *   **Infrastructure Protection:** Automatically blocks modification of `.git`, `.env`, and build configs unless explicitly allowed.
 *   **OOM Protection:** Prevents reading massive files (>10MB) that would crash the context window.
@@ -69,6 +69,13 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 *   **Checkpoints:** Agent can run `nts_session checkpoint('pre-refactor')` and safely `rollback` if the approach fails.
 *   **Deep Undo:** The system tracks **File Lineage**. If you move `FileA -> FileB` and then hit Undo, NTS knows to restore content to `FileA`.
 *   **Git Integration:** Can create Git stashes as emergency fallbacks (`git_checkpoint`).
+
+#### 4.1. 👁️ External Change Tracking
+The server automatically detects when files are modified **outside of MCP** (by user, linter, IDE, or other tools).
+*   **CRC-based Detection:** Each file read creates a snapshot. On next access, if the CRC differs, the change is detected.
+*   **File History:** External changes are recorded in file history and can be reviewed via `nts_session journal`.
+*   **Smart Prompts:** When an external change is detected, the agent receives a TIP recommending to review changes before proceeding, as they may be intentional user edits.
+*   **Undo Support:** If needed, external changes can be undone through the standard undo mechanism.
 
 #### 5. ✅ Built-in TODO System
 A specialized tool (`nts_todo`) allows the agent to maintain a Markdown-based plan.
@@ -204,7 +211,7 @@ Add to your `mcp-config.json`:
 *Заметьте: `{{cre.path}}` автоматически превратится в `UserService.java` после шага переименования!*
 
 #### 3. 🔒 Корпоративная безопасность и Песочница
-*   **Оптимистичная блокировка (LATs):** Агент *обязан* прочитать файл и получить токен (`LAT:...`) перед правкой. Если файл изменился извне — токен сгорает. Никаких состояний гонки (Race Conditions).
+*   **Оптимистичная блокировка (LATs):** Агент *обязан* прочитать файл и получить токен (`LAT:...`) перед правкой. Если файл изменился извне — токен сгорает, а внешнее изменение автоматически записывается в историю файла. Никаких состояний гонки (Race Conditions).
 *   **Строгая песочница:** Все пути нормализуются и привязываются к корню проекта. Выход через `../../` невозможен.
 *   **Защита инфраструктуры:** Блокировка изменений `.git`, `.env` и конфигов сборки (можно настроить).
 *   **Защита от OOM:** Блокировка чтения гигантских файлов (>10MB), способных обрушить контекстное окно модели.
@@ -214,6 +221,13 @@ Add to your `mcp-config.json`:
 *   **Чекпоинты:** Агент может создать `nts_session checkpoint('pre-refactor')` и безопасно сделать `rollback`, если гипотеза не сработала.
 *   **Deep Undo (Умный откат):** Система отслеживает **Родословную файлов (Lineage)**. Если переместить `FileA -> FileB` и нажать Undo, NTS поймет, что контент нужно вернуть в `FileA`.
 *   **Git интеграция:** Возможность создавать Git stashes как аварийные точки сохранения (`git_checkpoint`).
+
+#### 4.1. 👁️ Отслеживание внешних изменений
+Сервер автоматически определяет, когда файлы были изменены **вне MCP** (пользователем, линтером, IDE или другими инструментами).
+*   **Детекция по CRC:** При каждом чтении файла создаётся снапшот. При следующем доступе, если CRC отличается — изменение обнаруживается.
+*   **История файла:** Внешние изменения записываются в историю и доступны через `nts_session journal`.
+*   **Умные подсказки:** При обнаружении внешнего изменения агент получает TIP с рекомендацией изучить изменения перед продолжением работы, т.к. они могут быть преднамеренной правкой пользователя.
+*   **Поддержка отката:** При необходимости внешние изменения можно откатить через стандартный механизм undo.
 
 #### 5. ✅ Встроенная система TODO
 Специальный инструмент `nts_todo` позволяет агенту вести план в формате Markdown.

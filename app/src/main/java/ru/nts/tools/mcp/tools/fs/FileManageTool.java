@@ -18,10 +18,12 @@ package ru.nts.tools.mcp.tools.fs;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.nts.tools.mcp.core.ExternalChangeTracker;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.io.BufferedInputStream;
@@ -177,6 +179,7 @@ public class FileManageTool implements McpTool {
 
         TransactionManager.startTransaction("Delete: " + pathStr);
         try {
+            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
             if (Files.isDirectory(path)) {
                 // For directory delete, we backup all files inside and invalidate tokens
                 try (var s = Files.walk(path)) {
@@ -184,6 +187,7 @@ public class FileManageTool implements McpTool {
                         try {
                             TransactionManager.backup(p);
                             LineAccessTracker.invalidateFile(p);
+                            externalTracker.removeSnapshot(p);
                         } catch (IOException ignored) {
                         }
                     });
@@ -196,6 +200,7 @@ public class FileManageTool implements McpTool {
             } else {
                 TransactionManager.backup(path);
                 LineAccessTracker.invalidateFile(path);
+                externalTracker.removeSnapshot(path);
                 Files.delete(path);
             }
             TransactionManager.commit();
@@ -229,6 +234,8 @@ public class FileManageTool implements McpTool {
             Files.move(src, dest);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(src, dest);
+            // Переносим снапшот для отслеживания внешних изменений
+            SessionContext.currentOrDefault().externalChanges().moveSnapshot(src, dest);
             // Path Lineage: записываем перемещение для Deep Undo
             TransactionManager.recordFileMove(src, dest);
             // Session Tokens: отмечаем новый путь как разблокированный
@@ -250,6 +257,8 @@ public class FileManageTool implements McpTool {
             Files.move(path, newPath);
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(path, newPath);
+            // Переносим снапшот для отслеживания внешних изменений
+            SessionContext.currentOrDefault().externalChanges().moveSnapshot(path, newPath);
             // Path Lineage: записываем перемещение для Deep Undo
             TransactionManager.recordFileMove(path, newPath);
             // Session Tokens: отмечаем новый путь как разблокированный

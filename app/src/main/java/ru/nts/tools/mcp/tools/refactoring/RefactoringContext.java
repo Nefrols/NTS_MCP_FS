@@ -15,6 +15,8 @@
  */
 package ru.nts.tools.mcp.tools.refactoring;
 
+import ru.nts.tools.mcp.core.ExternalChangeTracker;
+import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.SessionTransactionManager;
@@ -22,9 +24,15 @@ import ru.nts.tools.mcp.core.treesitter.SymbolExtractor;
 import ru.nts.tools.mcp.core.treesitter.SymbolResolver;
 import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
 
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.zip.CRC32C;
 
 /**
  * Контекст выполнения операции рефакторинга.
@@ -44,6 +52,9 @@ public class RefactoringContext {
 
     // Накопленные токены доступа для файлов
     private final Map<Path, String> accessTokens = new HashMap<>();
+
+    // Файлы, записанные в рамках этой операции (для обновления снапшотов)
+    private final Set<Path> writtenFiles = new HashSet<>();
 
     public RefactoringContext() {
         this.sessionContext = SessionContext.current();
@@ -136,5 +147,77 @@ public class RefactoringContext {
         } catch (java.io.IOException e) {
             throw new RefactoringException("Failed to backup file: " + path, e);
         }
+    }
+
+    /**
+     * Записывает файл и регистрирует его для обновления снапшота.
+     * Этот метод должен использоваться всеми операциями рефакторинга.
+     *
+     * @param path путь к файлу
+     * @param content новое содержимое
+     * @param charset кодировка (по умолчанию UTF-8)
+     */
+    public void writeFile(Path path, String content, Charset charset) throws RefactoringException {
+        try {
+            FileUtils.safeWrite(path, content, charset);
+            writtenFiles.add(path.toAbsolutePath().normalize());
+        } catch (IOException e) {
+            throw new RefactoringException("Failed to write file: " + path, e);
+        }
+    }
+
+    /**
+     * Записывает файл в UTF-8 и регистрирует его для обновления снапшота.
+     */
+    public void writeFile(Path path, String content) throws RefactoringException {
+        writeFile(path, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Обновляет снапшоты для всех записанных файлов.
+     * Вызывается после коммита транзакции.
+     * Учитывает как файлы, зарегистрированные через registerWrittenFile(),
+     * так и файлы, затронутые в текущей транзакции (через backup).
+     */
+    public void updateSnapshots() {
+        ExternalChangeTracker tracker = sessionContext.externalChanges();
+
+        // Объединяем явно записанные файлы и файлы из транзакции
+        Set<Path> allAffectedFiles = new HashSet<>(writtenFiles);
+        allAffectedFiles.addAll(transactionManager.getCurrentTransactionAffectedPaths());
+
+        for (Path path : allAffectedFiles) {
+            try {
+                if (java.nio.file.Files.exists(path)) {
+                    String content = java.nio.file.Files.readString(path);
+                    long crc = calculateCRC32(content.getBytes(StandardCharsets.UTF_8));
+                    int lineCount = content.split("\n", -1).length;
+                    tracker.updateSnapshot(path, content, crc, StandardCharsets.UTF_8, lineCount);
+                }
+            } catch (IOException ignored) {
+                // Если не удалось обновить снапшот - пропускаем
+            }
+        }
+    }
+
+    /**
+     * Возвращает набор записанных файлов.
+     */
+    public Set<Path> getWrittenFiles() {
+        return new HashSet<>(writtenFiles);
+    }
+
+    /**
+     * Регистрирует файл как записанный для последующего обновления снапшота.
+     * Используется операциями, которые пишут файлы напрямую через FileUtils.safeWrite.
+     */
+    public void registerWrittenFile(Path path) {
+        writtenFiles.add(path.toAbsolutePath().normalize());
+    }
+
+    private long calculateCRC32(byte[] bytes) {
+        CRC32C crc = new CRC32C();
+        crc.update(bytes);
+        return crc.getValue();
     }
 }

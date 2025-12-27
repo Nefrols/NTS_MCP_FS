@@ -248,6 +248,10 @@ public class ProjectReplaceTool implements McpTool {
 
                 FileUtils.safeWrite(task.path, newContent, task.charset);
 
+                // Обновляем снапшот для отслеживания внешних изменений
+                SessionContext.currentOrDefault().externalChanges()
+                    .updateSnapshot(task.path, newContent, crc, task.charset, lineCount);
+
                 // Регистрируем токен доступа с корректной CRC
                 LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, crc, lineCount);
 

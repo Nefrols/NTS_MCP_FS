@@ -49,6 +49,11 @@ public class FileReadTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private static final String EXTERNAL_CHANGE_TIP =
+        "[EXTERNAL CHANGE DETECTED - recorded in file history]\n" +
+        "TIP: External changes may be intentional user edits (e.g., an emergency fix or refactoring by IDE/linter). " +
+        "Review the changes carefully before proceeding. Your current plan may require adjustment.\n";
+
     @Override
     public String getName() {
         return "nts_file_read";
@@ -197,9 +202,34 @@ public class FileReadTool implements McpTool {
         int lineCount = lines.length;
         long crc32 = calculateCRC32(path);
 
+        // Проверяем внешние изменения
+        ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker.ExternalChangeResult externalChange = externalTracker.checkForExternalChange(
+            path, crc32, content, fileData.charset(), lineCount
+        );
+
+        boolean hasExternalChange = externalChange.hasExternalChange();
+        if (hasExternalChange) {
+            // Записываем внешнее изменение в журнал
+            ExternalChangeTracker.FileSnapshot previous = externalChange.previousSnapshot();
+            TransactionManager.recordExternalChange(
+                path,
+                previous.content(),
+                previous.crc32c(),
+                crc32,
+                String.format("External change: %s", path.getFileName())
+            );
+            // Обновляем снапшот текущим содержимым
+            externalTracker.updateSnapshot(path, content, crc32, fileData.charset(), lineCount);
+        }
+
         // Многодиапазонное чтение
         if (hasRanges) {
-            return executeReadRanges(path, params.get("ranges"), lines, crc32, lineCount, fileData.charset());
+            // Регистрируем снапшот если это первое чтение
+            if (!hasExternalChange) {
+                externalTracker.registerSnapshot(path, content, crc32, fileData.charset(), lineCount);
+            }
+            return executeReadRanges(path, params.get("ranges"), lines, crc32, lineCount, fileData.charset(), hasExternalChange);
         }
 
         // Определяем диапазон
@@ -263,22 +293,31 @@ public class FileReadTool implements McpTool {
         // Session Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
 
+        // Регистрируем снапшот для отслеживания будущих внешних изменений
+        // (если это первое чтение или снапшот уже обновлён при обнаружении внешнего изменения)
+        if (!hasExternalChange) {
+            externalTracker.registerSnapshot(path, content, crc32, fileData.charset(), lineCount);
+        }
+
         // Извлекаем контент
         String resultText = extractLines(lines, startLine, endLine);
 
         // Если читали по символу, добавляем информацию о символе
         if (foundSymbol != null) {
             return createSymbolReadResponse(path, lineCount, fileData.charset().name(), crc32,
-                    startLine, endLine, resultText, newToken.encode(), foundSymbol);
+                    startLine, endLine, resultText, newToken.encode(), foundSymbol, hasExternalChange);
         }
 
-        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, resultText, newToken.encode());
+        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, resultText, newToken.encode(), hasExternalChange);
     }
 
-    private JsonNode executeReadRanges(Path path, JsonNode rangesNode, String[] lines, long crc32, int lineCount, Charset charset) {
+    private JsonNode executeReadRanges(Path path, JsonNode rangesNode, String[] lines, long crc32, int lineCount, Charset charset, boolean hasExternalChange) {
         StringBuilder sb = new StringBuilder();
         List<String> tokens = new ArrayList<>();
 
+        if (hasExternalChange) {
+            sb.append(EXTERNAL_CHANGE_TIP);
+        }
         sb.append(String.format("[FILE: %s | LINES: %d | ENCODING: %s | CRC32C: %X]\n", path.getFileName(), lineCount, charset.name(), crc32));
 
         for (JsonNode range : rangesNode) {
@@ -475,8 +514,11 @@ public class FileReadTool implements McpTool {
         return crc.getValue();
     }
 
-    private JsonNode createReadResponse(Path path, int totalLines, String encoding, long crc32, int startLine, int endLine, String content, String token) {
+    private JsonNode createReadResponse(Path path, int totalLines, String encoding, long crc32, int startLine, int endLine, String content, String token, boolean hasExternalChange) {
         StringBuilder sb = new StringBuilder();
+        if (hasExternalChange) {
+            sb.append(EXTERNAL_CHANGE_TIP);
+        }
         sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n", path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
         sb.append(String.format("[TOKEN: %s]\n\n", token));
         sb.append(content);
@@ -486,8 +528,11 @@ public class FileReadTool implements McpTool {
 
     private JsonNode createSymbolReadResponse(Path path, int totalLines, String encoding, long crc32,
                                                int startLine, int endLine, String content, String token,
-                                               SymbolInfo symbol) {
+                                               SymbolInfo symbol, boolean hasExternalChange) {
         StringBuilder sb = new StringBuilder();
+        if (hasExternalChange) {
+            sb.append(EXTERNAL_CHANGE_TIP);
+        }
         sb.append(String.format("[SYMBOL: %s | KIND: %s", symbol.name(), symbol.kind().getDisplayName()));
         if (symbol.parentName() != null) {
             sb.append(" | PARENT: ").append(symbol.parentName());

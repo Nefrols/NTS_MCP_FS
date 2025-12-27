@@ -92,11 +92,15 @@ public final class RefactoringEngine {
         RefactoringContext context = new RefactoringContext();
 
         try {
+            RefactoringResult result;
             if (preview) {
-                return operation.preview(params, context);
+                result = operation.preview(params, context);
             } else {
-                return operation.execute(params, context);
+                result = operation.execute(params, context);
+                // Обновляем снапшоты для всех записанных файлов
+                context.updateSnapshots();
             }
+            return result;
         } catch (RefactoringException e) {
             // Откат транзакции если была начата
             try {

@@ -212,6 +212,75 @@ public class SessionTransactionManager {
         ctx.lineage().updateCrc(path);
     }
 
+    /**
+     * Возвращает набор файлов, затронутых в текущей транзакции.
+     * Используется для обновления снапшотов после выполнения операций.
+     *
+     * @return набор путей к затронутым файлам, или пустой набор если транзакция не активна
+     */
+    public Set<Path> getCurrentTransactionAffectedPaths() {
+        Transaction tx = currentTransaction.get();
+        if (tx != null) {
+            return new HashSet<>(tx.getAffectedPaths());
+        }
+        return Set.of();
+    }
+
+    /**
+     * Записывает внешнее изменение файла в журнал.
+     * Создаёт специальную транзакцию типа EXTERNAL_CHANGE, которая:
+     * - Содержит снапшот предыдущего состояния файла (до внешнего изменения)
+     * - Отображается в журнале с меткой [EXTERNAL]
+     * - Может быть откачена через undo (возврат к состоянию до внешнего изменения)
+     *
+     * @param path путь к файлу
+     * @param previousContent предыдущее содержимое файла (до внешнего изменения)
+     * @param previousCrc CRC32C предыдущего состояния
+     * @param currentCrc CRC32C текущего состояния (после внешнего изменения)
+     * @param description описание изменения
+     */
+    public void recordExternalChange(Path path, String previousContent, long previousCrc, long currentCrc, String description) {
+        Path absPath = path.toAbsolutePath().normalize();
+
+        try {
+            // Создаём снапшот предыдущего содержимого
+            Path snapshotDir = getSnapshotDir();
+            Path backup = snapshotDir.resolve(UUID.randomUUID().toString() + ".bak");
+            Files.writeString(backup, previousContent);
+
+            // Создаём специальную транзакцию для внешнего изменения
+            ExternalChangeTransaction tx = new ExternalChangeTransaction(
+                description,
+                LocalDateTime.now(),
+                absPath,
+                backup,
+                previousCrc,
+                currentCrc
+            );
+
+            synchronized (undoStack) {
+                undoStack.add(tx);
+                if (undoStack.size() > MAX_HISTORY_SIZE) {
+                    TransactionEntry old = undoStack.remove(0);
+                    if (old instanceof Transaction t) {
+                        t.deleteSnapshots();
+                    } else if (old instanceof ExternalChangeTransaction ext) {
+                        ext.deleteSnapshot();
+                    }
+                }
+            }
+
+            // Очищаем redo стек - внешнее изменение начинает новую ветку истории
+            synchronized (redoStack) {
+                redoStack.clear();
+            }
+
+        } catch (IOException e) {
+            // Логируем ошибку, но не прерываем работу
+            System.err.println("Failed to record external change: " + e.getMessage());
+        }
+    }
+
     public void createCheckpoint(String name) {
         synchronized (undoStack) {
             undoStack.add(new Checkpoint(name, LocalDateTime.now()));
@@ -276,6 +345,15 @@ public class SessionTransactionManager {
                         .build();
             }
 
+            // Обработка внешних изменений через стандартный undo
+            if (entry instanceof ExternalChangeTransaction) {
+                String message = undoInternal();
+                return UndoResult.builder()
+                        .status(UndoResult.Status.SUCCESS)
+                        .message(message)
+                        .build();
+            }
+
             Transaction tx = (Transaction) entry;
             SessionContext ctx = SessionContext.currentOrDefault();
             FileLineageTracker lineage = ctx.lineage();
@@ -317,6 +395,27 @@ public class SessionTransactionManager {
             undoStack.remove(undoStack.size() - 1);
             return "Passed checkpoint: " + ((Checkpoint) entry).name;
         }
+
+        // Обработка внешних изменений
+        if (entry instanceof ExternalChangeTransaction extTx) {
+            try {
+                undoStack.remove(undoStack.size() - 1);
+                // Создаём redo транзакцию для текущего состояния
+                Transaction redoTx = new Transaction("REDO EXTERNAL: " + extTx.getDescription(), null, LocalDateTime.now());
+                redoTx.addFile(extTx.getAffectedPath(), getSnapshotDir());
+                // Восстанавливаем к состоянию до внешнего изменения
+                extTx.restore();
+                synchronized (redoStack) {
+                    redoStack.add(redoTx);
+                }
+                totalUndos.incrementAndGet();
+                return "Undone external change: " + extTx.getDescription();
+            } catch (IOException e) {
+                extTx.setStatus(Status.STUCK);
+                throw new IOException("Undo external change failed: " + extTx.getDescription() + ". " + e.getMessage(), e);
+            }
+        }
+
         Transaction tx = (Transaction) entry;
         try {
             tx.checkFiles();
@@ -368,7 +467,14 @@ public class SessionTransactionManager {
 
         synchronized (undoStack) {
             for (TransactionEntry entry : undoStack) {
-                if (entry instanceof Transaction tx && tx.getAffectedPaths().contains(absPath)) {
+                if (entry instanceof ExternalChangeTransaction extTx && extTx.getAffectedPath().equals(absPath)) {
+                    // Внешнее изменение
+                    history.add(String.format("[%s] [EXTERNAL] %s (CRC: %X -> %X)",
+                            extTx.timestamp.format(FORMATTER),
+                            extTx.getDescription(),
+                            extTx.getPreviousCrc(),
+                            extTx.getCurrentCrc()));
+                } else if (entry instanceof Transaction tx && tx.getAffectedPaths().contains(absPath)) {
                     String label = tx.instruction != null ? tx.instruction : tx.description;
                     FileDiffStats s = tx.stats.get(absPath);
                     String lines = s != null ? String.format(" (+%d/-%d lines)", s.added, s.deleted) : " (structural)";
@@ -433,6 +539,18 @@ public class SessionTransactionManager {
     private void appendEntryInfo(StringBuilder sb, TransactionEntry entry) {
         if (entry instanceof Checkpoint cp) {
             sb.append(String.format("  [%s] [CHECKPOINT] >>> %s <<<\n", cp.timestamp.format(FORMATTER), cp.name));
+        } else if (entry instanceof ExternalChangeTransaction extTx) {
+            // Специальное форматирование для внешних изменений
+            String status = extTx.getStatus() == Status.STUCK ? " [STUCK]" : "";
+            sb.append(String.format("  [%s]%s [EXTERNAL] %s\n",
+                    extTx.timestamp.format(FORMATTER), status, extTx.getDescription()));
+
+            Path root = PathSanitizer.getRoot();
+            Path relPath = root.relativize(extTx.getAffectedPath());
+            String gitStatus = GitUtils.getFileStatus(extTx.getAffectedPath());
+            String gitMark = gitStatus.isEmpty() ? "" : " [" + gitStatus + "]";
+            sb.append(String.format("    - %s%s: CRC %X -> %X (external modification)\n",
+                    relPath, gitMark, extTx.getPreviousCrc(), extTx.getCurrentCrc()));
         } else if (entry instanceof Transaction tx) {
             String status = tx.getStatus() == Status.STUCK ? " [STUCK]" : "";
             String label = tx.instruction != null ? tx.instruction + ": " : "";
@@ -463,6 +581,8 @@ public class SessionTransactionManager {
             for (TransactionEntry entry : undoStack) {
                 if (entry instanceof Transaction t) {
                     t.deleteSnapshots();
+                } else if (entry instanceof ExternalChangeTransaction ext) {
+                    ext.deleteSnapshot();
                 }
             }
             undoStack.clear();
@@ -471,6 +591,8 @@ public class SessionTransactionManager {
             for (TransactionEntry entry : redoStack) {
                 if (entry instanceof Transaction t) {
                     t.deleteSnapshots();
+                } else if (entry instanceof ExternalChangeTransaction ext) {
+                    ext.deleteSnapshot();
                 }
             }
             redoStack.clear();
@@ -640,6 +762,101 @@ public class SessionTransactionManager {
 
         public void setStatus(Status status) {
             this.status = status;
+        }
+    }
+
+    /**
+     * Транзакция для записи внешних изменений файла.
+     * В отличие от обычной Transaction, хранит информацию о том,
+     * что изменение было сделано извне (человек, линтер, IDE и т.д.).
+     */
+    private static class ExternalChangeTransaction implements TransactionEntry {
+        private final String description;
+        private final LocalDateTime timestamp;
+        private final Path affectedPath;
+        private final Path snapshotPath;
+        private final long previousCrc;
+        private final long currentCrc;
+        private Status status = Status.COMMITTED;
+
+        public ExternalChangeTransaction(String description, LocalDateTime timestamp,
+                                          Path affectedPath, Path snapshotPath,
+                                          long previousCrc, long currentCrc) {
+            this.description = description;
+            this.timestamp = timestamp;
+            this.affectedPath = affectedPath;
+            this.snapshotPath = snapshotPath;
+            this.previousCrc = previousCrc;
+            this.currentCrc = currentCrc;
+        }
+
+        @Override
+        public LocalDateTime getTimestamp() {
+            return timestamp;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public Path getAffectedPath() {
+            return affectedPath;
+        }
+
+        public Path getSnapshotPath() {
+            return snapshotPath;
+        }
+
+        public long getPreviousCrc() {
+            return previousCrc;
+        }
+
+        public long getCurrentCrc() {
+            return currentCrc;
+        }
+
+        public Status getStatus() {
+            return status;
+        }
+
+        public void setStatus(Status status) {
+            this.status = status;
+        }
+
+        /**
+         * Восстанавливает файл к состоянию до внешнего изменения.
+         */
+        public void restore() throws IOException {
+            if (snapshotPath != null && Files.exists(snapshotPath)) {
+                Files.createDirectories(affectedPath.getParent());
+                FileUtils.safeCopy(snapshotPath, affectedPath);
+            }
+        }
+
+        /**
+         * Удаляет файл снапшота.
+         */
+        public void deleteSnapshot() {
+            if (snapshotPath != null) {
+                try {
+                    FileUtils.safeDelete(snapshotPath);
+                } catch (IOException ignored) {
+                }
+            }
+        }
+
+        /**
+         * Возвращает множество затронутых путей (для совместимости с Transaction).
+         */
+        public Set<Path> getAffectedPaths() {
+            return Set.of(affectedPath);
+        }
+
+        /**
+         * Возвращает карту снапшотов (для совместимости с SmartUndoEngine).
+         */
+        public Map<Path, Path> getSnapshotsMap() {
+            return Map.of(affectedPath, snapshotPath);
         }
     }
 

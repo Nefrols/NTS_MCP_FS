@@ -395,6 +395,36 @@ public class EditFileTool implements McpTool {
         // Проверяем валидность токена
         var validation = LineAccessTracker.validateToken(token, currentCrc, oldLineCount);
         if (!validation.valid()) {
+            // Проверяем, является ли это внешним изменением
+            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            ExternalChangeTracker.ExternalChangeResult externalChange = externalTracker.checkForExternalChange(
+                path, currentCrc, content, charset, oldLineCount
+            );
+
+            if (externalChange.hasExternalChange()) {
+                // Записываем внешнее изменение в журнал
+                ExternalChangeTracker.FileSnapshot previous = externalChange.previousSnapshot();
+                TransactionManager.recordExternalChange(
+                    path,
+                    previous.content(),
+                    previous.crc32c(),
+                    currentCrc,
+                    String.format("External change: %s (detected during edit attempt)", path.getFileName())
+                );
+                // Обновляем снапшот текущим содержимым
+                externalTracker.updateSnapshot(path, content, currentCrc, charset, oldLineCount);
+
+                throw new SecurityException(
+                    "EXTERNAL CHANGE DETECTED: File '" + path.getFileName() + "' was modified externally " +
+                    "(by user, linter, IDE, or other tool). Change recorded in file history. " +
+                    "Please re-read the file with nts_file_read to get a new token. " +
+                    "Previous CRC: " + String.format("%X", previous.crc32c()) +
+                    ", Current CRC: " + String.format("%X", currentCrc) + ". " +
+                    "TIP: External changes may be intentional user edits (e.g., an emergency fix or refactoring). " +
+                    "Review the changes carefully before proceeding. Your current plan may require adjustment."
+                );
+            }
+
             throw new SecurityException("Token validation failed: " + validation.fullMessage());
         }
 
@@ -474,6 +504,10 @@ public class EditFileTool implements McpTool {
             // Обновляем токены после редактирования
             LineAccessToken newToken = LineAccessTracker.updateAfterEdit(path, editStart, editEnd, lineDelta, stats.crc32, newLineCount);
             stats.newToken = newToken.encode();
+
+            // Обновляем снапшот для отслеживания будущих внешних изменений
+            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            externalTracker.updateSnapshot(path, newContent, stats.crc32, charset, newLineCount);
         }
         return stats;
     }

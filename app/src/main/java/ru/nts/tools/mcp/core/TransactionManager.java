@@ -18,6 +18,7 @@ package ru.nts.tools.mcp.core;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Фасад для управления транзакциями.
@@ -154,6 +155,32 @@ public class TransactionManager {
      */
     public static void updateFileCrc(Path path) {
         ctx().updateFileCrc(path);
+    }
+
+    // ==================== External Change Tracking API ====================
+
+    /**
+     * Записывает внешнее изменение файла в журнал.
+     * Создаёт специальную транзакцию, которую можно откатить через undo.
+     *
+     * @param path путь к файлу
+     * @param previousContent содержимое файла до внешнего изменения
+     * @param previousCrc CRC32C до изменения
+     * @param currentCrc CRC32C после изменения
+     * @param description описание изменения
+     */
+    public static void recordExternalChange(Path path, String previousContent, long previousCrc, long currentCrc, String description) {
+        ctx().recordExternalChange(path, previousContent, previousCrc, currentCrc, description);
+    }
+
+    /**
+     * Возвращает набор файлов, затронутых в текущей транзакции.
+     * Используется для обновления снапшотов после выполнения операций.
+     *
+     * @return набор путей к затронутым файлам, или пустой набор если транзакция не активна
+     */
+    public static Set<Path> getCurrentTransactionAffectedPaths() {
+        return ctx().getCurrentTransactionAffectedPaths();
     }
 
     /**
