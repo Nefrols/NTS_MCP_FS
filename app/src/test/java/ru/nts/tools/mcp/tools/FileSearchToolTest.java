@@ -254,6 +254,108 @@ class FileSearchToolTest {
         assertTrue(text.contains("Matches found in 3 files"));
     }
 
+    // ==================== Grep в одиночном файле ====================
+
+    @Test
+    void testGrepSingleFile() throws Exception {
+        Path testFile = tempDir.resolve("single.txt");
+        Files.writeString(testFile, "First line\nSearchTarget\nThird line");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", testFile.toString());
+        params.put("pattern", "SearchTarget");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Matches found in 1 files"));
+        assertTrue(text.contains("single.txt"));
+        assertTrue(text.contains("SearchTarget"));
+    }
+
+    @Test
+    void testGrepSingleFileNoMatch() throws Exception {
+        Path testFile = tempDir.resolve("nomatch_single.txt");
+        Files.writeString(testFile, "Hello World\nGoodbye");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", testFile.toString());
+        params.put("pattern", "NotFound");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("No matches found"));
+        assertTrue(text.contains("Scanned 1 files"));
+    }
+
+    @Test
+    void testGrepSingleFileWithRegex() throws Exception {
+        Path testFile = tempDir.resolve("regex_single.txt");
+        Files.writeString(testFile, "error: message1\nWARNING: msg2\nError: message3");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", testFile.toString());
+        params.put("pattern", "(?i)error");
+        params.put("isRegex", true);
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("error: message1"));
+        assertTrue(text.contains("Error: message3"));
+        assertFalse(text.contains("WARNING"));
+    }
+
+    @Test
+    void testGrepSingleFileWithContext() throws Exception {
+        Path testFile = tempDir.resolve("context_single.txt");
+        Files.writeString(testFile, "Line 1\nLine 2\nTARGET\nLine 4\nLine 5");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", testFile.toString());
+        params.put("pattern", "TARGET");
+        params.put("before", 1);
+        params.put("after", 1);
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("Line 2"));  // контекст before
+        assertTrue(text.contains("TARGET"));  // совпадение
+        assertTrue(text.contains("Line 4"));  // контекст after
+    }
+
+    @Test
+    void testGrepSingleFileNotFound() throws Exception {
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", tempDir.resolve("nonexistent.txt").toString());
+        params.put("pattern", "test");
+
+        Exception exception = assertThrows(Exception.class, () -> tool.execute(params));
+        assertTrue(exception.getMessage().contains("Search path not found"));
+    }
+
+    @Test
+    void testGrepSingleFileMultipleMatches() throws Exception {
+        Path testFile = tempDir.resolve("multi_match.txt");
+        Files.writeString(testFile, "MATCH1\nother\nMATCH2\nmore text\nMATCH3");
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("action", "grep");
+        params.put("path", testFile.toString());
+        params.put("pattern", "MATCH");
+        JsonNode result = tool.execute(params);
+
+        String text = result.get("content").get(0).get("text").asText();
+        assertTrue(text.contains("MATCH1"));
+        assertTrue(text.contains("MATCH2"));
+        assertTrue(text.contains("MATCH3"));
+        // Все совпадения в одном файле
+        assertTrue(text.contains("Matches found in 1 files"));
+    }
+
     // ==================== Find с glob ====================
 
     @Test

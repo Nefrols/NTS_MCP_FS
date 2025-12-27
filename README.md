@@ -119,7 +119,7 @@ The `nts_code_refactor` tool performs intelligent code transformations.
 | | `nts_session` | Undo/Redo, Checkpoints, Rollback |
 | **File System** | `nts_file_read` | Read files with LAT tokens |
 | | `nts_file_manage` | Create, delete, move, rename |
-| | `nts_file_search` | Glob, grep, project structure |
+| | `nts_file_search` | Glob, grep (file or directory), project structure |
 | | `nts_compare_files` | Unified diff between files |
 | **Editing** | `nts_edit_file` | Line-based editing with tokens |
 | | `nts_project_replace` | Global search & replace |
@@ -271,7 +271,7 @@ Add to your `mcp-config.json`:
 | | `nts_session` | Undo/Redo, Чекпоинты, Откат |
 | **Файлы** | `nts_file_read` | Чтение файлов с LAT-токенами |
 | | `nts_file_manage` | Создание, удаление, перемещение |
-| | `nts_file_search` | Glob, grep, структура проекта |
+| | `nts_file_search` | Glob, grep (файл или директория), структура проекта |
 | | `nts_compare_files` | Unified diff между файлами |
 | **Редактирование** | `nts_edit_file` | Построчное редактирование с токенами |
 | | `nts_project_replace` | Глобальный поиск и замена |

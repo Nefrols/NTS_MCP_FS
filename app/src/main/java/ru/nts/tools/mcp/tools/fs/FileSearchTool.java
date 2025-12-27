@@ -88,7 +88,7 @@ public class FileSearchTool implements McpTool {
                 "'grep' (content search -> RETURNS TOKENS), 'structure' (tree view). Required.");
 
         props.putObject("path").put("type", "string").put("description",
-                "Starting directory. Use '.' for project root. Default: '.'");
+                "Starting directory or file path. For 'grep': can be a single file. Use '.' for project root. Default: '.'");
 
         props.putObject("pattern").put("type", "string").put("description",
                 "Search pattern. For 'find': glob like '**/*.java' or 'Test*.ts'. " +
@@ -229,8 +229,14 @@ public class FileSearchTool implements McpTool {
     private JsonNode executeGrep(String pathStr, String query, boolean isRegex, int maxResults,
                                   int contextBefore, int contextAfter) throws Exception {
         Path rootPath = PathSanitizer.sanitize(pathStr, true);
-        if (!Files.exists(rootPath) || !Files.isDirectory(rootPath)) {
-            throw new IllegalArgumentException("Search directory not found: " + pathStr);
+        if (!Files.exists(rootPath)) {
+            throw new IllegalArgumentException("Search path not found: " + pathStr);
+        }
+
+        // Поддержка поиска в одиночном файле
+        boolean isSingleFile = Files.isRegularFile(rootPath);
+        if (isSingleFile && PathSanitizer.isProtected(rootPath)) {
+            throw new IllegalArgumentException("Cannot search in protected file: " + pathStr);
         }
 
         SearchTracker.clear();
@@ -242,9 +248,18 @@ public class FileSearchTool implements McpTool {
         // Захватываем контекст сессии для проброса в worker threads
         final SessionContext parentContext = SessionContext.current();
 
+        // Создаём поток файлов: один файл или обход директории
+        java.util.stream.Stream<Path> fileStream;
+        if (isSingleFile) {
+            fileStream = java.util.stream.Stream.of(rootPath);
+        } else {
+            fileStream = Files.walk(rootPath)
+                    .filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path));
+        }
+
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            try (java.util.stream.Stream<Path> walk = Files.walk(rootPath)) {
-                walk.filter(path -> Files.isRegularFile(path) && !PathSanitizer.isProtected(path)).forEach(path -> {
+            try (java.util.stream.Stream<Path> walk = fileStream) {
+                walk.forEach(path -> {
                     // Ранняя остановка: не запускаем новые задачи если достигли лимита
                     if (filesWithMatches.get() >= maxFiles) {
                         return;
