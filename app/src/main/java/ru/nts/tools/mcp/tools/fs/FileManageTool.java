@@ -148,10 +148,10 @@ public class FileManageTool implements McpTool {
             throw e;
         }
 
-        // Регистрируем токен доступа на весь созданный контент
+        // Регистрируем токен доступа на весь созданный контент (rangeCrc)
         long crc = calculateCRC32(path);
         int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
-        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, crc, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, content, lineCount);
 
         return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]",
                 pathStr, lineCount, crc, token.encode()));

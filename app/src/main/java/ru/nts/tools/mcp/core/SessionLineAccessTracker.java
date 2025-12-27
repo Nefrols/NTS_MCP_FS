@@ -35,19 +35,36 @@ public class SessionLineAccessTracker {
     /**
      * Регистрирует доступ к диапазону строк и возвращает токен.
      * Реализует автослияние: если запрошенный диапазон внутри существующего - возвращает старый токен.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона строк (для вычисления CRC)
+     * @param lineCount Общее количество строк в файле
+     * @return Токен доступа к диапазону
      */
-    public LineAccessToken registerAccess(Path path, int startLine, int endLine, long fileCrc32c, int lineCount) {
+    public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
         Path absPath = path.toAbsolutePath().normalize();
+        long rangeCrc = LineAccessToken.computeRangeCrc(rangeContent);
 
         synchronized (lock) {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.computeIfAbsent(absPath, k -> new TreeMap<>());
 
             // Проверяем, есть ли существующий токен, покрывающий запрошенный диапазон
+            // Range CRC MUST match - if content changed (undo/redo/external), need new token
             for (LineAccessToken existing : fileTokens.values()) {
-                if (existing.fileCrc32c() == fileCrc32c &&
-                        existing.lineCount() == lineCount &&
+                if (existing.lineCount() == lineCount &&
                         existing.covers(startLine, endLine)) {
-                    return existing;
+                    // Токен покрывает диапазон - проверяем CRC для валидности
+                    if (existing.rangeCrc32c() == rangeCrc) {
+                        // CRC совпадает - содержимое не изменилось, возвращаем существующий токен
+                        return existing;
+                    } else {
+                        // CRC не совпадает - содержимое изменилось (undo/redo/external)
+                        // Удаляем стейл токен и продолжаем создание нового
+                        fileTokens.remove(existing.startLine());
+                        break;
+                    }
                 }
             }
 
@@ -64,7 +81,7 @@ public class SessionLineAccessTracker {
             List<Integer> toRemove = new ArrayList<>();
             for (Map.Entry<Integer, LineAccessToken> entry : fileTokens.entrySet()) {
                 LineAccessToken t = entry.getValue();
-                if (t.fileCrc32c() != fileCrc32c || t.lineCount() != lineCount) {
+                if (t.lineCount() != lineCount) {
                     continue;
                 }
                 // Смежные или перекрывающиеся
@@ -79,7 +96,9 @@ public class SessionLineAccessTracker {
                 fileTokens.remove(key);
             }
 
-            LineAccessToken newToken = new LineAccessToken(absPath, mergedStart, mergedEnd, fileCrc32c, lineCount);
+            // Для объединённого диапазона нужен новый CRC
+            // Если диапазон расширился, используем переданный CRC (вызывающий код должен передать правильный)
+            LineAccessToken newToken = new LineAccessToken(absPath, mergedStart, mergedEnd, rangeCrc, lineCount);
             fileTokens.put(mergedStart, newToken);
 
             return newToken;
@@ -87,15 +106,20 @@ public class SessionLineAccessTracker {
     }
 
     /**
-     * Валидирует токен против текущего состояния файла.
+     * Валидирует токен против текущего состояния диапазона.
      *
      * Session Tokens: Если файл был разблокирован в текущей транзакции,
      * CRC-проверка пропускается и токен автоматически валиден (все изменения контролируемы).
      *
      * InfinityRange: Если файл создан в текущей транзакции,
      * токен автоматически валиден (нет предыдущего состояния для сравнения).
+     *
+     * @param token Токен для валидации
+     * @param currentRangeContent Текущее содержимое диапазона (для вычисления CRC)
+     * @param currentLineCount Текущее количество строк в файле
+     * @return Результат валидации
      */
-    public LineAccessToken.ValidationResult validateToken(LineAccessToken token, long currentCrc, int currentLineCount) {
+    public LineAccessToken.ValidationResult validateToken(LineAccessToken token, String currentRangeContent, int currentLineCount) {
         Path path = token.path();
 
         // Session Tokens + InfinityRange: внутри транзакции токен автоматически валиден
@@ -109,12 +133,17 @@ public class SessionLineAccessTracker {
             return LineAccessToken.ValidationResult.VALID;
         }
 
-        // Обычная валидация вне транзакции
-        if (token.fileCrc32c() != currentCrc) {
-            return LineAccessToken.ValidationResult.CRC_MISMATCH;
-        }
+        // Проверка количества строк (структура файла)
         if (token.lineCount() != currentLineCount) {
             return LineAccessToken.ValidationResult.LINE_COUNT_MISMATCH;
+        }
+
+        // Вычисляем CRC текущего содержимого диапазона
+        long currentRangeCrc = LineAccessToken.computeRangeCrc(currentRangeContent);
+
+        // Проверка CRC диапазона
+        if (token.rangeCrc32c() != currentRangeCrc) {
+            return LineAccessToken.ValidationResult.CRC_MISMATCH;
         }
 
         synchronized (lock) {
@@ -125,8 +154,8 @@ public class SessionLineAccessTracker {
 
             for (LineAccessToken stored : fileTokens.values()) {
                 if (stored.covers(token.startLine(), token.endLine()) &&
-                        stored.fileCrc32c() == currentCrc &&
                         stored.lineCount() == currentLineCount) {
+                    // Токен найден в реестре и покрывает диапазон
                     return LineAccessToken.ValidationResult.VALID;
                 }
             }
@@ -136,9 +165,16 @@ public class SessionLineAccessTracker {
 
     /**
      * Проверяет, покрыт ли диапазон существующим токеном.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона для проверки CRC
+     * @return true если диапазон покрыт валидным токеном
      */
-    public boolean isRangeCovered(Path path, int startLine, int endLine, long crc) {
+    public boolean isRangeCovered(Path path, int startLine, int endLine, String rangeContent) {
         Path absPath = path.toAbsolutePath().normalize();
+        long rangeCrc = LineAccessToken.computeRangeCrc(rangeContent);
 
         synchronized (lock) {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.get(absPath);
@@ -147,7 +183,7 @@ public class SessionLineAccessTracker {
             }
 
             for (LineAccessToken token : fileTokens.values()) {
-                if (token.fileCrc32c() == crc && token.covers(startLine, endLine)) {
+                if (token.rangeCrc32c() == rangeCrc && token.covers(startLine, endLine)) {
                     return true;
                 }
             }
@@ -167,8 +203,14 @@ public class SessionLineAccessTracker {
 
     /**
      * Сдвигает токены после указанной строки.
+     * rangeCrc сохраняется, так как содержимое диапазона не меняется, только позиция.
+     *
+     * @param path Путь к файлу
+     * @param afterLine Строка, после которой произошла вставка/удаление
+     * @param delta Смещение (положительное при вставке, отрицательное при удалении)
+     * @param newLineCount Новое количество строк в файле
      */
-    public void shiftTokensAfterLine(Path path, int afterLine, int delta) {
+    public void shiftTokensAfterLine(Path path, int afterLine, int delta, int newLineCount) {
         Path absPath = path.toAbsolutePath().normalize();
 
         synchronized (lock) {
@@ -182,13 +224,15 @@ public class SessionLineAccessTracker {
                 LineAccessToken t = entry.getValue();
 
                 if (t.endLine() < afterLine) {
-                    newTokens.put(t.startLine(), t);
+                    // Токен выше точки изменения - сохраняем rangeCrc, обновляем только lineCount
+                    newTokens.put(t.startLine(), t.withLineCount(newLineCount));
                 } else if (t.startLine() > afterLine) {
+                    // Токен ниже точки изменения - сдвигаем, rangeCrc сохраняется
                     int newStart = t.startLine() + delta;
                     int newEnd = t.endLine() + delta;
                     if (newStart > 0 && newEnd > 0) {
                         LineAccessToken shifted = new LineAccessToken(
-                                t.path(), newStart, newEnd, t.fileCrc32c(), t.lineCount() + delta
+                                t.path(), newStart, newEnd, t.rangeCrc32c(), newLineCount
                         );
                         newTokens.put(newStart, shifted);
                     }
@@ -203,9 +247,24 @@ public class SessionLineAccessTracker {
 
     /**
      * Обновляет токены после редактирования и возвращает новый токен для изменённого диапазона.
+     *
+     * Ключевая логика Smart Token Invalidation:
+     * - Токены ВЫШЕ точки редактирования: сохраняют свой rangeCrc (содержимое не изменилось!)
+     * - Токены НИЖЕ точки редактирования: сдвигаются, rangeCrc сохраняется
+     * - Токены ПЕРЕСЕКАЮЩИЕСЯ: AUTO-EXPAND если строки добавляются внутри токена
+     *
+     * @param path Путь к файлу
+     * @param editStart Начало редактируемого диапазона (1-based)
+     * @param editEnd Конец редактируемого диапазона (1-based)
+     * @param lineDelta Изменение количества строк (положительное при добавлении)
+     * @param editedRangeContent Содержимое изменённого диапазона (для CRC нового токена)
+     * @param newLineCount Новое общее количество строк в файле
+     * @return Новый токен для изменённого диапазона
      */
-    public LineAccessToken updateAfterEdit(Path path, int editStart, int editEnd, int lineDelta, long newCrc, int newLineCount) {
+    public LineAccessToken updateAfterEdit(Path path, int editStart, int editEnd,
+                                           int lineDelta, String editedRangeContent, int newLineCount) {
         Path absPath = path.toAbsolutePath().normalize();
+        long newRangeCrc = LineAccessToken.computeRangeCrc(editedRangeContent);
 
         synchronized (lock) {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.get(absPath);
@@ -219,26 +278,41 @@ public class SessionLineAccessTracker {
                 LineAccessToken t = entry.getValue();
 
                 if (t.endLine() < editStart) {
-                    LineAccessToken updated = new LineAccessToken(
-                            t.path(), t.startLine(), t.endLine(), newCrc, newLineCount
-                    );
-                    newTokens.put(t.startLine(), updated);
+                    // Токен ВЫШЕ точки редактирования
+                    // Содержимое диапазона не изменилось, сохраняем rangeCrc!
+                    // Обновляем только lineCount
+                    newTokens.put(t.startLine(), t.withLineCount(newLineCount));
+
                 } else if (t.startLine() > editEnd) {
+                    // Токен НИЖЕ точки редактирования
+                    // Сдвигаем позицию, rangeCrc сохраняется (содержимое не изменилось)
                     int newStart = t.startLine() + lineDelta;
                     int newEnd = t.endLine() + lineDelta;
                     if (newStart > 0 && newEnd > 0) {
                         LineAccessToken shifted = new LineAccessToken(
-                                t.path(), newStart, newEnd, newCrc, newLineCount
+                                t.path(), newStart, newEnd, t.rangeCrc32c(), newLineCount
                         );
                         newTokens.put(newStart, shifted);
                     }
+
+                } else if (lineDelta > 0 && t.startLine() <= editStart && t.endLine() >= editEnd) {
+                    // AUTO-EXPAND: токен полностью содержит редактируемый диапазон
+                    // и были ДОБАВЛЕНЫ строки (lineDelta > 0)
+                    // Расширяем токен, но нужен новый CRC для расширенного диапазона
+                    // Это будет сделано вызывающим кодом, который знает новое содержимое
+                    // Пока просто расширяем endLine
+                    // ВАЖНО: CRC станет невалидным, но это ожидаемо - нужно перечитать
+                    // Оставляем старый CRC, при следующей валидации будет CRC_MISMATCH
+                    LineAccessToken expanded = t.expand(lineDelta, t.rangeCrc32c(), newLineCount);
+                    newTokens.put(t.startLine(), expanded);
+
                 }
-                // Перекрывающиеся токены инвалидируются (не добавляются в newTokens)
+                // Остальные пересекающиеся токены инвалидируются (не добавляются в newTokens)
             }
 
             // Создаём новый токен для изменённого диапазона
             int newEditEnd = editEnd + lineDelta;
-            LineAccessToken editToken = new LineAccessToken(absPath, editStart, newEditEnd, newCrc, newLineCount);
+            LineAccessToken editToken = new LineAccessToken(absPath, editStart, newEditEnd, newRangeCrc, newLineCount);
             newTokens.put(editStart, editToken);
 
             tokens.put(absPath, newTokens);
@@ -248,6 +322,7 @@ public class SessionLineAccessTracker {
 
     /**
      * Переносит токены при перемещении/переименовании файла.
+     * rangeCrc сохраняется, так как содержимое файла не меняется при перемещении.
      */
     public void moveTokens(Path oldPath, Path newPath) {
         Path absOld = oldPath.toAbsolutePath().normalize();
@@ -260,7 +335,7 @@ public class SessionLineAccessTracker {
                 for (Map.Entry<Integer, LineAccessToken> entry : fileTokens.entrySet()) {
                     LineAccessToken t = entry.getValue();
                     LineAccessToken moved = new LineAccessToken(
-                            absNew, t.startLine(), t.endLine(), t.fileCrc32c(), t.lineCount()
+                            absNew, t.startLine(), t.endLine(), t.rangeCrc32c(), t.lineCount()
                     );
                     newFileTokens.put(t.startLine(), moved);
                 }

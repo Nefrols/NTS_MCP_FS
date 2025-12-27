@@ -252,8 +252,8 @@ public class ProjectReplaceTool implements McpTool {
                 SessionContext.currentOrDefault().externalChanges()
                     .updateSnapshot(task.path, newContent, crc, task.charset, lineCount);
 
-                // Регистрируем токен доступа с корректной CRC
-                LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, crc, lineCount);
+                // Регистрируем токен доступа с rangeCrc (для всего файла)
+                LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, newContent, lineCount);
 
                 // Session Tokens: отмечаем файл как разблокированный
                 TransactionManager.markFileAccessedInTransaction(task.path);

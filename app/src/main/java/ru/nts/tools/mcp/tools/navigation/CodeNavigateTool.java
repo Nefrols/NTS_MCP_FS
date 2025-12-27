@@ -29,7 +29,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.zip.CRC32C;
 
 /**
  * MCP Tool для навигации по коду с использованием tree-sitter.
@@ -397,22 +396,30 @@ public class CodeNavigateTool implements McpTool {
      */
     private String registerAccessForRange(Path path, int startLine, int endLine) throws IOException {
         String content = Files.readString(path);
-        int lineCount = (int) content.lines().count();
-        long crc = calculateCrc(content);
+        String[] lines = content.split("\n", -1);
+        int lineCount = lines.length;
+
+        // Extract range content for rangeCrc computation
+        String rangeContent = buildRangeContent(lines, startLine, endLine);
 
         LineAccessToken token = LineAccessTracker.registerAccess(
-                path, startLine, endLine, crc, lineCount);
+                path, startLine, endLine, rangeContent, lineCount);
 
         return token.encode();
     }
 
     /**
-     * Вычисляет CRC32C.
+     * Builds formatted range content for token registration.
      */
-    private long calculateCrc(String content) {
-        CRC32C crc = new CRC32C();
-        crc.update(content.getBytes());
-        return crc.getValue();
+    private String buildRangeContent(String[] lines, int startLine, int endLine) {
+        StringBuilder sb = new StringBuilder();
+        int start = Math.max(0, startLine - 1);
+        int end = Math.min(lines.length, endLine);
+        for (int i = start; i < end; i++) {
+            if (i > start) sb.append("\n");
+            sb.append(String.format("%4d\t%s", i + 1, lines[i]));
+        }
+        return sb.toString();
     }
 
     /**

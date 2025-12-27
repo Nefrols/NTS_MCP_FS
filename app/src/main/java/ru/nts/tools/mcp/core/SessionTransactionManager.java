@@ -373,6 +373,11 @@ public class SessionTransactionManager {
             // Если откат успешен или частичен - обновляем стеки
             if (result.isSuccess() || result.isPartial()) {
                 undoStack.remove(undoStack.size() - 1);
+                // After restore, invalidate ExternalChangeTracker snapshots for affected files
+                ExternalChangeTracker externalTracker = ctx.externalChanges();
+                for (Path path : tx.getAffectedPaths()) {
+                    externalTracker.removeSnapshot(path);
+                }
                 synchronized (redoStack) {
                     redoStack.add(redoTx);
                 }
@@ -425,6 +430,12 @@ public class SessionTransactionManager {
                 redoTx.addFile(path, getSnapshotDir());
             }
             tx.restore();
+            // After restore, invalidate ExternalChangeTracker snapshots for affected files
+            // so they don't trigger false "external change" detection
+            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            for (Path path : tx.getAffectedPaths()) {
+                externalTracker.removeSnapshot(path);
+            }
             synchronized (redoStack) {
                 redoStack.add(redoTx);
             }
@@ -450,6 +461,11 @@ public class SessionTransactionManager {
                     undoTx.addFile(path, getSnapshotDir());
                 }
                 tx.restore();
+                // After restore, invalidate ExternalChangeTracker snapshots for affected files
+                ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+                for (Path path : tx.getAffectedPaths()) {
+                    externalTracker.removeSnapshot(path);
+                }
                 synchronized (undoStack) {
                     undoStack.add(undoTx);
                 }

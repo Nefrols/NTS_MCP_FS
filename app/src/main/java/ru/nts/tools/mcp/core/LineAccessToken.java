@@ -19,18 +19,22 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Objects;
+import java.util.zip.CRC32C;
 
 /**
  * Immutable токен доступа к диапазону строк файла.
- * Формат сериализации: LAT:pathHash:startLine:endLine:fileCrc32c:lineCount
+ * Формат сериализации: LAT:pathHash:startLine:endLine:rangeCrc32c:lineCount
  * <p>
  * Токен подтверждает, что LLM прочитала указанный диапазон строк файла
- * и имеет право редактировать эти строки, пока файл не изменился.
+ * и имеет право редактировать эти строки, пока содержимое диапазона не изменилось.
+ * <p>
+ * Ключевое отличие: rangeCrc32c хранит CRC только диапазона строк, а не всего файла.
+ * Это позволяет токенам оставаться валидными при изменениях в других частях файла.
  */
 public record LineAccessToken(Path path,          // Абсолютный нормализованный путь к файлу
                               int startLine,      // Начало диапазона (1-based, включительно)
                               int endLine,        // Конец диапазона (1-based, включительно)
-                              long fileCrc32c,    // CRC32C файла на момент выдачи токена
+                              long rangeCrc32c,   // CRC32C содержимого диапазона на момент выдачи токена
                               int lineCount       // Количество строк в файле на момент выдачи
 ) {
     private static final String PREFIX = "LAT";
@@ -43,13 +47,13 @@ public record LineAccessToken(Path path,          // Абсолютный нор
         /** Токен валиден */
         VALID("Token is valid", null),
 
-        /** CRC файла не совпадает (файл изменён) */
+        /** CRC диапазона не совпадает (содержимое диапазона изменено) */
         CRC_MISMATCH(
-            "File content has changed since token was issued (CRC mismatch)",
-            "Possible causes: (1) File was modified by external process, " +
+            "Range content has changed since token was issued (CRC mismatch)",
+            "Possible causes: (1) Range was modified by external process, " +
             "(2) 'undo' operation reverted changes, " +
-            "(3) Another tool modified the file. " +
-            "Solution: Re-read the file with nts_file_read to get a fresh token."
+            "(3) Another tool modified this range. " +
+            "Solution: Re-read the range with nts_file_read to get a fresh token."
         ),
 
         /** Количество строк изменилось */
@@ -122,11 +126,11 @@ public record LineAccessToken(Path path,          // Абсолютный нор
 
     /**
      * Сериализует токен в строку.
-     * Формат: LAT:pathHash:startLine:endLine:crc32c:lineCount
+     * Формат: LAT:pathHash:startLine:endLine:rangeCrc32c:lineCount
      */
     public String encode() {
         String pathHash = hashPath(path);
-        return String.format("%s:%s:%d:%d:%s:%d", PREFIX, pathHash, startLine, endLine, HEX.formatHex(longToBytes(fileCrc32c)), lineCount);
+        return String.format("%s:%s:%d:%d:%s:%d", PREFIX, pathHash, startLine, endLine, HEX.formatHex(longToBytes(rangeCrc32c)), lineCount);
     }
 
     /**
@@ -223,12 +227,9 @@ public record LineAccessToken(Path path,          // Абсолютный нор
      *
      * @throws IllegalArgumentException если токены нельзя объединить
      */
-    public LineAccessToken merge(LineAccessToken other) {
+    public LineAccessToken merge(LineAccessToken other, long mergedRangeCrc) {
         if (!path.equals(other.path)) {
             throw new IllegalArgumentException("Cannot merge tokens from different files");
-        }
-        if (fileCrc32c != other.fileCrc32c) {
-            throw new IllegalArgumentException("Cannot merge tokens with different CRC (file versions)");
         }
 
         // Проверяем смежность или перекрытие
@@ -237,7 +238,7 @@ public record LineAccessToken(Path path,          // Абсолютный нор
             throw new IllegalArgumentException("Cannot merge non-adjacent tokens: [" + startLine + "-" + endLine + "] and [" + other.startLine + "-" + other.endLine + "]");
         }
 
-        return new LineAccessToken(path, Math.min(startLine, other.startLine), Math.max(endLine, other.endLine), fileCrc32c, lineCount);
+        return new LineAccessToken(path, Math.min(startLine, other.startLine), Math.max(endLine, other.endLine), mergedRangeCrc, lineCount);
     }
 
     /**
@@ -249,7 +250,7 @@ public record LineAccessToken(Path path,          // Абсолютный нор
 
     @Override
     public String toString() {
-        return String.format("LineAccessToken[%s:%d-%d, crc=%X, lines=%d]", path.getFileName(), startLine, endLine, fileCrc32c, lineCount);
+        return String.format("LineAccessToken[%s:%d-%d, rangeCrc=%X, lines=%d]", path.getFileName(), startLine, endLine, rangeCrc32c, lineCount);
     }
 
     // ============ Вспомогательные методы ============
@@ -273,5 +274,57 @@ public record LineAccessToken(Path path,          // Абсолютный нор
     private static byte[] longToBytes(long value) {
         return new byte[]{
                 (byte) (value >> 24), (byte) (value >> 16), (byte) (value >> 8), (byte) value};
+    }
+
+    /**
+     * Вычисляет CRC32C для содержимого диапазона строк.
+     * Используется для создания и валидации токенов.
+     *
+     * @param rangeContent Содержимое диапазона строк (текст)
+     * @return CRC32C хеш содержимого
+     */
+    public static long computeRangeCrc(String rangeContent) {
+        if (rangeContent == null || rangeContent.isEmpty()) {
+            return 0L;
+        }
+        CRC32C crc = new CRC32C();
+        byte[] bytes = rangeContent.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        crc.update(bytes);
+        return crc.getValue();
+    }
+
+    /**
+     * Создаёт новый токен с обновлённым CRC диапазона.
+     * Используется при сохранении позиции токена, но обновлении CRC.
+     *
+     * @param newRangeCrc Новый CRC диапазона
+     * @return Новый токен с обновлённым CRC
+     */
+    public LineAccessToken withRangeCrc(long newRangeCrc) {
+        return new LineAccessToken(path, startLine, endLine, newRangeCrc, lineCount);
+    }
+
+    /**
+     * Создаёт новый токен с обновлённым количеством строк.
+     * Используется при изменении размера файла без изменения содержимого диапазона.
+     *
+     * @param newLineCount Новое количество строк в файле
+     * @return Новый токен с обновлённым lineCount
+     */
+    public LineAccessToken withLineCount(int newLineCount) {
+        return new LineAccessToken(path, startLine, endLine, rangeCrc32c, newLineCount);
+    }
+
+    /**
+     * Создаёт новый токен с расширенным диапазоном (auto-expand).
+     * Используется при добавлении строк внутри диапазона токена.
+     *
+     * @param lineDelta Количество добавленных строк (положительное)
+     * @param newRangeCrc Новый CRC расширенного диапазона
+     * @param newLineCount Новое количество строк в файле
+     * @return Новый токен с расширенным диапазоном
+     */
+    public LineAccessToken expand(int lineDelta, long newRangeCrc, int newLineCount) {
+        return new LineAccessToken(path, startLine, endLine + lineDelta, newRangeCrc, newLineCount);
     }
 }

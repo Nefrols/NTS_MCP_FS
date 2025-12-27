@@ -381,7 +381,7 @@ public class EditFileTool implements McpTool {
 
         // Валидация токена доступа (REQUIRED)
         if (!fileParams.has("accessToken")) {
-            throw new SecurityException("Access denied: 'accessToken' is required for editing. " + "Read the file first with nts_file_read to obtain a token.");
+            throw NtsTokenException.required(path);
         }
 
         String tokenStr = fileParams.get("accessToken").asText();
@@ -389,11 +389,16 @@ public class EditFileTool implements McpTool {
         try {
             token = LineAccessToken.decode(tokenStr, path);
         } catch (Exception e) {
-            throw new SecurityException("Invalid access token: " + e.getMessage());
+            throw NtsTokenException.invalidFormat(tokenStr);
         }
 
-        // Проверяем валидность токена
-        var validation = LineAccessTracker.validateToken(token, currentCrc, oldLineCount);
+        // Извлекаем содержимое диапазона токена для валидации CRC
+        int tokenStart = token.startLine();
+        int tokenEnd = Math.min(token.endLine(), oldLineCount);
+        String tokenRangeContent = extractLines(contentLines, tokenStart, tokenEnd);
+
+        // Проверяем валидность токена (сравниваем CRC диапазона)
+        var validation = LineAccessTracker.validateToken(token, tokenRangeContent, oldLineCount);
         if (!validation.valid()) {
             // Проверяем, является ли это внешним изменением
             ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
@@ -501,8 +506,14 @@ public class EditFileTool implements McpTool {
             stats.newLineCount = newLineCount;
             int lineDelta = newLineCount - oldLineCount;
 
-            // Обновляем токены после редактирования
-            LineAccessToken newToken = LineAccessTracker.updateAfterEdit(path, editStart, editEnd, lineDelta, stats.crc32, newLineCount);
+            // Извлекаем содержимое отредактированного диапазона для нового токена
+            int newEditEnd = editEnd + lineDelta;
+            String editedRangeContent = extractLines(currentLines.toArray(new String[0]),
+                    editStart, Math.min(newEditEnd, newLineCount));
+
+            // Обновляем токены после редактирования (с rangeCrc)
+            LineAccessToken newToken = LineAccessTracker.updateAfterEdit(
+                    path, editStart, editEnd, lineDelta, editedRangeContent, newLineCount);
             stats.newToken = newToken.encode();
 
             // Обновляем снапшот для отслеживания будущих внешних изменений
@@ -741,6 +752,28 @@ public class EditFileTool implements McpTool {
             }
         }
         return crc.getValue();
+    }
+
+    /**
+     * Извлекает содержимое указанного диапазона строк.
+     *
+     * @param lines Массив строк файла
+     * @param startLine Начало диапазона (1-based, включительно)
+     * @param endLine Конец диапазона (1-based, включительно)
+     * @return Содержимое диапазона с номерами строк
+     */
+    private String extractLines(String[] lines, int startLine, int endLine) {
+        StringBuilder sb = new StringBuilder();
+        int start = Math.max(0, startLine - 1);
+        int end = Math.min(lines.length, endLine);
+
+        for (int i = start; i < end; i++) {
+            if (i > start) {
+                sb.append("\n");
+            }
+            sb.append(String.format("%4d\t%s", i + 1, lines[i].replace("\r", "")));
+        }
+        return sb.toString();
     }
 
     /**

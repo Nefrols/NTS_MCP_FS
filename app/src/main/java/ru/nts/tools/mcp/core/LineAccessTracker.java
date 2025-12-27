@@ -35,23 +35,41 @@ public class LineAccessTracker {
 
     /**
      * Регистрирует доступ к диапазону строк и возвращает токен.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона (для вычисления CRC)
+     * @param lineCount Общее количество строк в файле
+     * @return Токен доступа к диапазону
      */
-    public static LineAccessToken registerAccess(Path path, int startLine, int endLine, long fileCrc32c, int lineCount) {
-        return ctx().registerAccess(path, startLine, endLine, fileCrc32c, lineCount);
+    public static LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
+        return ctx().registerAccess(path, startLine, endLine, rangeContent, lineCount);
     }
 
     /**
-     * Валидирует токен против текущего состояния файла.
+     * Валидирует токен против текущего содержимого диапазона.
+     *
+     * @param token Токен для валидации
+     * @param currentRangeContent Текущее содержимое диапазона
+     * @param currentLineCount Текущее количество строк в файле
+     * @return Результат валидации
      */
-    public static LineAccessToken.ValidationResult validateToken(LineAccessToken token, long currentCrc, int currentLineCount) {
-        return ctx().validateToken(token, currentCrc, currentLineCount);
+    public static LineAccessToken.ValidationResult validateToken(LineAccessToken token, String currentRangeContent, int currentLineCount) {
+        return ctx().validateToken(token, currentRangeContent, currentLineCount);
     }
 
     /**
      * Проверяет, покрыт ли диапазон существующим токеном.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона для проверки CRC
+     * @return true если диапазон покрыт валидным токеном
      */
-    public static boolean isRangeCovered(Path path, int startLine, int endLine, long crc) {
-        return ctx().isRangeCovered(path, startLine, endLine, crc);
+    public static boolean isRangeCovered(Path path, int startLine, int endLine, String rangeContent) {
+        return ctx().isRangeCovered(path, startLine, endLine, rangeContent);
     }
 
     /**
@@ -63,16 +81,30 @@ public class LineAccessTracker {
 
     /**
      * Сдвигает токены после указанной строки.
+     *
+     * @param path Путь к файлу
+     * @param afterLine Строка, после которой произошла вставка/удаление
+     * @param delta Смещение
+     * @param newLineCount Новое количество строк в файле
      */
-    public static void shiftTokensAfterLine(Path path, int afterLine, int delta) {
-        ctx().shiftTokensAfterLine(path, afterLine, delta);
+    public static void shiftTokensAfterLine(Path path, int afterLine, int delta, int newLineCount) {
+        ctx().shiftTokensAfterLine(path, afterLine, delta, newLineCount);
     }
 
     /**
      * Обновляет токены после редактирования и возвращает новый токен для изменённого диапазона.
+     *
+     * @param path Путь к файлу
+     * @param editStart Начало редактируемого диапазона (1-based)
+     * @param editEnd Конец редактируемого диапазона (1-based)
+     * @param lineDelta Изменение количества строк
+     * @param editedRangeContent Содержимое изменённого диапазона
+     * @param newLineCount Новое общее количество строк
+     * @return Новый токен для изменённого диапазона
      */
-    public static LineAccessToken updateAfterEdit(Path path, int editStart, int editEnd, int lineDelta, long newCrc, int newLineCount) {
-        return ctx().updateAfterEdit(path, editStart, editEnd, lineDelta, newCrc, newLineCount);
+    public static LineAccessToken updateAfterEdit(Path path, int editStart, int editEnd,
+                                                  int lineDelta, String editedRangeContent, int newLineCount) {
+        return ctx().updateAfterEdit(path, editStart, editEnd, lineDelta, editedRangeContent, newLineCount);
     }
 
     /**

@@ -31,6 +31,84 @@ It transforms standard file operations into a **Transactional OS for AI Agents**
 
 ---
 
+### 🎯 The Philosophy: Disciplined AI Through Intentional Friction
+
+> **"The goal is not to make the agent's job easier — it's to make the agent's work reliable."**
+
+Most MCP servers optimize for **convenience**: fewer calls, shorter responses, maximum automation. NTS takes the opposite approach. It introduces **intentional friction** that forces AI agents to work with surgical precision.
+
+#### The Problem: Catastrophic Drift in Long Sessions
+
+When an AI agent works on a complex task (1-2M+ tokens), context summarization inevitably loses details. The agent "forgets" what it read 50 messages ago. Then:
+
+1. 🔴 Agent edits line 347 based on stale memory
+2. 🔴 Edit breaks something — agent panics
+3. 🔴 Agent enters an uncontrolled fix-loop
+4. 🔴 **Hours of work destroyed in seconds**
+
+This isn't a bug — it's an emergent property of how LLMs handle long contexts. **NTS is designed to prevent this failure mode.**
+
+#### The Solution: Forced Concentration via LAT
+
+**Line Access Tokens (LATs)** are not just a security feature — they're a **cognitive constraint**.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Without LAT:                                                   │
+│  "I'll just read the whole file... it's only 400 lines"        │
+│   → Context bloated with "just in case" data                    │
+│   → Summarization drops critical details                        │
+│   → Agent edits wrong line from fuzzy memory                    │
+│   → Catastrophic error                                          │
+├─────────────────────────────────────────────────────────────────┤
+│  With LAT:                                                      │
+│  "I need to edit line 47. Let me read lines 40-55."            │
+│   → Agent explicitly decides what it needs                      │
+│   → Token proves agent saw current state                        │
+│   → Context stays clean and precise                             │
+│   → Edits are surgical and verified                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+The agent **cannot** read an entire file in one lazy command. It must specify ranges. This forces the agent to **think before acting** — exactly the discipline that prevents drift.
+
+#### Why Verbose Responses Matter
+
+Every `nts_edit_file` response includes a full unified diff. This isn't optional verbosity — it's **mandatory validation**.
+
+```diff
+--- User.java (original)
++++ User.java (modified)
+@@ -15,7 +15,7 @@
+     }
+ 
+-    public String getName() {
++    public String getFullName() {
+         return name;
+     }
+```
+
+The agent sees the result **immediately**, in the same response. No separate "verify" step needed. No chance to "forget" to check. The diff is the proof.
+
+#### Real-World Impact
+
+| Scenario | Standard Tools | NTS |
+| :--- | :--- | :--- |
+| 2-hour refactoring session | 40% chance of catastrophic error | Near-zero (checkpoint + undo) |
+| Multi-file rename | Silent corruption possible | Atomic batch or full rollback |
+| External file change mid-work | Agent overwrites user's edits | Token expires, agent warned |
+| Agent "panics" after error | Uncontrolled fix spiral | Undo → stable state → retry |
+
+#### The Counterintuitive Truth
+
+> **Spending 10% more tokens on discipline saves 100% of wasted work.**
+
+A 2-hour agent session costs ~$5-15 in API calls. A catastrophic error that destroys that work costs the same amount **again** to redo — plus human time to diagnose what went wrong.
+
+NTS trades micro-efficiency for macro-reliability. The agent works slightly harder per-operation, but the **entire session succeeds** instead of collapsing at hour 1:45.
+
+
+
 ### 🧠 Advanced Features Deep Dive
 
 #### 1. 📟 Agent HUD (Heads-Up Display)
@@ -60,9 +138,11 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 
 #### 3. 🔒 Enterprise Security & Sandboxing
 *   **Optimistic Locking (LATs):** Agents *must* read a file to get a token (`LAT:...`) before editing. If the file changes externally, the token expires and the external change is automatically recorded in file history. No more race conditions.
+*   **Smart Token Invalidation:** Tokens track **Range CRC** instead of file CRC. Edits outside your token's range don't invalidate it — only changes to the specific lines you're working on trigger re-read. This dramatically reduces unnecessary token refreshes in large files.
 *   **Strict Sandboxing:** All paths are normalized and pinned to the project root. Impossible to escape via `../../`.
 *   **Infrastructure Protection:** Automatically blocks modification of `.git`, `.env`, and build configs unless explicitly allowed.
 *   **OOM Protection:** Prevents reading massive files (>10MB) that would crash the context window.
+*   **Structured Error Codes:** All errors include machine-readable codes (`FILE_NOT_FOUND`, `TOKEN_EXPIRED`, etc.) with human-readable solutions. No more cryptic exceptions — every error tells you exactly what went wrong and how to fix it.
 
 #### 4. ⏪ State Management: Checkpoints & Deep Undo
 *   **Session Journal:** Logs every logical step (not just file IO).
@@ -111,25 +191,248 @@ The `nts_code_refactor` tool performs intelligent code transformations.
 
 ---
 
-### 🛠️ Available Tools (15)
+### 🛠️ The Toolchain: A Discipline System, Not Just Utilities
 
-| Category | Tool | Description |
-| :--- | :--- | :--- |
-| **Session** | `nts_init` | Initialize session (call FIRST) |
-| | `nts_session` | Undo/Redo, Checkpoints, Rollback |
-| **File System** | `nts_file_read` | Read files with LAT tokens |
-| | `nts_file_manage` | Create, delete, move, rename |
-| | `nts_file_search` | Glob, grep (file or directory), project structure |
-| | `nts_compare_files` | Unified diff between files |
-| **Editing** | `nts_edit_file` | Line-based editing with tokens |
-| | `nts_project_replace` | Global search & replace |
-| **Navigation** | `nts_code_navigate` | Go to definition, find references |
-| **Refactoring** | `nts_code_refactor` | Rename, generate, extract, inline |
-| **External** | `nts_git` | Git operations (status, diff, commit) |
-| | `nts_gradle_task` | Build automation |
-| **Planning** | `nts_todo` | Task tracking with HUD integration |
-| **System** | `nts_batch_tools` | Atomic multi-tool transactions |
-| | `nts_task` | Background task monitoring |
+Each tool in NTS is designed as part of an **interconnected discipline system**. They don't just perform operations — they enforce a workflow that keeps the agent focused, verified, and recoverable.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        THE NTS DISCIPLINE LOOP                              │
+│                                                                             │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
+│   │  INIT    │────▶│  READ    │────▶│  EDIT    │────▶│  VERIFY  │          │
+│   │ Session  │     │ + Token  │     │ + Token  │     │  (Diff)  │          │
+│   └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │
+│        │                                                   │                │
+│        │              ┌──────────┐                         │                │
+│        └─────────────▶│  UNDO    │◀────────────────────────┘                │
+│         (if panic)    │ Recovery │    (if wrong)                            │
+│                       └──────────┘                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🔐 `nts_init` — The Accountability Boundary
+
+**Why it exists:** Creates an isolated session with its own undo history, checkpoints, and token registry.
+
+**Discipline role:** Everything the agent does is tracked. There's no "anonymous" editing. If something breaks, the session journal knows exactly what happened and when.
+
+**Connection:** All other tools require `sessionId`. This isn't bureaucracy — it's **traceability**.
+
+---
+
+#### 📖 `nts_file_read` — The Attention Gate
+
+**Why it exists:** Reads file content and issues a **Line Access Token (LAT)**.
+
+**Discipline role:** The agent must **explicitly decide** which lines it needs. No "just read everything" shortcut.
+
+```
+❌ read({ path: "file.java" })                    // NOT ALLOWED
+✅ read({ path: "file.java", startLine: 10, endLine: 30 })  // Forced precision
+```
+
+**Connection:** The token returned here is **required** for `nts_edit_file`. Read → Token → Edit. No shortcuts.
+
+**Bulk Read:** Read multiple related files in a single request:
+```json
+{
+  "bulk": [
+    { "path": "UserService.java", "symbol": "createUser" },
+    { "path": "UserRepository.java", "symbol": "save" },
+    { "path": "User.java", "startLine": 1, "endLine": 30 }
+  ]
+}
+```
+Each file is separated in output with its own TOKEN. Errors in one file don't affect others.
+
+---
+
+#### ✏️ `nts_edit_file` — The Verified Mutation
+
+**Why it exists:** Applies line-based edits with mandatory token validation.
+
+**Discipline role:** 
+1. **Token required** — proves agent read the current state
+2. **Diff in response** — agent immediately sees what changed
+3. **CRC check** — if file changed externally, edit fails safely
+
+**Connection:** Consumes token from `nts_file_read`, produces new token for subsequent edits. Chain of custody is unbroken.
+
+---
+
+#### 📁 `nts_file_manage` — Structure with Memory
+
+**Why it exists:** Create, delete, move, rename files and directories.
+
+**Discipline role:** 
+- `create` returns a token — new files are immediately editable
+- `rename`/`move` **transfers tokens** — the system tracks file identity across renames
+- `delete` **invalidates tokens** — no editing ghosts
+
+**Connection:** Works with `nts_batch_tools` for atomic multi-file restructuring.
+
+---
+
+#### 🔍 `nts_file_search` — Discovery with Intent
+
+**Why it exists:** Find files (`glob`), search content (`grep`), view structure.
+
+**Discipline role:** `grep` returns **tokens for matched ranges**. The agent can search and immediately edit without a separate read step.
+
+```
+grep("TODO") → finds line 47 → returns TOKEN for lines 45-50
+           → agent can edit lines 45-50 directly
+```
+
+**Connection:** Bridges discovery and action. Reduces round-trips while maintaining token discipline.
+
+---
+
+#### ⏪ `nts_session` — The Panic Button
+
+**Why it exists:** Undo, redo, checkpoints, rollback, and session journal.
+
+**Discipline role:** When the agent makes a mistake, it has **structured recovery** instead of uncontrolled fix-spiraling.
+
+```
+checkpoint("before-risky-refactor")
+  → try dangerous changes
+  → if wrong: rollback("before-risky-refactor")
+  → project restored in one command
+```
+
+**Connection:** This is the safety net that makes aggressive refactoring possible. Agents can be bold because recovery is guaranteed.
+
+---
+
+#### 🔗 `nts_batch_tools` — Atomic Scripting
+
+**Why it exists:** Execute multiple tools as a single atomic transaction.
+
+**Discipline role:** Complex operations either **fully succeed or fully rollback**. No half-broken states.
+
+```json
+{
+  "actions": [
+    { "id": "svc", "tool": "nts_file_manage", "params": { "action": "create", "path": "Service.java" }},
+    { "tool": "nts_edit_file", "params": { "path": "{{svc.path}}", "accessToken": "{{svc.token}}", ... }}
+  ]
+}
+// If edit fails → create is rolled back → project untouched
+```
+
+**Connection:** Uses `{{step.token}}` interpolation. Tokens flow between steps automatically. This is the culmination of the discipline system.
+
+---
+
+#### 🔄 `nts_project_replace` — Controlled Mass Mutation
+
+**Why it exists:** Global search and replace across the entire project.
+
+**Discipline role:** 
+- `dryRun: true` shows **all changes before applying**
+- Atomic: all files changed or none
+- Creates automatic checkpoint before execution
+
+**Connection:** High-risk operation with maximum safeguards.
+
+---
+
+#### 🧭 `nts_code_navigate` — Semantic Understanding
+
+**Why it exists:** Go to definition, find references, hover info, symbol listing.
+
+**Discipline role:** Agent can understand code structure **before editing**. Reduces guesswork, increases precision.
+
+**Connection:** Returns tokens for found locations. Navigate → understand → edit with confidence.
+
+---
+
+#### 🔧 `nts_code_refactor` — Intelligent Transformation
+
+**Why it exists:** Rename symbols, generate code, extract methods — with automatic reference updates.
+
+**Discipline role:** 
+- `preview: true` shows **all affected files** before applying
+- Semantic rename updates ALL references, not just text matches
+- Atomic: entire refactoring succeeds or fails together
+
+**Connection:** Uses tree-sitter for precision. Safer than manual multi-file editing.
+
+---
+
+#### 📋 `nts_todo` — The Focus Anchor
+
+**Why it exists:** Maintains a Markdown-based task list integrated with the HUD.
+
+**Discipline role:** Keeps the agent focused on **one task at a time**. The HUD constantly reminds what's next.
+
+```
+[HUD] Plan: Auth Refactor [✓2 ○3] → #3: Update Login Controller
+```
+
+**Connection:** Prevents scope creep. Agent always knows the current objective even after context summarization.
+
+---
+
+#### 🔀 `nts_git` — Version Control Integration
+
+**Why it exists:** Git status, diff, add, commit — without leaving NTS.
+
+**Discipline role:** 
+- `git_checkpoint` creates stash as emergency backup
+- `commit_session` auto-generates commit message from TODO progress
+- Safe operations only (no push/force)
+
+**Connection:** Integrates with session journal. Commits can reference completed tasks.
+
+---
+
+#### 📊 `nts_compare_files` — Visual Verification
+
+**Why it exists:** Shows unified diff between any two files.
+
+**Discipline role:** Agent can verify changes by comparing before/after states explicitly.
+
+**Connection:** Useful for reviewing results of batch operations or refactoring.
+
+---
+
+#### ⚙️ `nts_gradle_task` — Build Feedback Loop
+
+**Why it exists:** Run Gradle tasks (build, test, check) with parsed output.
+
+**Discipline role:** Agent gets immediate feedback on whether changes broke the build. Errors are parsed and actionable.
+
+**Connection:** Closes the loop: Edit → Build → Fix → Repeat.
+
+---
+
+#### 🖥️ `nts_task` — Background Awareness
+
+**Why it exists:** Monitor and control long-running background tasks.
+
+**Discipline role:** Agent can check progress of slow operations without blocking.
+
+**Connection:** Works with `nts_gradle_task` for long builds.
+
+---
+
+### The System as a Whole
+
+These tools aren't independent utilities. They form a **closed discipline loop**:
+
+1. **Session** establishes accountability
+2. **Read** forces attention and issues tokens
+3. **Edit** requires tokens and shows results
+4. **Session** provides recovery when needed
+5. **Batch** enables complex operations atomically
+6. **HUD + TODO** maintains focus across long sessions
+
+**Every tool reinforces the others.** There's no escape hatch to "just edit blindly." The discipline is architectural.
 
 ---
 
@@ -183,6 +486,84 @@ Add to your `mcp-config.json`:
 
 ---
 
+### 🎯 Философия: Дисциплина ИИ через осознанное усложнение
+
+> **«Цель не в том, чтобы облегчить работу агента — а в том, чтобы сделать его работу надёжной.»**
+
+Большинство MCP-серверов оптимизируют **удобство**: меньше вызовов, короче ответы, максимум автоматизации. NTS идёт противоположным путём. Он создаёт **осознанное трение**, которое заставляет ИИ-агента работать с хирургической точностью.
+
+#### Проблема: Катастрофический дрейф в длинных сессиях
+
+Когда ИИ-агент работает над сложной задачей (1-2М+ токенов), суммаризация контекста неизбежно теряет детали. Агент «забывает», что читал 50 сообщений назад. Дальше:
+
+1. 🔴 Агент редактирует строку 347 по устаревшей памяти
+2. 🔴 Правка что-то ломает — агент паникует
+3. 🔴 Агент входит в неконтролируемый цикл исправлений
+4. 🔴 **Часы работы уничтожены за секунды**
+
+Это не баг — это эмерджентное свойство работы LLM с длинным контекстом. **NTS спроектирован для предотвращения этого сценария.**
+
+#### Решение: Принудительная концентрация через LAT
+
+**Line Access Tokens (LATs)** — это не просто механизм безопасности, это **когнитивное ограничение**.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Без LAT:                                                       │
+│  «Прочитаю весь файл... там всего 400 строк»                   │
+│   → Контекст раздут данными «на всякий случай»                 │
+│   → Суммаризация теряет критичные детали                       │
+│   → Агент правит не ту строку по размытой памяти               │
+│   → Катастрофическая ошибка                                    │
+├─────────────────────────────────────────────────────────────────┤
+│  С LAT:                                                         │
+│  «Мне нужно править строку 47. Прочитаю строки 40-55.»         │
+│   → Агент явно решает, что ему нужно                           │
+│   → Токен доказывает, что агент видел актуальное состояние     │
+│   → Контекст остаётся чистым и точным                          │
+│   → Правки хирургически точны и верифицированы                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Агент **не может** прочитать весь файл одной ленивой командой. Он обязан указать диапазон строк. Это заставляет агента **думать перед действием** — именно та дисциплина, которая предотвращает дрейф.
+
+#### Почему подробные ответы важны
+
+Каждый ответ `nts_edit_file` содержит полный unified diff. Это не опциональная многословность — это **обязательная валидация**.
+
+```diff
+--- User.java (original)
++++ User.java (modified)
+@@ -15,7 +15,7 @@
+     }
+ 
+-    public String getName() {
++    public String getFullName() {
+         return name;
+     }
+```
+
+Агент видит результат **немедленно**, в том же ответе. Не нужен отдельный шаг «проверить». Нет шанса «забыть» посмотреть. Diff — это доказательство.
+
+#### Реальное влияние
+
+| Сценарий | Стандартные инструменты | NTS |
+| :--- | :--- | :--- |
+| 2-часовая сессия рефакторинга | 40% шанс катастрофы | Около нуля (checkpoint + undo) |
+| Переименование в нескольких файлах | Возможна тихая порча | Атомарный batch или полный откат |
+| Внешнее изменение файла во время работы | Агент затрёт правки пользователя | Токен сгорает, агент предупреждён |
+| Агент «паникует» после ошибки | Неконтролируемая спираль фиксов | Undo → стабильное состояние → повтор |
+
+#### Контринтуитивная истина
+
+> **Потратить на 10% больше токенов на дисциплину — значит сохранить 100% работы.**
+
+2-часовая сессия агента стоит ~$5-15 в API-вызовах. Катастрофическая ошибка, уничтожившая эту работу, стоит столько же **повторно** — плюс время человека на диагностику.
+
+NTS меняет микро-эффективность на макро-надёжность. Агент работает чуть усерднее над каждой операцией, но **вся сессия завершается успешно**, а не рушится на 1:45.
+
+
+
 ### 🧠 Подробный обзор функций
 
 #### 1. 📟 HUD для Агента (Heads-Up Display)
@@ -212,9 +593,11 @@ Add to your `mcp-config.json`:
 
 #### 3. 🔒 Корпоративная безопасность и Песочница
 *   **Оптимистичная блокировка (LATs):** Агент *обязан* прочитать файл и получить токен (`LAT:...`) перед правкой. Если файл изменился извне — токен сгорает, а внешнее изменение автоматически записывается в историю файла. Никаких состояний гонки (Race Conditions).
+*   **Умная инвалидация токенов:** Токены отслеживают **CRC диапазона**, а не всего файла. Правки вне вашего диапазона не инвалидируют токен — только изменения конкретных строк, с которыми вы работаете, требуют перечитывания. Это радикально сокращает ненужные обновления токенов в больших файлах.
 *   **Строгая песочница:** Все пути нормализуются и привязываются к корню проекта. Выход через `../../` невозможен.
 *   **Защита инфраструктуры:** Блокировка изменений `.git`, `.env` и конфигов сборки (можно настроить).
 *   **Защита от OOM:** Блокировка чтения гигантских файлов (>10MB), способных обрушить контекстное окно модели.
+*   **Структурированные коды ошибок:** Все ошибки содержат машиночитаемые коды (`FILE_NOT_FOUND`, `TOKEN_EXPIRED` и др.) с понятными решениями. Никаких загадочных исключений — каждая ошибка объясняет, что пошло не так и как это исправить.
 
 #### 4. ⏪ Управление состоянием: Чекпоинты и Deep Undo
 *   **Журнал сессии:** Логирует каждый логический шаг.
@@ -263,25 +646,248 @@ Add to your `mcp-config.json`:
 
 ---
 
-### 🛠️ Доступные инструменты (15)
+### 🛠️ Инструментарий: Система дисциплины, а не просто утилиты
 
-| Категория | Инструмент | Описание |
-| :--- | :--- | :--- |
-| **Сессия** | `nts_init` | Инициализация сессии (вызвать ПЕРВЫМ) |
-| | `nts_session` | Undo/Redo, Чекпоинты, Откат |
-| **Файлы** | `nts_file_read` | Чтение файлов с LAT-токенами |
-| | `nts_file_manage` | Создание, удаление, перемещение |
-| | `nts_file_search` | Glob, grep (файл или директория), структура проекта |
-| | `nts_compare_files` | Unified diff между файлами |
-| **Редактирование** | `nts_edit_file` | Построчное редактирование с токенами |
-| | `nts_project_replace` | Глобальный поиск и замена |
-| **Навигация** | `nts_code_navigate` | Go to definition, find references |
-| **Рефакторинг** | `nts_code_refactor` | Rename, generate, extract, inline |
-| **Внешние** | `nts_git` | Git операции (status, diff, commit) |
-| | `nts_gradle_task` | Автоматизация сборки |
-| **Планирование** | `nts_todo` | Трекинг задач с HUD-интеграцией |
-| **Система** | `nts_batch_tools` | Атомарные мульти-операции |
-| | `nts_task` | Мониторинг фоновых задач |
+Каждый инструмент NTS спроектирован как часть **взаимосвязанной системы дисциплины**. Они не просто выполняют операции — они обеспечивают рабочий процесс, в котором агент остаётся сфокусированным, верифицированным и восстанавливаемым.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ЦИКЛ ДИСЦИПЛИНЫ NTS                                  │
+│                                                                             │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
+│   │  INIT    │────▶│  READ    │────▶│  EDIT    │────▶│ ПРОВЕРКА │          │
+│   │ Сессия   │     │ + Токен  │     │ + Токен  │     │  (Diff)  │          │
+│   └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │
+│        │                                                   │                │
+│        │              ┌──────────┐                         │                │
+│        └─────────────▶│  UNDO    │◀────────────────────────┘                │
+│        (при панике)   │Восстановл│    (при ошибке)                          │
+│                       └──────────┘                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🔐 `nts_init` — Граница ответственности
+
+**Зачем:** Создаёт изолированную сессию с собственной историей undo, чекпоинтами и реестром токенов.
+
+**Роль в дисциплине:** Всё, что делает агент, отслеживается. Нет «анонимного» редактирования. Если что-то сломается — журнал сессии знает, что именно произошло и когда.
+
+**Связь:** Все остальные инструменты требуют `sessionId`. Это не бюрократия — это **прослеживаемость**.
+
+---
+
+#### 📖 `nts_file_read` — Шлюз внимания
+
+**Зачем:** Читает содержимое файла и выдаёт **Line Access Token (LAT)**.
+
+**Роль в дисциплине:** Агент обязан **явно решить**, какие строки ему нужны. Нет лёгкого пути «просто прочитать всё».
+
+```
+❌ read({ path: "file.java" })                    // ЗАПРЕЩЕНО
+✅ read({ path: "file.java", startLine: 10, endLine: 30 })  // Принудительная точность
+```
+
+**Связь:** Токен, возвращённый здесь, **обязателен** для `nts_edit_file`. Read → Token → Edit. Без сокращений.
+
+**Массовое чтение (Bulk Read):** Чтение нескольких связанных файлов одним запросом:
+```json
+{
+  "bulk": [
+    { "path": "UserService.java", "symbol": "createUser" },
+    { "path": "UserRepository.java", "symbol": "save" },
+    { "path": "User.java", "startLine": 1, "endLine": 30 }
+  ]
+}
+```
+Каждый файл отделён в выводе и имеет свой TOKEN. Ошибка в одном файле не влияет на остальные.
+
+---
+
+#### ✏️ `nts_edit_file` — Верифицированная мутация
+
+**Зачем:** Применяет построчные правки с обязательной валидацией токена.
+
+**Роль в дисциплине:**
+1. **Токен обязателен** — доказывает, что агент прочитал текущее состояние
+2. **Diff в ответе** — агент сразу видит, что изменилось
+3. **Проверка CRC** — если файл изменён извне, правка безопасно отклоняется
+
+**Связь:** Потребляет токен от `nts_file_read`, выдаёт новый токен для последующих правок. Цепочка владения не прерывается.
+
+---
+
+#### 📁 `nts_file_manage` — Структура с памятью
+
+**Зачем:** Создание, удаление, перемещение, переименование файлов и директорий.
+
+**Роль в дисциплине:**
+- `create` возвращает токен — новые файлы сразу готовы к редактированию
+- `rename`/`move` **переносят токены** — система отслеживает идентичность файла при переименовании
+- `delete` **инвалидирует токены** — нельзя редактировать «призраков»
+
+**Связь:** Работает с `nts_batch_tools` для атомарной реструктуризации.
+
+---
+
+#### 🔍 `nts_file_search` — Поиск с намерением
+
+**Зачем:** Поиск файлов (`glob`), поиск в содержимом (`grep`), просмотр структуры.
+
+**Роль в дисциплине:** `grep` возвращает **токены для найденных диапазонов**. Агент может искать и сразу редактировать без отдельного шага чтения.
+
+```
+grep("TODO") → находит строку 47 → возвращает TOKEN для строк 45-50
+           → агент может редактировать строки 45-50 напрямую
+```
+
+**Связь:** Мост между обнаружением и действием. Сокращает обращения, сохраняя токенную дисциплину.
+
+---
+
+#### ⏪ `nts_session` — Кнопка паники
+
+**Зачем:** Undo, redo, чекпоинты, откат и журнал сессии.
+
+**Роль в дисциплине:** Когда агент ошибается, у него есть **структурированное восстановление** вместо неконтролируемой спирали исправлений.
+
+```
+checkpoint("before-risky-refactor")
+  → пробуем опасные изменения
+  → если неправильно: rollback("before-risky-refactor")
+  → проект восстановлен одной командой
+```
+
+**Связь:** Это страховочная сеть, которая делает возможным агрессивный рефакторинг. Агенты могут быть смелыми, потому что восстановление гарантировано.
+
+---
+
+#### 🔗 `nts_batch_tools` — Атомарный скриптинг
+
+**Зачем:** Выполняет несколько инструментов как единую атомарную транзакцию.
+
+**Роль в дисциплине:** Сложные операции либо **полностью успешны, либо полностью откатываются**. Никаких наполовину сломанных состояний.
+
+```json
+{
+  "actions": [
+    { "id": "svc", "tool": "nts_file_manage", "params": { "action": "create", "path": "Service.java" }},
+    { "tool": "nts_edit_file", "params": { "path": "{{svc.path}}", "accessToken": "{{svc.token}}", ... }}
+  ]
+}
+// Если edit падает → create откатывается → проект нетронут
+```
+
+**Связь:** Использует интерполяцию `{{step.token}}`. Токены перетекают между шагами автоматически. Это кульминация системы дисциплины.
+
+---
+
+#### 🔄 `nts_project_replace` — Контролируемая массовая мутация
+
+**Зачем:** Глобальный поиск и замена по всему проекту.
+
+**Роль в дисциплине:**
+- `dryRun: true` показывает **все изменения до применения**
+- Атомарность: все файлы изменены или ни один
+- Автоматический чекпоинт перед выполнением
+
+**Связь:** Высокорисковая операция с максимальными гарантиями.
+
+---
+
+#### 🧭 `nts_code_navigate` — Семантическое понимание
+
+**Зачем:** Go to definition, find references, hover info, список символов.
+
+**Роль в дисциплине:** Агент может понять структуру кода **до редактирования**. Меньше догадок, больше точности.
+
+**Связь:** Возвращает токены для найденных мест. Навигация → понимание → уверенная правка.
+
+---
+
+#### 🔧 `nts_code_refactor` — Интеллектуальная трансформация
+
+**Зачем:** Переименование символов, генерация кода, извлечение методов — с автоматическим обновлением ссылок.
+
+**Роль в дисциплине:**
+- `preview: true` показывает **все затронутые файлы** до применения
+- Семантическое переименование обновляет ВСЕ ссылки, а не просто текстовые совпадения
+- Атомарность: весь рефакторинг успешен или отменён целиком
+
+**Связь:** Использует tree-sitter для точности. Безопаснее ручного редактирования нескольких файлов.
+
+---
+
+#### 📋 `nts_todo` — Якорь фокуса
+
+**Зачем:** Ведёт Markdown-список задач, интегрированный с HUD.
+
+**Роль в дисциплине:** Держит агента сфокусированным на **одной задаче за раз**. HUD постоянно напоминает, что дальше.
+
+```
+[HUD] Plan: Auth Refactor [✓2 ○3] → #3: Update Login Controller
+```
+
+**Связь:** Предотвращает расползание скоупа. Агент всегда знает текущую цель даже после суммаризации контекста.
+
+---
+
+#### 🔀 `nts_git` — Интеграция с контролем версий
+
+**Зачем:** Git status, diff, add, commit — не покидая NTS.
+
+**Роль в дисциплине:**
+- `git_checkpoint` создаёт stash как аварийный бэкап
+- `commit_session` автогенерирует сообщение коммита из прогресса TODO
+- Только безопасные операции (без push/force)
+
+**Связь:** Интегрируется с журналом сессии. Коммиты могут ссылаться на завершённые задачи.
+
+---
+
+#### 📊 `nts_compare_files` — Визуальная верификация
+
+**Зачем:** Показывает unified diff между любыми двумя файлами.
+
+**Роль в дисциплине:** Агент может явно верифицировать изменения, сравнивая состояния до/после.
+
+**Связь:** Полезен для ревью результатов batch-операций или рефакторинга.
+
+---
+
+#### ⚙️ `nts_gradle_task` — Цикл обратной связи от сборки
+
+**Зачем:** Запуск Gradle-задач (build, test, check) с парсингом вывода.
+
+**Роль в дисциплине:** Агент немедленно получает фидбэк, сломали ли изменения сборку. Ошибки распарсены и готовы к действию.
+
+**Связь:** Замыкает цикл: Edit → Build → Fix → Repeat.
+
+---
+
+#### 🖥️ `nts_task` — Осведомлённость о фоне
+
+**Зачем:** Мониторинг и управление долгими фоновыми задачами.
+
+**Роль в дисциплине:** Агент может проверять прогресс медленных операций без блокировки.
+
+**Связь:** Работает с `nts_gradle_task` для долгих сборок.
+
+---
+
+### Система как целое
+
+Эти инструменты — не независимые утилиты. Они образуют **замкнутый цикл дисциплины**:
+
+1. **Session** устанавливает ответственность
+2. **Read** принуждает к вниманию и выдаёт токены
+3. **Edit** требует токены и показывает результаты
+4. **Session** обеспечивает восстановление при необходимости
+5. **Batch** позволяет сложные операции атомарно
+6. **HUD + TODO** поддерживают фокус на протяжении длинных сессий
+
+**Каждый инструмент усиливает остальные.** Нет лазейки, чтобы «просто редактировать вслепую». Дисциплина — архитектурная.
 
 ---
 

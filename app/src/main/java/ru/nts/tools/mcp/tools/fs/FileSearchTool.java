@@ -355,10 +355,17 @@ public class FileSearchTool implements McpTool {
 
     /**
      * Группирует найденные строки в смежные диапазоны и регистрирует токены доступа.
+     * Использует текст строк для вычисления rangeCrc.
      */
     private List<LineRange> groupLinesIntoRanges(Path path, List<MatchedLine> lines, long crc, int lineCount) {
         if (lines.isEmpty()) {
             return Collections.emptyList();
+        }
+
+        // Создаём карту номер строки -> текст
+        Map<Integer, String> lineTexts = new HashMap<>();
+        for (MatchedLine ml : lines) {
+            lineTexts.put(ml.number(), ml.text());
         }
 
         // Сортируем по номеру строки
@@ -375,7 +382,8 @@ public class FileSearchTool implements McpTool {
                 rangeEnd = current;
             } else {
                 // Разрыв - регистрируем текущий диапазон
-                LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, crc, lineCount);
+                String rangeContent = buildRangeContent(lineTexts, rangeStart, rangeEnd);
+                LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount);
                 ranges.add(new LineRange(rangeStart, rangeEnd, token.encode()));
                 rangeStart = current;
                 rangeEnd = current;
@@ -383,10 +391,26 @@ public class FileSearchTool implements McpTool {
         }
 
         // Регистрируем последний диапазон
-        LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, crc, lineCount);
+        String rangeContent = buildRangeContent(lineTexts, rangeStart, rangeEnd);
+        LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount);
         ranges.add(new LineRange(rangeStart, rangeEnd, token.encode()));
 
         return ranges;
+    }
+
+    /**
+     * Строит содержимое диапазона из карты текстов строк с форматированием номеров строк.
+     */
+    private String buildRangeContent(Map<Integer, String> lineTexts, int startLine, int endLine) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = startLine; i <= endLine; i++) {
+            if (i > startLine) {
+                sb.append("\n");
+            }
+            String text = lineTexts.getOrDefault(i, "");
+            sb.append(String.format("%4d\t%s", i, text));
+        }
+        return sb.toString();
     }
 
 

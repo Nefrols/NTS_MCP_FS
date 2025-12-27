@@ -24,9 +24,11 @@ import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.TransactionManager;
 import ru.nts.tools.mcp.tools.editing.EditFileTool;
 import ru.nts.tools.mcp.tools.fs.FileManageTool;
+import ru.nts.tools.mcp.tools.fs.FileReadTool;
 import ru.nts.tools.mcp.tools.session.SessionTool;
 
 import java.nio.file.Files;
@@ -41,6 +43,7 @@ class UndoRedoTest {
 
     private final EditFileTool editTool = new EditFileTool();
     private final FileManageTool manageTool = new FileManageTool();
+    private final FileReadTool readTool = new FileReadTool();
     private final SessionTool sessionTool = new SessionTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -50,28 +53,37 @@ class UndoRedoTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(sharedTempDir);
+        // Reset everything first (TransactionManager.reset calls SessionContext.resetAll)
         TransactionManager.reset();
         LineAccessTracker.reset();
+        // Now create and set a stable session for the test
+        SessionContext ctx = SessionContext.getOrCreate("test-session");
+        SessionContext.setCurrent(ctx);
     }
 
+    /**
+     * Gets a token via FileReadTool which properly manages ExternalChangeTracker.
+     */
+    private String registerFullAccessViaRead(String relativePath) throws Exception {
+        ObjectNode readParams = mapper.createObjectNode();
+        readParams.put("path", relativePath);
+        readParams.put("startLine", 1);
+        // Use a high endLine to cover all lines
+        readParams.put("endLine", 10000);
+        JsonNode result = readTool.execute(readParams);
+        String text = result.get("content").get(0).get("text").asText();
+        // Extract token from response: [TOKEN: LAT:...]
+        int start = text.indexOf("[TOKEN: ") + 8;
+        int end = text.indexOf("]", start);
+        return text.substring(start, end);
+    }
+
+    /**
+     * Helper for tests that pass Path - converts to relative path and uses FileReadTool.
+     */
     private String registerFullAccess(Path file) throws Exception {
-        long crc = calculateCRC32(file);
-        String content = Files.readString(file);
-        int lineCount = content.split("\n", -1).length;
-        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, crc, lineCount);
-        return token.encode();
-    }
-
-    private long calculateCRC32(Path path) throws Exception {
-        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
-        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
-        }
-        return crc.getValue();
+        String relativePath = sharedTempDir.relativize(file).toString().replace('\\', '/');
+        return registerFullAccessViaRead(relativePath);
     }
 
     @Test
@@ -137,7 +149,7 @@ class UndoRedoTest {
     void testRedoStackInvalidation() throws Exception {
         Path file = sharedTempDir.resolve("test.txt");
         Files.writeString(file, "init");
-        String token1 = registerFullAccess(file);
+        String token1 = registerFullAccessViaRead("test.txt");
 
         ObjectNode p1 = mapper.createObjectNode();
         p1.put("path", "test.txt");
@@ -151,8 +163,8 @@ class UndoRedoTest {
         sessionTool.execute(undoP);
         assertEquals("init", Files.readString(file));
 
-        // После undo нужно получить новый токен
-        String token2 = registerFullAccess(file);
+        // После undo нужно получить новый токен via FileReadTool
+        String token2 = registerFullAccessViaRead("test.txt");
         ObjectNode p2 = mapper.createObjectNode();
         p2.put("path", "test.txt");
         p2.put("startLine", 1);

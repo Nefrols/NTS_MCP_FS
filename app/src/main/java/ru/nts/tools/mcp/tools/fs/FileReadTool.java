@@ -77,6 +77,17 @@ public class FileReadTool implements McpTool {
             - Use 'ranges' array to read multiple sections efficiently
             - Pass previous 'token' to check if re-read needed
             - Use 'contextStartPattern' for dynamic anchor-based reading
+
+            BULK READ: Read 2+ files in single request
+            - Errors in one file don't affect others
+            - Each file supports: line, startLine/endLine, symbol, ranges, contextStartPattern
+
+            Example:
+              bulk: [
+                { path: "UserService.java", symbol: "createUser" },
+                { path: "UserRepository.java", symbol: "save" },
+                { path: "User.java", startLine: 1, endLine: 30 }
+              ]
             """;
     }
 
@@ -139,12 +150,44 @@ public class FileReadTool implements McpTool {
         props.putObject("force").put("type", "boolean").put("description",
                 "Bypass UNCHANGED optimization and always return content. Use when you need fresh content despite valid token.");
 
-        schema.putArray("required").add("path");
+        // Bulk read: read multiple files in single request
+        var bulk = props.putObject("bulk");
+        bulk.put("type", "array").put("description",
+                "Read multiple files in single request. Each item specifies a file and how to read it. " +
+                "Returns combined results with individual tokens. Errors in one file don't affect others.");
+        var bulkItem = bulk.putObject("items").put("type", "object");
+        var bulkProps = bulkItem.putObject("properties");
+        bulkProps.putObject("path").put("type", "string").put("description", "File path (required)");
+        bulkProps.putObject("startLine").put("type", "integer").put("description", "First line to read (1-based)");
+        bulkProps.putObject("endLine").put("type", "integer").put("description", "Last line to read (1-based, inclusive)");
+        bulkProps.putObject("line").put("type", "integer").put("description", "Shortcut: read single line N");
+        bulkProps.putObject("symbol").put("type", "string").put("description", "Read specific symbol by name");
+        bulkProps.putObject("symbolKind").put("type", "string").put("description", "Filter by symbol kind");
+        bulkProps.putObject("contextStartPattern").put("type", "string").put("description", "Regex to find anchor line");
+        bulkProps.putObject("contextRange").put("type", "integer").put("description", "Lines before AND after the anchor match");
+        bulkProps.putObject("token").put("type", "string").put("description", "Pass previous token to check if unchanged");
+        bulkProps.putObject("encoding").put("type", "string").put("description", "Force specific encoding");
+        var bulkRanges = bulkProps.putObject("ranges");
+        bulkRanges.put("type", "array").put("description", "Read multiple non-contiguous sections");
+        var bulkRangeItem = bulkRanges.putObject("items").put("type", "object");
+        var bulkRangeProps = bulkRangeItem.putObject("properties");
+        bulkRangeProps.putObject("startLine").put("type", "integer");
+        bulkRangeProps.putObject("endLine").put("type", "integer");
+        bulkItem.putArray("required").add("path");
+
+        // Note: path is not strictly required when using bulk
+        // The validation will be done in execute() method
+        schema.putArray("required"); // Empty - path or bulk must be provided
         return schema;
     }
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
+        // Check for bulk read first (before path is required)
+        if (params.has("bulk")) {
+            return executeBulkRead(params.get("bulk"));
+        }
+
         String action = params.path("action").asText("read").toLowerCase();
         String pathStr = params.get("path").asText();
 
@@ -171,7 +214,7 @@ public class FileReadTool implements McpTool {
 
     private JsonNode executeRead(Path path, JsonNode params) throws Exception {
         if (!Files.exists(path)) {
-            throw new IllegalArgumentException("File not found: " + path);
+            throw NtsFileException.notFound(path);
         }
         PathSanitizer.checkFileSize(path);
 
@@ -242,7 +285,7 @@ public class FileReadTool implements McpTool {
             String kindFilter = params.path("symbolKind").asText(null);
             foundSymbol = findSymbolInFile(path, content, symbolName, kindFilter);
             if (foundSymbol == null) {
-                throw new IllegalArgumentException("Symbol '" + symbolName + "' not found in " + path.getFileName());
+                throw NtsParamException.symbolNotFound(symbolName, path.getFileName().toString());
             }
             startLine = foundSymbol.location().startLine();
             endLine = foundSymbol.location().endLine();
@@ -253,7 +296,7 @@ public class FileReadTool implements McpTool {
             int range = params.path("contextRange").asInt(0);
             int anchorIdx = findPatternLine(lines, patternStr);
             if (anchorIdx == -1) {
-                throw new IllegalArgumentException("Pattern not found: " + patternStr);
+                throw NtsParamException.patternNotFound(patternStr, path.getFileName().toString());
             }
             startLine = Math.max(1, anchorIdx + 1 - range);
             endLine = Math.min(lineCount, anchorIdx + 1 + range);
@@ -267,8 +310,11 @@ public class FileReadTool implements McpTool {
         endLine = Math.min(lineCount, endLine);
 
         if (startLine > lineCount) {
-            throw new IllegalArgumentException("startLine " + startLine + " exceeds file length (" + lineCount + " lines)");
+            throw NtsParamException.lineExceeds(startLine, lineCount, path.getFileName().toString());
         }
+
+        // Извлекаем содержимое диапазона (нужно для регистрации токена и валидации)
+        String rangeContent = extractLines(lines, startLine, endLine);
 
         // Проверяем существующий токен (если передан и force=false)
         boolean force = params.path("force").asBoolean(false);
@@ -276,10 +322,12 @@ public class FileReadTool implements McpTool {
             String tokenStr = params.get("token").asText();
             try {
                 LineAccessToken token = LineAccessToken.decode(tokenStr, path);
-                var validation = LineAccessTracker.validateToken(token, crc32, lineCount);
+                // Извлекаем содержимое диапазона токена для валидации CRC
+                String tokenRangeContent = extractLines(lines, token.startLine(), Math.min(token.endLine(), lineCount));
+                var validation = LineAccessTracker.validateToken(token, tokenRangeContent, lineCount);
 
                 if (validation.valid() && token.covers(startLine, endLine)) {
-                    // Файл не изменился и токен покрывает запрошенный диапазон
+                    // Содержимое диапазона не изменилось и токен покрывает запрошенный диапазон
                     return createUnchangedResponse(token.encode(), crc32, lineCount, startLine, endLine);
                 }
             } catch (Exception e) {
@@ -287,8 +335,8 @@ public class FileReadTool implements McpTool {
             }
         }
 
-        // Регистрируем доступ и получаем токен
-        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, crc32, lineCount);
+        // Регистрируем доступ и получаем токен (с rangeCrc)
+        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rangeContent, lineCount);
 
         // Session Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
@@ -299,16 +347,14 @@ public class FileReadTool implements McpTool {
             externalTracker.registerSnapshot(path, content, crc32, fileData.charset(), lineCount);
         }
 
-        // Извлекаем контент
-        String resultText = extractLines(lines, startLine, endLine);
-
+        // Используем уже извлечённый контент (rangeContent)
         // Если читали по символу, добавляем информацию о символе
         if (foundSymbol != null) {
             return createSymbolReadResponse(path, lineCount, fileData.charset().name(), crc32,
-                    startLine, endLine, resultText, newToken.encode(), foundSymbol, hasExternalChange);
+                    startLine, endLine, rangeContent, newToken.encode(), foundSymbol, hasExternalChange);
         }
 
-        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, resultText, newToken.encode(), hasExternalChange);
+        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, rangeContent, newToken.encode(), hasExternalChange);
     }
 
     private JsonNode executeReadRanges(Path path, JsonNode rangesNode, String[] lines, long crc32, int lineCount, Charset charset, boolean hasExternalChange) {
@@ -328,18 +374,83 @@ public class FileReadTool implements McpTool {
             start = Math.max(1, start);
             end = Math.min(lineCount, end);
 
-            // Регистрируем доступ
-            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, crc32, lineCount);
+            // Извлекаем содержимое диапазона
+            String rangeContent = extractLines(lines, start, end);
+
+            // Регистрируем доступ с rangeCrc
+            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rangeContent, lineCount);
             tokens.add(token.encode());
 
             sb.append(String.format("\n--- Lines %d-%d ---\n", start, end));
             sb.append(String.format("[TOKEN: %s]\n", token.encode()));
-            sb.append(extractLines(lines, start, end));
+            sb.append(rangeContent);
             sb.append("\n");
         }
 
         sb.append("\n[TOKENS ISSUED: ").append(tokens.size()).append("]");
         return createResponse(sb.toString().trim());
+    }
+
+    /**
+     * Bulk read: reads multiple files in a single request.
+     * Each file can have its own read mode (line, range, symbol, etc.).
+     * Errors in one file don't affect others.
+     *
+     * @param bulkNode Array of file specifications
+     * @return Combined results with individual tokens
+     */
+    private JsonNode executeBulkRead(JsonNode bulkNode) {
+        int totalFiles = bulkNode.size();
+        int succeeded = 0;
+        int failed = 0;
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = 0; i < bulkNode.size(); i++) {
+            JsonNode fileSpec = bulkNode.get(i);
+            String pathStr = fileSpec.get("path").asText();
+
+            sb.append(String.format("\n=== FILE %d: %s ===\n", i + 1, pathStr));
+
+            try {
+                // Create params for single file read
+                ObjectNode singleParams = mapper.createObjectNode();
+                singleParams.put("path", pathStr);
+                singleParams.put("action", "read");
+
+                // Copy all relevant fields
+                if (fileSpec.has("startLine")) singleParams.put("startLine", fileSpec.get("startLine").asInt());
+                if (fileSpec.has("endLine")) singleParams.put("endLine", fileSpec.get("endLine").asInt());
+                if (fileSpec.has("line")) singleParams.put("line", fileSpec.get("line").asInt());
+                if (fileSpec.has("symbol")) singleParams.put("symbol", fileSpec.get("symbol").asText());
+                if (fileSpec.has("symbolKind")) singleParams.put("symbolKind", fileSpec.get("symbolKind").asText());
+                if (fileSpec.has("contextStartPattern")) singleParams.put("contextStartPattern", fileSpec.get("contextStartPattern").asText());
+                if (fileSpec.has("contextRange")) singleParams.put("contextRange", fileSpec.get("contextRange").asInt());
+                if (fileSpec.has("token")) singleParams.put("token", fileSpec.get("token").asText());
+                if (fileSpec.has("encoding")) singleParams.put("encoding", fileSpec.get("encoding").asText());
+                if (fileSpec.has("force")) singleParams.put("force", fileSpec.get("force").asBoolean());
+                if (fileSpec.has("ranges")) singleParams.set("ranges", fileSpec.get("ranges"));
+
+                // Execute single file read
+                JsonNode result = execute(singleParams);
+                String content = result.get("content").get(0).get("text").asText();
+
+                sb.append("[SUCCESS]\n");
+                sb.append(content);
+                sb.append("\n");
+                succeeded++;
+
+            } catch (Exception e) {
+                sb.append("[ERROR]\n");
+                sb.append(String.format("[ERROR: %s - %s]\n", e.getClass().getSimpleName(), e.getMessage()));
+                failed++;
+            }
+        }
+
+        // Build header
+        String header = String.format("[BULK READ: %d files | %d succeeded | %d failed]\n",
+                totalFiles, succeeded, failed);
+
+        return createResponse(header + sb.toString().trim());
     }
 
     private JsonNode executeInfo(Path path) throws IOException {
@@ -497,9 +608,12 @@ public class FileReadTool implements McpTool {
 
         StringBuilder sb = new StringBuilder();
         for (int i = startIdx; i < endIdx; i++) {
-            sb.append(String.format("%4d| %s\n", i + 1, lines[i].replace("\r", "")));
+            if (i > startIdx) {
+                sb.append("\n");
+            }
+            sb.append(String.format("%4d\t%s", i + 1, lines[i].replace("\r", "")));
         }
-        return sb.toString().stripTrailing();
+        return sb.toString();
     }
 
     private long calculateCRC32(Path path) throws IOException {

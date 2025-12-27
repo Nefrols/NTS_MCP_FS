@@ -58,23 +58,23 @@ class BatchToolsTest {
     }
 
     private String registerFullAccess(Path file) throws Exception {
-        long crc = calculateCRC32(file);
         String content = Files.readString(file);
         int lineCount = content.split("\n", -1).length;
-        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, crc, lineCount);
+        String rangeContent = buildRangeContent(content, 1, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, rangeContent, lineCount);
         return token.encode();
     }
 
-    private long calculateCRC32(Path path) throws Exception {
-        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
-        try (java.io.BufferedInputStream bis = new java.io.BufferedInputStream(new java.io.FileInputStream(path.toFile()))) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                crc.update(buffer, 0, len);
-            }
+    private String buildRangeContent(String content, int startLine, int endLine) {
+        String[] lines = content.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        int start = Math.max(0, startLine - 1);
+        int end = Math.min(lines.length, endLine);
+        for (int i = start; i < end; i++) {
+            if (i > start) sb.append("\n");
+            sb.append(String.format("%4d\t%s", i + 1, lines[i]));
         }
-        return crc.getValue();
+        return sb.toString();
     }
 
     @Test
