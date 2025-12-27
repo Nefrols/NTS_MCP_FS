@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package ru.nts.tools.mcp.tools;
+package ru.nts.tools.mcp.tools.fs;
 
 
 import ru.nts.tools.mcp.tools.fs.*;

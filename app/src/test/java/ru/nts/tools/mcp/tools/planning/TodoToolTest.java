@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ru.nts.tools.mcp.tools;
+package ru.nts.tools.mcp.tools.planning;
 
 import ru.nts.tools.mcp.tools.fs.*;
 import ru.nts.tools.mcp.tools.editing.*;
@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Тесты для системы планирования (nts_todo).
  */
-class TodoSystemTest {
+class TodoToolTest {
 
     private final TodoTool todoTool = new TodoTool();
     private final ObjectMapper mapper = new ObjectMapper();
