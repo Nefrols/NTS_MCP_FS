@@ -237,6 +237,12 @@ public class EditFileTool implements McpTool {
                 if (stats.diff != null && !stats.diff.isEmpty()) {
                     statusMsg.append("\n```diff\n").append(stats.diff).append("\n```\n");
                 }
+                // Добавляем tips для этого файла
+                if (!stats.tips.isEmpty()) {
+                    for (String tip : stats.tips) {
+                        statusMsg.append("  [TIP: ").append(tip).append("]\n");
+                    }
+                }
                 statusMsg.append("\n");
             }
             if (!dryRun) {
@@ -302,6 +308,14 @@ public class EditFileTool implements McpTool {
 
             if (dryRun) {
                 sb.append("\n\n[DRY RUN] No changes were applied.");
+            }
+
+            // Добавляем tips если есть
+            if (!stats.tips.isEmpty()) {
+                sb.append("\n");
+                for (String tip : stats.tips) {
+                    sb.append("\n[TIP: ").append(tip).append("]");
+                }
             }
 
             return createResponse(sb.toString());
@@ -519,6 +533,9 @@ public class EditFileTool implements McpTool {
             // Обновляем снапшот для отслеживания будущих внешних изменений
             ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
             externalTracker.updateSnapshot(path, newContent, stats.crc32, charset, newLineCount);
+
+            // Сохраняем виртуальный контент для batch-операций (refactor сможет использовать)
+            SessionContext.currentOrDefault().transactions().setVirtualContent(path, newContent);
         }
         return stats;
     }
@@ -609,6 +626,11 @@ public class EditFileTool implements McpTool {
             stats.deletes++;
         } else {
             stats.replaces++;
+            // TIP: предупреждаем если многострочный content заменяет одну строку без явного endLine
+            if (newText != null && newText.contains("\n") && !op.has("endLine")) {
+                stats.tips.add("Multi-line content replaces single line (startLine=" + requestedStart + "). " +
+                        "Use operation='insert_after' for insertion, or specify endLine for range replacement.");
+            }
         }
 
         // 4. Валидация границ в текущем состоянии файла
@@ -840,6 +862,8 @@ public class EditFileTool implements McpTool {
         boolean encodingChanged = false;
         String originalEncoding = null;
         String newEncoding = null;
+        // Tips для пользователя
+        List<String> tips = new ArrayList<>();
 
         FileEditStats(Path path) {
             this.path = path;

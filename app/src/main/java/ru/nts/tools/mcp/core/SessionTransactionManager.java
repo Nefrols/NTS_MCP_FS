@@ -61,6 +61,9 @@ public class SessionTransactionManager {
     // Файлы, к которым был получен доступ в текущей транзакции (Session Tokens)
     private final ThreadLocal<Set<Path>> filesAccessedInTransaction = ThreadLocal.withInitial(HashSet::new);
 
+    // Виртуальный контент файлов в текущей транзакции (для batch refactoring)
+    private final ThreadLocal<Map<Path, String>> virtualContents = ThreadLocal.withInitial(HashMap::new);
+
     private Path getSnapshotDir() throws IOException {
         // Используем currentOrDefault() для согласованности
         Path dir = SessionContext.currentOrDefault().getSnapshotsDir();
@@ -118,6 +121,7 @@ public class SessionTransactionManager {
             nestingLevel.set(0);
             filesCreatedInTransaction.get().clear();
             filesAccessedInTransaction.get().clear();
+            virtualContents.get().clear();
         }
     }
 
@@ -136,6 +140,7 @@ public class SessionTransactionManager {
             nestingLevel.set(0);
             filesCreatedInTransaction.get().clear();
             filesAccessedInTransaction.get().clear();
+            virtualContents.get().clear();
         }
     }
 
@@ -183,6 +188,32 @@ public class SessionTransactionManager {
      */
     public boolean isFileAccessedInTransaction(Path path) {
         return filesAccessedInTransaction.get().contains(path.toAbsolutePath().normalize());
+    }
+
+    // ==================== Virtual Content API (для batch refactoring) ====================
+
+    /**
+     * Устанавливает виртуальный контент файла.
+     * Используется в batch для передачи изменённого контента в последующие шаги.
+     */
+    public void setVirtualContent(Path path, String content) {
+        if (isInTransaction()) {
+            virtualContents.get().put(path.toAbsolutePath().normalize(), content);
+        }
+    }
+
+    /**
+     * Получает виртуальный контент файла или null если не установлен.
+     */
+    public String getVirtualContent(Path path) {
+        return virtualContents.get().get(path.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Проверяет, есть ли виртуальный контент для файла.
+     */
+    public boolean hasVirtualContent(Path path) {
+        return virtualContents.get().containsKey(path.toAbsolutePath().normalize());
     }
 
     /**

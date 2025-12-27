@@ -56,6 +56,9 @@ public class RefactoringContext {
     // Файлы, записанные в рамках этой операции (для обновления снапшотов)
     private final Set<Path> writtenFiles = new HashSet<>();
 
+    // Виртуальный контент файлов (для batch-операций)
+    private final Map<Path, String> virtualContents = new HashMap<>();
+
     public RefactoringContext() {
         this.sessionContext = SessionContext.current();
         this.treeManager = TreeSitterManager.getInstance();
@@ -114,6 +117,56 @@ public class RefactoringContext {
 
     public Map<Path, String> getAccessTokens() {
         return new HashMap<>(accessTokens);
+    }
+
+    // Virtual content management (для batch-операций)
+
+    /**
+     * Устанавливает виртуальный контент файла.
+     * Используется в batch для передачи изменённого контента между шагами.
+     */
+    public void setVirtualContent(Path path, String content) {
+        virtualContents.put(path.toAbsolutePath().normalize(), content);
+    }
+
+    /**
+     * Получает виртуальный контент файла или null если не установлен.
+     */
+    public String getVirtualContent(Path path) {
+        return virtualContents.get(path.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Проверяет, есть ли виртуальный контент для файла.
+     */
+    public boolean hasVirtualContent(Path path) {
+        return virtualContents.containsKey(path.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Получает ParseResult с учётом виртуального контента.
+     * Проверяет в порядке приоритета:
+     * 1. Локальный virtualContents (явно установленный для этого контекста)
+     * 2. Транзакционный virtualContent (установленный через EditFileTool в batch)
+     * 3. Чтение с диска
+     */
+    public TreeSitterManager.ParseResult getParseResult(Path path) throws IOException {
+        Path normalizedPath = path.toAbsolutePath().normalize();
+
+        // 1. Проверяем локальный виртуальный контент
+        String virtualContent = virtualContents.get(normalizedPath);
+        if (virtualContent != null) {
+            return treeManager.parseWithContent(normalizedPath, virtualContent);
+        }
+
+        // 2. Проверяем транзакционный виртуальный контент (из batch)
+        String txContent = transactionManager.getVirtualContent(normalizedPath);
+        if (txContent != null) {
+            return treeManager.parseWithContent(normalizedPath, txContent);
+        }
+
+        // 3. Читаем с диска
+        return treeManager.getCachedOrParseWithContent(normalizedPath);
     }
 
     /**

@@ -618,7 +618,7 @@ public final class SymbolResolver {
         List<Path> candidateFiles = new ArrayList<>();
 
         try {
-            Files.walkFileTree(projectRoot, EnumSet.noneOf(FileVisitOption.class), 10,
+            Files.walkFileTree(projectRoot, EnumSet.noneOf(FileVisitOption.class), 15,
                     new SimpleFileVisitor<>() {
                         int count = 0;
 
@@ -697,26 +697,43 @@ public final class SymbolResolver {
      */
     private List<Location> findReferencesInDirectory(Path directory, String symbolName,
                                                       String langId) throws IOException {
-        List<Location> references = new ArrayList<>();
-
         String globPattern = LanguageDetector.getGlobPattern(langId);
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + globPattern);
 
+        List<Path> candidateFiles;
         try (var stream = Files.list(directory)) {
-            List<Path> files = stream
+            candidateFiles = stream
                     .filter(Files::isRegularFile)
                     .filter(matcher::matches)
+                    .filter(file -> {
+                        try {
+                            return Files.readString(file).contains(symbolName);
+                        } catch (IOException e) {
+                            return false;
+                        }
+                    })
                     .toList();
+        }
 
-            for (Path file : files) {
-                try {
-                    TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
-                    List<Location> refs = extractor.findReferences(
-                            pr.tree(), file, pr.content(), pr.langId(), symbolName);
-                    references.addAll(refs);
-                } catch (Exception e) {
-                    // Игнорируем ошибки парсинга
-                }
+        // Параллельный поиск ссылок
+        List<Future<List<Location>>> futures = candidateFiles.stream()
+                .map(file -> executor.submit(() -> {
+                    try {
+                        TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
+                        return extractor.findReferences(
+                                pr.tree(), file, pr.content(), pr.langId(), symbolName);
+                    } catch (Exception e) {
+                        return Collections.<Location>emptyList();
+                    }
+                }))
+                .toList();
+
+        List<Location> references = new ArrayList<>();
+        for (Future<List<Location>> future : futures) {
+            try {
+                references.addAll(future.get(5, TimeUnit.SECONDS));
+            } catch (Exception e) {
+                // Игнорируем
             }
         }
 
@@ -739,7 +756,7 @@ public final class SymbolResolver {
         List<Path> candidateFiles = new ArrayList<>();
 
         try {
-            Files.walkFileTree(projectRoot, EnumSet.noneOf(FileVisitOption.class), 10,
+            Files.walkFileTree(projectRoot, EnumSet.noneOf(FileVisitOption.class), 15,
                     new SimpleFileVisitor<>() {
                         int count = 0;
 

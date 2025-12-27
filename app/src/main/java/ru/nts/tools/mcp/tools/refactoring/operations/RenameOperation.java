@@ -367,8 +367,8 @@ public class RenameOperation implements RefactoringOperation {
         List<RenameLocation> locations = new ArrayList<>();
 
         try {
-            TreeSitterManager.ParseResult parseResult =
-                    context.getTreeManager().getCachedOrParseWithContent(file);
+            // Используем getParseResult для поддержки виртуального контента в batch
+            TreeSitterManager.ParseResult parseResult = context.getParseResult(file);
 
             List<Location> refs = context.getSymbolExtractor().findReferences(
                     parseResult.tree(), file, parseResult.content(),

@@ -355,7 +355,8 @@ public class ExtractMethodOperation implements RefactoringOperation {
      */
     private boolean isInStaticContext(Path path, int line, RefactoringContext context) {
         try {
-            TreeSitterManager.ParseResult parseResult = context.getTreeManager().getCachedOrParseWithContent(path);
+            // Используем getParseResult для поддержки виртуального контента в batch
+            TreeSitterManager.ParseResult parseResult = context.getParseResult(path);
             TSTree tree = parseResult.tree();
             String content = parseResult.content();
 

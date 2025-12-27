@@ -251,6 +251,28 @@ public final class TreeSitterManager {
     }
 
     /**
+     * Парсит переданный контент напрямую (без чтения с диска).
+     * Используется для виртуального состояния файлов в batch-операциях.
+     *
+     * @param path путь к файлу (для определения языка)
+     * @param virtualContent виртуальный контент файла
+     * @return результат парсинга
+     */
+    public ParseResult parseWithContent(Path path, String virtualContent) {
+        Path normalizedPath = path.toAbsolutePath().normalize();
+
+        String langId = LanguageDetector.detect(normalizedPath)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Cannot detect language for: " + normalizedPath));
+
+        long currentCrc = calculateCrc(virtualContent);
+        TSTree tree = parse(virtualContent, langId);
+
+        // Не кэшируем виртуальный контент - он может отличаться от диска
+        return new ParseResult(tree, virtualContent, langId, currentCrc);
+    }
+
+    /**
      * Подсчитывает количество строк в содержимом.
      */
     private int countLines(String content) {

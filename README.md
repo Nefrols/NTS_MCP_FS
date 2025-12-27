@@ -125,6 +125,7 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 *   **Atomic Transactions:** 10 operations in one request. If the 10th fails, the previous 9 are rolled back instantly. The project is never left in a broken state.
 *   **Variable Interpolation:** Pass data between steps. Create a file in Step 1, then reference its path in Step 2 using `{{step1.path}}`.
 *   **Virtual Addressing:** Use variables like `$LAST` or `$PREV_END+1` to insert code relative to previous edits without calculating line numbers.
+*   **Virtual FS Context:** When you edit a file in Step 1 and run `nts_code_refactor` in Step 2, the refactoring sees the **modified content** from Step 1, not the disk version. Enables complex chains like "edit class → rename symbol across project".
 
 **Example Script:** "Create a service, rename it, and add a method"
 ```json
@@ -178,6 +179,7 @@ The `nts_code_refactor` tool performs intelligent code transformations.
 *   **Extract Method:** Pull code into a new method with proper parameters.
 *   **Inline:** Replace method/variable with its body/value.
 *   **Preview Mode:** Review diff before applying (`preview: true`).
+*   **Parallel Reference Search:** Both `nts_code_navigate` and `nts_code_refactor` use parallel file scanning with pre-filtering, searching up to 15 levels deep for maximum coverage.
 
 ```json
 {
@@ -254,10 +256,11 @@ Each file is separated in output with its own TOKEN. Errors in one file don't af
 
 **Why it exists:** Applies line-based edits with mandatory token validation.
 
-**Discipline role:** 
+**Discipline role:**
 1. **Token required** — proves agent read the current state
 2. **Diff in response** — agent immediately sees what changed
 3. **CRC check** — if file changed externally, edit fails safely
+4. **Smart Tips** — when replacing a single line with multi-line content without `endLine`, a `[TIP]` suggests using `insert_after` or specifying the range
 
 **Connection:** Consumes token from `nts_file_read`, produces new token for subsequent edits. Chain of custody is unbroken.
 
@@ -580,6 +583,7 @@ NTS меняет микро-эффективность на макро-надё�
 *   **Атомарные транзакции:** 10 действий в одном запросе. Если 10-е упадет, предыдущие 9 откатятся мгновенно. Проект никогда не останется "сломанным".
 *   **Интерполяция переменных:** Передача данных между шагами. Создайте файл на Шаге 1 и используйте его путь на Шаге 2 через `{{step1.path}}`.
 *   **Виртуальная адресация:** Используйте переменные `$LAST` (конец файла) или `$PREV_END+1` (вставка сразу после предыдущей правки), чтобы не высчитывать номера строк вручную.
+*   **Виртуальный контекст FS:** Когда вы редактируете файл на Шаге 1 и запускаете `nts_code_refactor` на Шаге 2, рефакторинг видит **изменённый контент** из Шага 1, а не версию с диска. Позволяет создавать сложные цепочки вроде «правка класса → переименование символа по всему проекту».
 
 **Пример скрипта:** "Создать сервис, переименовать и добавить метод"
 ```json
@@ -633,6 +637,7 @@ NTS меняет микро-эффективность на макро-надё�
 *   **Extract Method:** Извлечение кода в метод с правильными параметрами.
 *   **Inline:** Встраивание метода/переменной.
 *   **Preview Mode:** Просмотр изменений перед применением (`preview: true`).
+*   **Параллельный поиск ссылок:** И `nts_code_navigate`, и `nts_code_refactor` используют параллельное сканирование файлов с предварительной фильтрацией, ищут на глубину до 15 уровней для максимального покрытия.
 
 ```json
 {
@@ -713,6 +718,7 @@ NTS меняет микро-эффективность на макро-надё�
 1. **Токен обязателен** — доказывает, что агент прочитал текущее состояние
 2. **Diff в ответе** — агент сразу видит, что изменилось
 3. **Проверка CRC** — если файл изменён извне, правка безопасно отклоняется
+4. **Умные подсказки** — при замене одной строки многострочным содержимым без указания `endLine` добавляется `[TIP]` с предложением использовать `insert_after` или указать диапазон
 
 **Связь:** Потребляет токен от `nts_file_read`, выдаёт новый токен для последующих правок. Цепочка владения не прерывается.
 

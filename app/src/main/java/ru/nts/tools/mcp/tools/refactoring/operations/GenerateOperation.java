@@ -218,7 +218,8 @@ public class GenerateOperation implements RefactoringOperation {
                                            List<SymbolInfo> symbols, RefactoringContext context)
             throws IOException {
 
-        TreeSitterManager.ParseResult parseResult = context.getTreeManager().getCachedOrParseWithContent(path);
+        // Используем getParseResult для поддержки виртуального контента в batch
+        TreeSitterManager.ParseResult parseResult = context.getParseResult(path);
         TSTree tree = parseResult.tree();
         String content = parseResult.content();
 
