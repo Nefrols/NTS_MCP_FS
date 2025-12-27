@@ -2,6 +2,7 @@
 ### Next Transactional Server for Model Context Protocol
 
 [![Java](https://img.shields.io/badge/Java-25%2B-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)]()
 [![Tools](https://img.shields.io/badge/MCP%20Tools-15-purple?style=for-the-badge)]()
@@ -467,6 +468,79 @@ Add to your `mcp-config.json`:
 }
 ```
 
+#### 3. Docker (No Java Required)
+
+Docker eliminates the need to install Java 25+ locally. The server runs in a container with project directories mounted as volumes.
+
+> **Important: Docker Mode and Roots**
+>
+> In Docker, you must explicitly mount directories and specify them via `NTS_DOCKER_ROOTS`. These roots **override** any roots sent by the MCP client, because the client sends host paths that don't exist inside the container.
+
+**Option A: Use pre-built image (recommended)**
+
+```bash
+docker pull ghcr.io/nefrols/nts-mcp-fs:latest
+```
+
+**Single project:**
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/home/user/myproject:/mnt/project",
+        "-e", "NTS_DOCKER_ROOTS=/mnt/project",
+        "ghcr.io/nefrols/nts-mcp-fs:latest"
+      ]
+    }
+  }
+}
+```
+
+**Multiple projects:**
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/home/user/project1:/mnt/p1",
+        "-v", "/home/user/project2:/mnt/p2",
+        "-e", "NTS_DOCKER_ROOTS=/mnt/p1:/mnt/p2",
+        "ghcr.io/nefrols/nts-mcp-fs:latest"
+      ]
+    }
+  }
+}
+```
+
+**Option B: Build locally**
+```bash
+docker build -t nts-mcp-fs .
+docker run -i --rm \
+  -v /path/to/project:/mnt/project \
+  -e NTS_DOCKER_ROOTS=/mnt/project \
+  nts-mcp-fs
+```
+
+**Environment variables:**
+| Variable | Description |
+|----------|-------------|
+| `NTS_DOCKER_ROOTS` | **Required.** Colon-separated list of root paths inside the container. Must match your `-v` mount points. Overrides client roots. |
+| `JAVA_OPTS` | JVM options (default: `-XX:+UseZGC -Xmx512m`) |
+| `MCP_DEBUG` | Set to `true` for debug logging |
+
+**Available image tags:**
+| Tag | Description |
+|-----|-------------|
+| `latest` | Latest stable release |
+| `1.2.3` | Specific version |
+| `1.2` | Latest patch of minor version |
+| `edge` | Latest development build (main branch) |
+
 ---
 
 <a name="-russian"></a>
@@ -924,6 +998,79 @@ java -jar app/build/libs/app-all.jar --integrate
   }
 }
 ```
+
+#### 3. Docker (Без установки Java)
+
+Docker избавляет от необходимости устанавливать Java 25+ локально. Сервер работает в контейнере, а директории проектов монтируются как volumes.
+
+> **Важно: Docker-режим и Roots**
+>
+> В Docker необходимо явно монтировать директории и указывать их через `NTS_DOCKER_ROOTS`. Эти roots **переопределяют** любые roots от MCP-клиента, поскольку клиент передаёт пути хост-системы, которые не существуют внутри контейнера.
+
+**Вариант А: Готовый образ (рекомендуется)**
+
+```bash
+docker pull ghcr.io/nefrols/nts-mcp-fs:latest
+```
+
+**Один проект:**
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/home/user/myproject:/mnt/project",
+        "-e", "NTS_DOCKER_ROOTS=/mnt/project",
+        "ghcr.io/nefrols/nts-mcp-fs:latest"
+      ]
+    }
+  }
+}
+```
+
+**Несколько проектов:**
+```json
+{
+  "mcpServers": {
+    "NTS-FileSystem": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/home/user/project1:/mnt/p1",
+        "-v", "/home/user/project2:/mnt/p2",
+        "-e", "NTS_DOCKER_ROOTS=/mnt/p1:/mnt/p2",
+        "ghcr.io/nefrols/nts-mcp-fs:latest"
+      ]
+    }
+  }
+}
+```
+
+**Вариант Б: Локальная сборка**
+```bash
+docker build -t nts-mcp-fs .
+docker run -i --rm \
+  -v /путь/к/проекту:/mnt/project \
+  -e NTS_DOCKER_ROOTS=/mnt/project \
+  nts-mcp-fs
+```
+
+**Переменные окружения:**
+| Переменная | Описание |
+|------------|----------|
+| `NTS_DOCKER_ROOTS` | **Обязательна.** Список путей внутри контейнера через двоеточие. Должны соответствовать точкам монтирования `-v`. Переопределяет roots от клиента. |
+| `JAVA_OPTS` | Опции JVM (по умолчанию: `-XX:+UseZGC -Xmx512m`) |
+| `MCP_DEBUG` | Установите `true` для отладочного логирования |
+
+**Доступные теги образа:**
+| Тег | Описание |
+|-----|----------|
+| `latest` | Последний стабильный релиз |
+| `1.2.3` | Конкретная версия |
+| `1.2` | Последний патч минорной версии |
+| `edge` | Последняя dev-сборка (ветка main) |
 
 ---
 

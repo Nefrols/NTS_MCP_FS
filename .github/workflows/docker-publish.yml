@@ -1,0 +1,107 @@
+# =============================================================================
+# GitHub Actions: Build and publish Docker image to GitHub Container Registry
+# =============================================================================
+# Triggers:
+#   - On release: builds and tags with version (v1.2.3 -> 1.2.3, latest)
+#   - On push to main: builds and tags as 'edge' (development version)
+#
+# Images are published to: ghcr.io/nefrols/nts-mcp-fs
+# =============================================================================
+
+name: Docker Build & Publish
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - 'Dockerfile'
+      - '.github/workflows/docker-publish.yml'
+  workflow_dispatch:  # Manual trigger
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nefrols/nts-mcp-fs
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      # ----------------------------------------------------------------------
+      # Setup
+      # ----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for multi-platform builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ----------------------------------------------------------------------
+      # Authentication
+      # ----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ----------------------------------------------------------------------
+      # Metadata (tags and labels)
+      # ----------------------------------------------------------------------
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # For releases: v1.2.3 -> 1.2.3, 1.2, 1, latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # For main branch pushes: edge
+            type=edge,branch=main
+            # Always include commit SHA for traceability
+            type=sha,prefix=
+          labels: |
+            org.opencontainers.image.title=NTS MCP FileSystem Server
+            org.opencontainers.image.description=Transactional File System server for Model Context Protocol
+            org.opencontainers.image.vendor=Nefrols
+
+      # ----------------------------------------------------------------------
+      # Build and Push
+      # ----------------------------------------------------------------------
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ----------------------------------------------------------------------
+      # Attestation (provenance)
+      # ----------------------------------------------------------------------
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

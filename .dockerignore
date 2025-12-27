@@ -1,0 +1,38 @@
+# =============================================================================
+# Docker ignore file for NTS MCP FileSystem Server
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Build artifacts (we rebuild in Docker)
+build/
+app/build/
+.gradle/
+**/bin/
+**/out/
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+.nts/
+
+# Docker files (no recursion needed)
+Dockerfile
+docker-compose*.yml
+.dockerignore

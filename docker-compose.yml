@@ -1,0 +1,88 @@
+# =============================================================================
+# Docker Compose for NTS MCP FileSystem Server
+# =============================================================================
+#
+# IMPORTANT: Docker Mode and Roots
+# --------------------------------
+# You MUST set PROJECT_PATH and use NTS_DOCKER_ROOTS.
+# The NTS_DOCKER_ROOTS environment variable overrides client-provided roots
+# because client sends host paths that don't exist inside the container.
+#
+# Usage:
+#   Single project:
+#     PROJECT_PATH=/home/user/myproject docker compose run --rm nts
+#
+#   Multiple projects (edit this file to add more volumes):
+#     docker compose run --rm nts-multi
+#
+#   Using pre-built image:
+#     PROJECT_PATH=/home/user/myproject docker compose run --rm nts-prebuilt
+#
+#   With debug logging:
+#     PROJECT_PATH=/home/user/myproject MCP_DEBUG=true docker compose run --rm nts
+#
+# Note: MCP servers use stdio, so we need 'docker compose run' (not 'up')
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Local build - single project
+  # ---------------------------------------------------------------------------
+  nts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nts-mcp-fs:local
+    stdin_open: true   # -i flag: required for MCP stdio
+    volumes:
+      - ${PROJECT_PATH:-.}:/mnt/project
+    environment:
+      - NTS_DOCKER_ROOTS=/mnt/project
+      - MCP_DEBUG=${MCP_DEBUG:-false}
+      - MCP_LOG_FILE=${MCP_LOG_FILE:-}
+
+  # ---------------------------------------------------------------------------
+  # Local build - multiple projects example
+  # Edit the volumes and NTS_DOCKER_ROOTS to match your setup
+  # ---------------------------------------------------------------------------
+  nts-multi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nts-mcp-fs:local
+    stdin_open: true
+    volumes:
+      - ${PROJECT1_PATH:-./project1}:/mnt/p1
+      - ${PROJECT2_PATH:-./project2}:/mnt/p2
+    environment:
+      - NTS_DOCKER_ROOTS=/mnt/p1:/mnt/p2
+      - MCP_DEBUG=${MCP_DEBUG:-false}
+
+  # ---------------------------------------------------------------------------
+  # Pre-built image from GitHub Container Registry
+  # ---------------------------------------------------------------------------
+  nts-prebuilt:
+    image: ghcr.io/nefrols/nts-mcp-fs:latest
+    stdin_open: true
+    volumes:
+      - ${PROJECT_PATH:-.}:/mnt/project
+    environment:
+      - NTS_DOCKER_ROOTS=/mnt/project
+      - MCP_DEBUG=${MCP_DEBUG:-false}
+
+  # ---------------------------------------------------------------------------
+  # Debug mode (logs to file for troubleshooting)
+  # ---------------------------------------------------------------------------
+  nts-debug:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nts-mcp-fs:local
+    stdin_open: true
+    volumes:
+      - ${PROJECT_PATH:-.}:/mnt/project
+      - ./logs:/logs
+    environment:
+      - NTS_DOCKER_ROOTS=/mnt/project
+      - MCP_DEBUG=true
+      - MCP_LOG_FILE=/logs/nts-mcp.log

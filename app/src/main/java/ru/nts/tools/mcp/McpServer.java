@@ -134,6 +134,12 @@ public class McpServer {
     private static volatile boolean clientSupportsRootsListChanged = false;
 
     /**
+     * Флаг, указывающий что roots заданы через NTS_DOCKER_ROOTS и не должны переопределяться клиентом.
+     * Используется в Docker-режиме, где roots должны соответствовать смонтированным volume.
+     */
+    private static volatile boolean dockerRootsOverride = false;
+
+    /**
      * Имя клиента (для логирования).
      */
     private static volatile String clientName = "";
@@ -243,10 +249,20 @@ public class McpServer {
      * Обрабатывает список roots, полученный от клиента.
      * Устанавливает полученные roots в PathSanitizer.
      *
+     * В Docker-режиме (NTS_DOCKER_ROOTS задан) клиентские roots игнорируются,
+     * так как они указывают на пути хост-системы, которые недоступны внутри контейнера.
+     *
      * @param rootsArray JSON массив с объектами {uri: "file://...", name: "..."}
      */
     private static void processRootsResponse(JsonNode rootsArray) {
         log("Processing roots response: " + rootsArray);
+
+        // В Docker-режиме клиентские roots игнорируются
+        if (dockerRootsOverride) {
+            log("Docker mode: ignoring client roots (NTS_DOCKER_ROOTS is set). " +
+                "Using mounted volumes: " + ru.nts.tools.mcp.core.PathSanitizer.getRoots());
+            return;
+        }
 
         if (rootsArray == null || !rootsArray.isArray()) {
             log("Invalid roots response: expected array, got " + (rootsArray == null ? "null" : rootsArray.getNodeType()));
@@ -298,17 +314,44 @@ public class McpServer {
             return;
         }
 
-        // Пытаемся получить корень проекта из переменной окружения PROJECT_ROOT.
-        // Это важно, так как при запуске через MCP клиенты (Gemini, Claude) могут иметь произвольный CWD.
-        String projectRoot = System.getenv("PROJECT_ROOT");
-        if (projectRoot != null && !projectRoot.isBlank()) {
-            ru.nts.tools.mcp.core.PathSanitizer.setRoot(java.nio.file.Paths.get(projectRoot));
-            if (DEBUG) {
-                System.err.println("Project root set from PROJECT_ROOT env: " + projectRoot);
+        // Docker mode: NTS_DOCKER_ROOTS переопределяет все остальные источники roots.
+        // Формат: /path1:/path2:/path3 (разделитель - двоеточие на Unix, точка с запятой на Windows)
+        // Эти пути должны соответствовать смонтированным Docker volumes.
+        String dockerRoots = System.getenv("NTS_DOCKER_ROOTS");
+        if (dockerRoots != null && !dockerRoots.isBlank()) {
+            String separator = System.getProperty("os.name").toLowerCase().contains("win") ? ";" : ":";
+            String[] rootPaths = dockerRoots.split(separator);
+            List<Path> roots = new ArrayList<>();
+            for (String rootPath : rootPaths) {
+                if (!rootPath.isBlank()) {
+                    Path path = java.nio.file.Paths.get(rootPath.trim()).toAbsolutePath().normalize();
+                    roots.add(path);
+                    if (DEBUG) {
+                        System.err.println("Docker root added: " + path);
+                    }
+                }
             }
-        } else {
-            if (DEBUG) {
-                System.err.println("No PROJECT_ROOT env found, using CWD as root: " + ru.nts.tools.mcp.core.PathSanitizer.getRoot());
+            if (!roots.isEmpty()) {
+                ru.nts.tools.mcp.core.PathSanitizer.setRoots(roots);
+                dockerRootsOverride = true;
+                if (DEBUG) {
+                    System.err.println("Docker mode: " + roots.size() + " root(s) set from NTS_DOCKER_ROOTS, client roots will be ignored");
+                }
+            }
+        }
+
+        // Fallback: PROJECT_ROOT используется только если NTS_DOCKER_ROOTS не задан
+        if (!dockerRootsOverride) {
+            String projectRoot = System.getenv("PROJECT_ROOT");
+            if (projectRoot != null && !projectRoot.isBlank()) {
+                ru.nts.tools.mcp.core.PathSanitizer.setRoot(java.nio.file.Paths.get(projectRoot));
+                if (DEBUG) {
+                    System.err.println("Project root set from PROJECT_ROOT env: " + projectRoot);
+                }
+            } else {
+                if (DEBUG) {
+                    System.err.println("No PROJECT_ROOT env found, using CWD as root: " + ru.nts.tools.mcp.core.PathSanitizer.getRoot());
+                }
             }
         }
 
