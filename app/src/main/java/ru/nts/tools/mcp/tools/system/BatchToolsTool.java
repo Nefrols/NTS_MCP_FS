@@ -71,12 +71,18 @@ public class BatchToolsTool implements McpTool {
             - All-or-nothing: If ANY action fails -> ALL rolled back
             - Session Tokens: CRC check skipped within batch (no re-read needed)
             - InfinityRange: Files created in batch have no line boundary checks
+            - Virtual FS Context: nts_code_refactor sees in-memory edits from previous steps
 
             VARIABLE INTERPOLATION (token & path passing):
-            - {{step1.token}}  - First LAT token from step 1
-            - {{step1.tokens}} - All tokens comma-separated
-            - {{myId.token}}   - Reference by action 'id'
-            - {{myId.path}}    - Current file path (auto-updates after rename/move!)
+            - {{step1.token}}   - First LAT token from step 1
+            - {{step1.tokens}}  - All tokens comma-separated
+            - {{myId.token}}    - Reference by action 'id'
+            - {{myId.path}}     - Current file path (auto-updates after rename/move!)
+
+            REFACTOR INTEGRATION (nts_code_refactor returns affectedFiles):
+            - {{ref.affectedFiles[0].accessToken}} - Token for first affected file
+            - {{ref.affectedFiles[0].path}}        - Path of first affected file
+            - {{ref.token}}                         - Shortcut when single file affected
 
             SESSION REFERENCES (path tracking after rename/move):
             Use {{id.path}} to reference a file that was renamed/moved:
@@ -86,17 +92,16 @@ public class BatchToolsTool implements McpTool {
               {tool: 'nts_edit_file', params: {path: '{{f.path}}', ...}}  // <- auto-resolves to 'New.java'!
             ]
 
-            SMART LINE ADDRESSING (Virtual FS Context):
+            SMART LINE ADDRESSING:
             For startLine/endLine, use special values that auto-calculate:
             - $LAST           - Last line of the file
             - $PREV_END       - End line of previous edit on this file
             - $PREV_END+N     - N lines after previous edit (e.g., $PREV_END+1)
 
-            EXAMPLE (create + rename + edit):
+            EXAMPLE (refactor + edit chain):
             actions: [
-              {id: 'svc', tool: 'nts_file_manage', params: {action: 'create', path: 'Service.java', content: 'class Service {}'}},
-              {tool: 'nts_file_manage', params: {action: 'rename', path: '{{svc.path}}', newName: 'UserService.java'}},
-              {tool: 'nts_edit_file', params: {path: '{{svc.path}}', startLine: 1, content: 'class UserService {}', accessToken: '{{svc.token}}'}}
+              {id: 'ref', tool: 'nts_code_refactor', params: {action: 'rename', path: 'User.java', symbol: 'getName', newName: 'getFullName'}},
+              {tool: 'nts_edit_file', params: {path: '{{ref.affectedFiles[0].path}}', startLine: 1, operation: 'insert_after', content: '// Renamed method', accessToken: '{{ref.affectedFiles[0].accessToken}}'}}
             ]
 
             LIMITATION: Only NTS MCP tools tracked in rollback.

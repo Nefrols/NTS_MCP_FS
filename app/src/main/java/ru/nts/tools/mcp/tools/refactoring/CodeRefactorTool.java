@@ -65,12 +65,21 @@ public class CodeRefactorTool implements McpTool {
                   path + symbol + newName [+ kind] [+ scope]
                   scope: file|directory|project (default: project)
 
+                CHANGE_SIGNATURE:
+                  path + symbol (method) + params: [{name, type, action: add|remove|rename|retype|reorder}]
+                  Automatically updates ALL call sites across the project!
+
                 GENERATE:
                   path + symbol (class name) + what (accessors|constructor|builder|toString)
 
                 LANGUAGES: Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML
 
-                OTHER: delete, wrap, extract_method, inline, change_signature, move, batch
+                OTHER: delete, wrap, extract_method, inline, move, batch
+
+                BATCH INTEGRATION:
+                Returns 'affectedFiles' array with access tokens for each modified file.
+                Use in nts_batch_tools: {{step.affectedFiles[0].accessToken}} or {{step.token}} (single file shortcut).
+                Enables chains like: refactor -> edit without re-reading files!
                 """;
     }
 
@@ -214,6 +223,27 @@ public class CodeRefactorTool implements McpTool {
         ObjectNode options = properties.putObject("options");
         options.put("type", "object");
         options.put("description", "Additional options specific to operation");
+
+        // params (for change_signature)
+        ObjectNode csParams = properties.putObject("params");
+        csParams.put("type", "array");
+        ObjectNode csItem = csParams.putObject("items");
+        csItem.put("type", "object");
+        ObjectNode csItemProps = csItem.putObject("properties");
+        csItemProps.putObject("name").put("type", "string").put("description", "Parameter name");
+        csItemProps.putObject("type").put("type", "string").put("description", "Parameter type (for add/retype)");
+        csItemProps.putObject("newName").put("type", "string").put("description", "New name (for rename)");
+        csItemProps.putObject("defaultValue").put("type", "string").put("description", "Default value for new parameter");
+        ObjectNode csAction = csItemProps.putObject("action");
+        csAction.put("type", "string");
+        ArrayNode csActionEnum = csAction.putArray("enum");
+        csActionEnum.add("add");
+        csActionEnum.add("remove");
+        csActionEnum.add("rename");
+        csActionEnum.add("retype");
+        csActionEnum.add("reorder");
+        csAction.put("description", "What to do with parameter");
+        csParams.put("description", "[change_signature] Parameter modifications: add, remove, rename, retype, reorder");
 
         // operations (for batch)
         ObjectNode operations = properties.putObject("operations");

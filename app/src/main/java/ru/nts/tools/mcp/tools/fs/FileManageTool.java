@@ -59,7 +59,8 @@ public class FileManageTool implements McpTool {
 
             TOKEN BEHAVIOR:
             - create: Returns access token for immediate editing (no read needed!)
-            - move/rename: Tokens automatically transferred to new path
+            - move/rename: Tokens transferred via PATH ALIASING - even chains work!
+              Example: A.java -> B.java -> C.java - token from A.java still valid for C.java
             - delete: All tokens for the file are invalidated
 
             SAFETY:
