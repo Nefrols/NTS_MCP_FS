@@ -319,7 +319,9 @@ public class SessionLineAccessTracker {
             }
 
             // Создаём новый токен для изменённого диапазона
-            int newEditEnd = editEnd + lineDelta;
+            // При удалении (lineDelta < 0) newEditEnd может стать < editStart
+            // Гарантируем что newEditEnd >= editStart (минимум одна строка покрытия)
+            int newEditEnd = Math.max(editStart, editEnd + lineDelta);
             LineAccessToken editToken = new LineAccessToken(absPath, editStart, newEditEnd, newRangeCrc, newLineCount);
             newTokens.put(editStart, editToken);
 

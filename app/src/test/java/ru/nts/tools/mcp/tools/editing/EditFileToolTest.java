@@ -215,6 +215,36 @@ class EditFileToolTest {
     }
 
     /**
+     * Тестирует удаление одиночной строки (regression test для off-by-one бага).
+     * Баг: при delete startLine=N, endLine=N, lineDelta=-1 приводило к
+     * newEditEnd = N + (-1) = N-1 < N, что вызывало ошибку валидации токена.
+     */
+    @Test
+    void testDeleteSingleLine() throws Exception {
+        Path file = tempDir.resolve("delete_single.txt");
+        Files.write(file, List.of("Line 1", "Line 2", "Line 3", "Line 4", "Line 5"));
+        String token = registerFullAccess(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("accessToken", token);
+        ArrayNode ops = params.putArray("operations");
+
+        // Удаление только строки 3 (startLine == endLine)
+        ops.addObject().put("operation", "delete").put("startLine", 3).put("endLine", 3);
+
+        // Это не должно выбрасывать "endLine (2) must be >= startLine (3)"
+        tool.execute(params);
+
+        List<String> result = Files.readAllLines(file);
+        assertEquals(4, result.size());
+        assertEquals("Line 1", result.get(0));
+        assertEquals("Line 2", result.get(1));
+        assertEquals("Line 4", result.get(2));  // Line 3 удалена
+        assertEquals("Line 5", result.get(3));
+    }
+
+    /**
      * Тестирует операцию вставки после указанной строки.
      */
     @Test
