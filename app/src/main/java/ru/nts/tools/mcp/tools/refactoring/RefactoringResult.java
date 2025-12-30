@@ -53,8 +53,18 @@ public record RefactoringResult(
             int occurrences,
             List<ChangeDetail> details,
             String newToken,
-            String diff
-    ) {}
+            String diff,
+            long crc32c,
+            int lineCount
+    ) {
+        /**
+         * Конструктор для обратной совместимости (без crc32c и lineCount).
+         */
+        public FileChange(Path path, int occurrences, List<ChangeDetail> details,
+                          String newToken, String diff) {
+            this(path, occurrences, details, newToken, diff, 0, 0);
+        }
+    }
 
     /**
      * Детали конкретного изменения.

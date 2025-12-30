@@ -18,7 +18,10 @@ package ru.nts.tools.mcp.tools.refactoring.operations;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.FileUtils;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
@@ -137,8 +140,18 @@ public class InlineOperation implements RefactoringOperation {
                 FileUtils.safeWrite(filePath, newContent, StandardCharsets.UTF_8);
                 context.getTreeManager().invalidateCache(filePath);
 
+                // Вычисляем метаданные и регистрируем токен
+                int lineCount = lines.size();
+                long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+                // Обновляем снапшот сессии для синхронизации с batch tools
+                SessionContext.currentOrDefault().externalChanges()
+                    .updateSnapshot(filePath, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+                LineAccessToken token = LineAccessTracker.registerAccess(filePath, 1, lineCount, newContent, lineCount);
+
                 changes.add(new RefactoringResult.FileChange(
-                        filePath, fileUsages.size(), details, null, null));
+                        filePath, fileUsages.size(), details, token.encode(), null, crc32c, lineCount));
             }
 
             // Удаляем объявление если нужно
@@ -444,12 +457,22 @@ public class InlineOperation implements RefactoringOperation {
             FileUtils.safeWrite(path, newContent, StandardCharsets.UTF_8);
             context.getTreeManager().invalidateCache(path);
 
+            // Вычисляем метаданные и регистрируем токен
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+            LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount);
+
             return new RefactoringResult.FileChange(
                     path, 1,
                     List.of(new RefactoringResult.ChangeDetail(
                             symbol.location().startLine(), 0,
                             deleted.toString().trim(), "[DELETED]")),
-                    null, null
+                    token.encode(), null, crc32c, lineCount
             );
 
         } catch (IOException e) {

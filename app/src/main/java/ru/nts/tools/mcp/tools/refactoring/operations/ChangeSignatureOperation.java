@@ -19,7 +19,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.treesitter.TSNode;
 import org.treesitter.TSTree;
 import ru.nts.tools.mcp.core.FileUtils;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.MethodSignatureAST;
@@ -832,12 +835,22 @@ public class ChangeSignatureOperation implements RefactoringOperation {
             FileUtils.safeWrite(path, newContent, StandardCharsets.UTF_8);
             context.getTreeManager().invalidateCache(path);
 
+            // Вычисляем метаданные и регистрируем токен
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+            LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount);
+
             return new RefactoringResult.FileChange(
                     path, 1,
                     List.of(new RefactoringResult.ChangeDetail(
                             lineIndex + 1, 0, // lineIndex is 0-based, ChangeDetail expects 1-based
                             oldLine.trim(), newLine.trim())),
-                    null, null);
+                    token.encode(), null, crc32c, lineCount);
 
         } catch (IOException e) {
             throw new RefactoringException("Failed to update declaration: " + e.getMessage(), e);
@@ -958,7 +971,17 @@ public class ChangeSignatureOperation implements RefactoringOperation {
             FileUtils.safeWrite(path, newContent, StandardCharsets.UTF_8);
             context.getTreeManager().invalidateCache(path);
 
-            return new RefactoringResult.FileChange(path, details.size(), details, null, null);
+            // Вычисляем метаданные и регистрируем токен
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+            LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount);
+
+            return new RefactoringResult.FileChange(path, details.size(), details, token.encode(), null, crc32c, lineCount);
 
         } catch (IOException e) {
             throw new RefactoringException("Failed to update call sites: " + e.getMessage(), e);

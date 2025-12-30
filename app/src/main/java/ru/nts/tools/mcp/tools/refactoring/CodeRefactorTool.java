@@ -322,9 +322,26 @@ public class CodeRefactorTool implements McpTool {
                     }
                 }
             }
+
+            // affectedFiles array для интеграции с batch tools
+            ArrayNode affectedFiles = json.putArray("affectedFiles");
+            for (RefactoringResult.FileChange change : result.changes()) {
+                if (change.newToken() != null) {
+                    ObjectNode fileNode = affectedFiles.addObject();
+                    fileNode.put("path", change.path().toString());
+                    fileNode.put("crc32c", String.format("%08X", change.crc32c()));
+                    fileNode.put("lineCount", change.lineCount());
+                    fileNode.put("accessToken", change.newToken());
+                    fileNode.put("occurrenceCount", change.occurrences());
+                }
+            }
+
+            // Shortcut для batch: если один файл - добавляем token на верхний уровень
+            if (result.changes().size() == 1 && result.changes().get(0).newToken() != null) {
+                json.put("token", result.changes().get(0).newToken());
+            }
         }
 
-        json.put("affectedFiles", result.affectedFiles());
         json.put("totalChanges", result.totalChanges());
 
         if (result.transactionId() != null) {
@@ -359,7 +376,11 @@ public class CodeRefactorTool implements McpTool {
             text.append("\nChanges:\n");
             for (RefactoringResult.FileChange change : result.changes()) {
                 text.append("  ").append(change.path()).append(": ")
-                        .append(change.occurrences()).append(" occurrence(s)\n");
+                        .append(change.occurrences()).append(" occurrence(s)");
+                if (change.newToken() != null) {
+                    text.append(" [TOKEN: ").append(change.newToken().substring(0, Math.min(40, change.newToken().length()))).append("...]");
+                }
+                text.append("\n");
 
                 if (change.diff() != null && result.status() == RefactoringResult.Status.PREVIEW) {
                     text.append(change.diff()).append("\n");

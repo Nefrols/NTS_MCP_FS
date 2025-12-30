@@ -17,7 +17,10 @@ package ru.nts.tools.mcp.tools.refactoring.operations;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import ru.nts.tools.mcp.core.FileUtils;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
@@ -542,12 +545,24 @@ public class RenameOperation implements RefactoringOperation {
             String newContent = String.join("\n", lines);
             FileUtils.safeWrite(filePath, newContent, java.nio.charset.StandardCharsets.UTF_8);
 
+            // Вычисляем метаданные после записи
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(filePath, newContent, crc32c, java.nio.charset.StandardCharsets.UTF_8, lineCount);
+
+            // Регистрируем токен доступа на весь файл
+            LineAccessToken token = LineAccessTracker.registerAccess(filePath, 1, lineCount, newContent, lineCount);
+
             // Инвалидируем кэш tree-sitter
             context.getTreeManager().invalidateCache(filePath);
 
             changes.add(new RefactoringResult.FileChange(
-                    filePath, details.size(), details, null,
-                    skippedCount > 0 ? String.format("Skipped %d locations due to integrity check", skippedCount) : null));
+                    filePath, details.size(), details, token.encode(),
+                    skippedCount > 0 ? String.format("Skipped %d locations due to integrity check", skippedCount) : null,
+                    crc32c, lineCount));
         }
 
         // Если были предупреждения целостности, добавляем их в лог

@@ -18,7 +18,10 @@ package ru.nts.tools.mcp.tools.refactoring.operations;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.FileUtils;
+import ru.nts.tools.mcp.core.LineAccessToken;
+import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.SessionContext;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
@@ -354,13 +357,23 @@ public class MoveOperation implements RefactoringOperation {
             FileUtils.safeWrite(path, newContent, StandardCharsets.UTF_8);
             context.getTreeManager().invalidateCache(path);
 
+            // Вычисляем метаданные и регистрируем токен
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+            LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount);
+
             return new RefactoringResult.FileChange(
                     path, 1,
                     List.of(new RefactoringResult.ChangeDetail(
                             symbol.location().startLine(), 0,
                             removed.toString().trim().split("\n")[0] + "...",
                             "[REMOVED]")),
-                    null, null);
+                    token.encode(), null, crc32c, lineCount);
 
         } catch (IOException e) {
             throw new RefactoringException("Failed to remove symbol: " + e.getMessage(), e);
@@ -404,13 +417,23 @@ public class MoveOperation implements RefactoringOperation {
             FileUtils.safeWrite(targetPath, newContent, StandardCharsets.UTF_8);
             context.getTreeManager().invalidateCache(targetPath);
 
+            // Вычисляем метаданные и регистрируем токен
+            int lineCount = lines.size();
+            long crc32c = LineAccessToken.computeRangeCrc(newContent);
+
+            // Обновляем снапшот сессии для синхронизации с batch tools
+            SessionContext.currentOrDefault().externalChanges()
+                .updateSnapshot(targetPath, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
+
+            LineAccessToken token = LineAccessTracker.registerAccess(targetPath, 1, lineCount, newContent, lineCount);
+
             return new RefactoringResult.FileChange(
                     targetPath, 1,
                     List.of(new RefactoringResult.ChangeDetail(
                             insertLine + 1, 0,
                             "",
                             code.trim().split("\n")[0] + "...")),
-                    null, null);
+                    token.encode(), null, crc32c, lineCount);
 
         } catch (IOException e) {
             throw new RefactoringException("Failed to add symbol: " + e.getMessage(), e);
