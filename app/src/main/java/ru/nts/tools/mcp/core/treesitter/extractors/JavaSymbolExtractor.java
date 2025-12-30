@@ -18,9 +18,11 @@ package ru.nts.tools.mcp.core.treesitter.extractors;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo.ParameterInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import static ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.*;
@@ -62,12 +64,15 @@ public class JavaSymbolExtractor implements LanguageSymbolExtractor {
         String doc = extractPrecedingComment(node, content);
         String signature = extractMethodSignature(node, content);
 
+        // Извлекаем структурированные параметры из AST
+        List<ParameterInfo> params = extractParameters(node, content);
+
         TSNode returnType = findChildByType(node, "type_identifier");
         if (returnType == null) returnType = findChildByType(node, "void_type");
         if (returnType == null) returnType = findChildByType(node, "generic_type");
         String type = returnType != null ? getNodeText(returnType, content) : null;
 
-        return Optional.of(new SymbolInfo(name, SymbolKind.METHOD, type, signature, doc, location, parentName));
+        return Optional.of(new SymbolInfo(name, SymbolKind.METHOD, type, signature, params, doc, location, parentName));
     }
 
     private Optional<SymbolInfo> extractConstructor(TSNode node, Path path, String content, String parentName) {
@@ -79,7 +84,10 @@ public class JavaSymbolExtractor implements LanguageSymbolExtractor {
         String doc = extractPrecedingComment(node, content);
         String signature = extractMethodSignature(node, content);
 
-        return Optional.of(new SymbolInfo(name, SymbolKind.CONSTRUCTOR, null, signature, doc, location, parentName));
+        // Извлекаем структурированные параметры из AST
+        List<ParameterInfo> params = extractParameters(node, content);
+
+        return Optional.of(new SymbolInfo(name, SymbolKind.CONSTRUCTOR, null, signature, params, doc, location, parentName));
     }
 
     private Optional<SymbolInfo> extractField(TSNode node, Path path, String content, String parentName) {

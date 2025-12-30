@@ -54,19 +54,36 @@ public class CodeNavigateTool implements McpTool {
     @Override
     public String getDescription() {
         return """
-            LSP-like code navigation (tree-sitter).
+            Code navigation using tree-sitter AST.
 
-            ACTIONS:
-            - definition: Go to symbol definition
-            - references: Find all usages (scope: file|directory|project)
-            - hover: Symbol info (type, signature, docs)
-            - symbols: List all symbols in file
+            ACTIONS (fast to slow):
+            - symbols  : [FAST] List all symbols in file
+            - hover    : [FAST] Get symbol info at position
+            - definition: [MEDIUM] Find where symbol is defined
+            - references: [SLOW for scope=project] Find all usages
 
-            INPUT: path + (line/column OR symbol name)
+            POSITIONING (mutually exclusive):
+            - line + column: exact position (1-based)
+            - symbol: search by name (slower but more convenient)
+
+            SCOPE for 'references' action:
+            - 'file' (default, fastest)
+            - 'directory' (medium)
+            - 'project' (slowest, scans up to 500 files)
+
+            PERFORMANCE TIPS:
+            - Use scope='file' first, expand if needed
+            - Prefer line/column over symbol name when possible
+            - Large projects (1000+ files): expect delays for scope=project
+
+            EXAMPLES:
+            {"action":"definition", "path":"User.java", "line":42, "column":15}
+            {"action":"references", "path":"User.java", "symbol":"getUserById", "scope":"file"}
+            {"action":"symbols", "path":"User.java"}
+            {"action":"hover", "path":"User.java", "line":10}
 
             LANGUAGES: Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML
 
-            TIP: Use 'references' before nts_code_refactor to preview affected locations.
             Returns TOKENs for nts_edit_file.
             """;
     }
@@ -99,7 +116,8 @@ public class CodeNavigateTool implements McpTool {
                 "Use when you know the symbol name but not its exact position.");
 
         props.putObject("scope").put("type", "string").put("description",
-                "Search scope for references: 'file', 'directory', 'project'. Default: 'project'.");
+                "Search scope for references: 'file' (fast, default), 'directory' (medium), " +
+                "'project' (slow, scans 500+ files). Start with 'file', expand only if needed.");
 
         props.putObject("includeDeclaration").put("type", "boolean").put("description",
                 "Include declaration in references result. Default: true.");
@@ -217,7 +235,7 @@ public class CodeNavigateTool implements McpTool {
     private JsonNode executeReferences(Path path, JsonNode params) throws IOException {
         int line = params.path("line").asInt(0);
         int column = params.path("column").asInt(1);
-        String scope = params.path("scope").asText("project");
+        String scope = params.path("scope").asText("file");  // Default to fastest scope
         boolean includeDeclaration = params.path("includeDeclaration").asBoolean(true);
         String symbolName = params.path("symbol").asText(null);
 

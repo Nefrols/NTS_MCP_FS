@@ -16,11 +16,15 @@
 package ru.nts.tools.mcp.tools.refactoring.operations;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.PathSanitizer;
+import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
+import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
 import ru.nts.tools.mcp.tools.refactoring.*;
 
 import java.io.IOException;
@@ -275,73 +279,110 @@ public class InlineOperation implements RefactoringOperation {
 
     /**
      * Извлекает значение или тело символа для инлайнинга.
+     * Использует AST для точного извлечения.
      */
     private String extractInlineValue(SymbolInfo symbol, Path path, RefactoringContext context)
             throws RefactoringException {
         try {
-            String content = Files.readString(path);
-            String[] lines = content.split("\n", -1);
+            String langId = LanguageDetector.detect(path).orElse("java");
 
-            int startLine = symbol.location().startLine() - 1;
+            // Пробуем AST-based извлечение
+            TreeSitterManager.ParseResult parseResult = context.getParseResult(path);
+            TSNode root = parseResult.tree().getRootNode();
+            String content = parseResult.content();
+
+            int startLine = symbol.location().startLine() - 1; // 0-based для tree-sitter
             int endLine = symbol.location().endLine() - 1;
 
-            if (startLine < 0 || startLine >= lines.length) {
-                return null;
-            }
-
-            String line = lines[startLine];
-
-            // Для переменных/констант извлекаем значение после =
+            // Для переменных/констант извлекаем значение
             if (symbol.kind() == SymbolKind.VARIABLE ||
                     symbol.kind() == SymbolKind.FIELD ||
                     symbol.kind() == SymbolKind.CONSTANT) {
 
-                Pattern valuePattern = Pattern.compile(
-                        symbol.name() + "\\s*=\\s*(.+?)\\s*[;,]?\\s*$");
-                Matcher matcher = valuePattern.matcher(line);
-                if (matcher.find()) {
-                    return matcher.group(1).trim();
+                String value = SymbolExtractorUtils.extractVariableValue(
+                        root, content, startLine, symbol.name(), langId);
+
+                if (value != null) {
+                    return value;
                 }
+
+                // Fallback на regex
+                return extractVariableValueRegex(content, symbol.name(), startLine);
             }
 
             // Для методов извлекаем тело
             if (symbol.kind() == SymbolKind.METHOD ||
                     symbol.kind() == SymbolKind.FUNCTION) {
 
-                StringBuilder body = new StringBuilder();
-                boolean inBody = false;
-                int braceCount = 0;
+                String body = SymbolExtractorUtils.extractMethodBodyForInline(
+                        root, content, startLine, endLine, langId);
 
-                for (int i = startLine; i <= endLine && i < lines.length; i++) {
-                    String l = lines[i];
-                    for (char c : l.toCharArray()) {
-                        if (c == '{') {
-                            inBody = true;
-                            braceCount++;
-                        } else if (c == '}') {
-                            braceCount--;
-                        }
-                    }
-
-                    if (inBody && braceCount > 0) {
-                        // Удаляем return если это единственный statement
-                        String trimmed = l.trim();
-                        if (trimmed.startsWith("return ") && trimmed.endsWith(";")) {
-                            body.append(trimmed.substring(7, trimmed.length() - 1));
-                        } else if (!trimmed.equals("{") && !trimmed.equals("}")) {
-                            body.append(trimmed);
-                        }
-                    }
+                if (body != null) {
+                    return body;
                 }
 
-                return body.toString().trim();
+                // Fallback на regex
+                return extractMethodBodyRegex(content, startLine, endLine);
             }
 
             return null;
 
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new RefactoringException("Failed to extract value: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Fallback regex-based извлечение значения переменной.
+     */
+    private String extractVariableValueRegex(String content, String symbolName, int startLine) {
+        String[] lines = content.split("\n", -1);
+        if (startLine < 0 || startLine >= lines.length) {
+            return null;
+        }
+
+        String line = lines[startLine];
+        Pattern valuePattern = Pattern.compile(
+                symbolName + "\\s*=\\s*(.+?)\\s*[;,]?\\s*$");
+        Matcher matcher = valuePattern.matcher(line);
+        if (matcher.find()) {
+            return matcher.group(1).trim();
+        }
+        return null;
+    }
+
+    /**
+     * Fallback regex-based извлечение тела метода.
+     */
+    private String extractMethodBodyRegex(String content, int startLine, int endLine) {
+        String[] lines = content.split("\n", -1);
+
+        StringBuilder body = new StringBuilder();
+        boolean inBody = false;
+        int braceCount = 0;
+
+        for (int i = startLine; i <= endLine && i < lines.length; i++) {
+            String l = lines[i];
+            for (char c : l.toCharArray()) {
+                if (c == '{') {
+                    inBody = true;
+                    braceCount++;
+                } else if (c == '}') {
+                    braceCount--;
+                }
+            }
+
+            if (inBody && braceCount > 0) {
+                String trimmed = l.trim();
+                if (trimmed.startsWith("return ") && trimmed.endsWith(";")) {
+                    body.append(trimmed.substring(7, trimmed.length() - 1));
+                } else if (!trimmed.equals("{") && !trimmed.equals("}")) {
+                    body.append(trimmed);
+                }
+            }
+        }
+
+        return body.toString().trim();
     }
 
     /**

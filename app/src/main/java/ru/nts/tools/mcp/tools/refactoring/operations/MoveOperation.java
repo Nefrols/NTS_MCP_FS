@@ -16,12 +16,15 @@
 package ru.nts.tools.mcp.tools.refactoring.operations;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
+import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
 import ru.nts.tools.mcp.tools.refactoring.*;
 
 import java.io.IOException;
@@ -115,8 +118,8 @@ public class MoveOperation implements RefactoringOperation {
             changes.add(addChange);
 
             // 3. Обновляем импорты и ссылки
-            String sourcePackage = extractPackage(sourcePath, langId);
-            String targetPackage = extractPackage(targetPath, langId);
+            String sourcePackage = extractPackage(sourcePath, langId, context);
+            String targetPackage = extractPackage(targetPath, langId, context);
 
             if (!sourcePackage.equals(targetPackage)) {
                 List<RefactoringResult.FileChange> importChanges = updateImports(
@@ -454,22 +457,49 @@ public class MoveOperation implements RefactoringOperation {
 
     /**
      * Извлекает имя пакета из файла.
+     * Использует AST для точного извлечения.
      */
-    private String extractPackage(Path path, String langId) {
+    private String extractPackage(Path path, String langId, RefactoringContext context) {
         try {
-            String content = Files.readString(path);
-            if (langId.equals("java") || langId.equals("kotlin")) {
-                Pattern pattern = Pattern.compile("package\\s+([\\w.]+)");
-                Matcher matcher = pattern.matcher(content);
-                if (matcher.find()) {
-                    return matcher.group(1);
-                }
-            } else if (langId.equals("python")) {
-                // Python использует структуру директорий как пакеты
+            // Пробуем AST-based извлечение
+            TreeSitterManager.ParseResult parseResult = context.getParseResult(path);
+            TSNode root = parseResult.tree().getRootNode();
+            String content = parseResult.content();
+
+            String packageName = SymbolExtractorUtils.extractPackageName(root, content, langId);
+            if (!packageName.isEmpty()) {
+                return packageName;
+            }
+
+            // Fallback для Python
+            if (langId.equals("python")) {
                 return path.getParent().toString().replace("/", ".").replace("\\", ".");
             }
-        } catch (IOException e) {
-            // ignore
+
+            // Fallback на regex
+            return extractPackageRegex(content, langId);
+
+        } catch (Exception e) {
+            // Fallback на regex
+            try {
+                String content = Files.readString(path);
+                return extractPackageRegex(content, langId);
+            } catch (IOException ex) {
+                return "";
+            }
+        }
+    }
+
+    /**
+     * Fallback regex-based извлечение пакета.
+     */
+    private String extractPackageRegex(String content, String langId) {
+        if (langId.equals("java") || langId.equals("kotlin")) {
+            Pattern pattern = Pattern.compile("package\\s+([\\w.]+)");
+            Matcher matcher = pattern.matcher(content);
+            if (matcher.find()) {
+                return matcher.group(1);
+            }
         }
         return "";
     }
@@ -484,8 +514,8 @@ public class MoveOperation implements RefactoringOperation {
 
         List<RefactoringResult.FileChange> changes = new ArrayList<>();
 
-        String sourcePackage = extractPackage(sourcePath, langId);
-        String targetPackage = extractPackage(targetPath, langId);
+        String sourcePackage = extractPackage(sourcePath, langId, context);
+        String targetPackage = extractPackage(targetPath, langId, context);
 
         // Группируем ссылки по файлам
         Set<Path> affectedFiles = references.stream()

@@ -196,7 +196,7 @@ public class SmartUndoEngine {
             return new UndoResult.FileDetail(
                     originalPath, targetPath, validation.fileId,
                     UndoResult.FileStatus.RESTORED,
-                    "Restored from backup"
+                    "File restored (was deleted/missing)"
             );
         }
 
@@ -210,7 +210,7 @@ public class SmartUndoEngine {
                         return new UndoResult.FileDetail(
                                 originalPath, targetPath, validation.fileId,
                                 UndoResult.FileStatus.SKIPPED,
-                                "Directory is not empty (dirty)"
+                                "Directory not empty - cannot delete without recursive flag"
                         );
                     }
                 }
@@ -220,7 +220,7 @@ public class SmartUndoEngine {
             return new UndoResult.FileDetail(
                     originalPath, targetPath, validation.fileId,
                     UndoResult.FileStatus.RESTORED,
-                    "Deleted (was created in transaction)"
+                    "File removed (was created in this transaction)"
             );
         }
 
@@ -233,8 +233,8 @@ public class SmartUndoEngine {
                     : UndoResult.FileStatus.RESTORED;
 
             String message = validation.status == FileValidationStatus.RELOCATED
-                    ? "Restored at relocated path"
-                    : "Content restored";
+                    ? "Content restored at new path (file was moved)"
+                    : "Content restored to original state";
 
             return new UndoResult.FileDetail(
                     originalPath, targetPath, validation.fileId,
@@ -242,11 +242,19 @@ public class SmartUndoEngine {
             );
         }
 
-        // Случай 4: Нечего делать
+        // Случай 4: Файл не требует изменений (backup == null и файл не существует)
+        // Это нормальная ситуация когда файл был только прочитан в транзакции, но не изменён
+        String detailMessage;
+        if (backupPath == null && !Files.exists(targetPath)) {
+            detailMessage = "File already absent (no backup needed)";
+        } else {
+            detailMessage = "Content already matches expected state";
+        }
+
         return new UndoResult.FileDetail(
                 originalPath, targetPath, validation.fileId,
                 UndoResult.FileStatus.RESTORED,
-                "No changes needed"
+                detailMessage
         );
     }
 

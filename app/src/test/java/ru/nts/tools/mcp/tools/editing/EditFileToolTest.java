@@ -375,6 +375,50 @@ class EditFileToolTest {
     }
 
     /**
+     * Тест на исправление 4.1: валидация конфликта operations + content верхнего уровня.
+     */
+    @Test
+    void testOperationsAndContentConflictThrowsError() throws Exception {
+        Path file = tempDir.resolve("conflict.txt");
+        Files.write(file, List.of("Line 1", "Line 2", "Line 3"));
+        String token = registerFullAccess(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("accessToken", token);
+
+        // Одновременно operations И content верхнего уровня - конфликт
+        params.put("content", "This content should be ignored but causes error");
+        ArrayNode ops = params.putArray("operations");
+        ops.addObject().put("operation", "replace").put("startLine", 1).put("content", "Modified");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> tool.execute(params));
+        assertTrue(ex.getMessage().contains("CONFLICT"),
+                "Expected CONFLICT error but got: " + ex.getMessage());
+    }
+
+    /**
+     * Тест: operations без content верхнего уровня - должно работать.
+     */
+    @Test
+    void testOperationsWithoutTopLevelContentWorks() throws Exception {
+        Path file = tempDir.resolve("noconflict.txt");
+        Files.write(file, List.of("Line 1", "Line 2"));
+        String token = registerFullAccess(file);
+
+        ObjectNode params = mapper.createObjectNode();
+        params.put("path", file.toString());
+        params.put("accessToken", token);
+
+        ArrayNode ops = params.putArray("operations");
+        ops.addObject().put("operation", "replace").put("startLine", 1).put("content", "Modified");
+
+        assertDoesNotThrow(() -> tool.execute(params));
+        assertTrue(Files.readString(file).contains("Modified"));
+    }
+
+    /**
      * Вспомогательный метод: строит содержимое диапазона для токена.
      */
     private String buildRangeContent(String content, int startLine, int endLine) {

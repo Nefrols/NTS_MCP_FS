@@ -21,6 +21,9 @@ import org.treesitter.TSTree;
 import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.VariableAnalysisResult;
+import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.VariableInfoAST;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
@@ -91,8 +94,8 @@ public class ExtractMethodOperation implements RefactoringOperation {
                 extractedCode.add(lines.get(i));
             }
 
-            // Анализируем код
-            ExtractionAnalysis analysis = analyzeExtraction(extractedCode, lines, startLine, context);
+            // Анализируем код с использованием AST
+            ExtractionAnalysis analysis = analyzeExtractionWithAST(extractedCode, lines, startLine, path, langId, context);
 
             // Находим класс-контейнер и содержащий метод
             SymbolInfo containingClass = findContainingClass(path, startLine, context);
@@ -205,7 +208,7 @@ public class ExtractMethodOperation implements RefactoringOperation {
                 extractedCode.add(lines.get(i));
             }
 
-            ExtractionAnalysis analysis = analyzeExtraction(extractedCode, lines, startLine, context);
+            ExtractionAnalysis analysis = analyzeExtractionWithAST(extractedCode, lines, startLine, path, langId, context);
 
             // Проверяем статический контекст
             boolean isStaticContext = isInStaticContext(path, startLine, context);
@@ -267,66 +270,311 @@ public class ExtractMethodOperation implements RefactoringOperation {
     }
 
     /**
-     * Анализирует извлекаемый код для определения параметров и типа возврата.
+     * Анализирует извлекаемый код с полным контекстом AST.
+     * Использует tree-sitter для точного определения переменных.
      */
-    private ExtractionAnalysis analyzeExtraction(List<String> code, List<String> allLines,
-                                                  int startLine, RefactoringContext context) {
+    private ExtractionAnalysis analyzeExtractionWithAST(List<String> code, List<String> allLines,
+                                                         int startLine, Path path, String langId,
+                                                         RefactoringContext context) {
+        return analyzeExtractionWithContext(code, allLines, startLine, path, null, langId, context);
+    }
+
+    /**
+     * Основной метод анализа с опциональной поддержкой AST.
+     */
+    private ExtractionAnalysis analyzeExtractionWithContext(List<String> code, List<String> allLines,
+                                                             int startLine, Path path, String content,
+                                                             String langId, RefactoringContext context) {
         Set<String> usedVariables = new HashSet<>();
         Set<String> declaredVariables = new HashSet<>();
+        Map<String, String> variableTypes = new HashMap<>();
         boolean hasReturn = false;
         String inferredReturnType = "void";
 
-        // Простой анализ через regex
-        Pattern varUsage = Pattern.compile("\\b([a-z][a-zA-Z0-9_]*)\\b");
-        Pattern varDecl = Pattern.compile("\\b(var|int|long|String|boolean|double|float|Object|List|Map|Set)\\s+([a-z][a-zA-Z0-9_]*)\\b");
-        Pattern returnPattern = Pattern.compile("\\breturn\\s+");
+        // Пробуем использовать AST для анализа
+        TSNode root = null;
+        String fileContent = content;
 
-        for (String line : code) {
-            // Находим объявления
-            Matcher declMatcher = varDecl.matcher(line);
-            while (declMatcher.find()) {
-                declaredVariables.add(declMatcher.group(2));
-            }
-
-            // Находим использования
-            Matcher usageMatcher = varUsage.matcher(line);
-            while (usageMatcher.find()) {
-                usedVariables.add(usageMatcher.group(1));
-            }
-
-            // Проверяем return
-            if (returnPattern.matcher(line).find()) {
-                hasReturn = true;
+        if (path != null && context != null) {
+            try {
+                TreeSitterManager.ParseResult parseResult = context.getParseResult(path);
+                root = parseResult.tree().getRootNode();
+                fileContent = parseResult.content();
+            } catch (Exception e) {
+                // Fallback на regex если AST недоступен
             }
         }
 
-        // Определяем параметры (переменные используемые, но не объявленные внутри)
+        int endLine = startLine + code.size() - 1;
+
+        if (root != null && fileContent != null) {
+            // Используем AST для анализа переменных
+            VariableAnalysisResult analysisResult = SymbolExtractorUtils.analyzeVariablesInRange(
+                    root, fileContent, startLine - 1, endLine - 1, langId);
+
+            // Извлекаем объявленные переменные
+            for (VariableInfoAST varInfo : analysisResult.declaredVariables()) {
+                declaredVariables.add(varInfo.name());
+                variableTypes.put(varInfo.name(), varInfo.type());
+            }
+
+            // Извлекаем использованные переменные
+            usedVariables.addAll(analysisResult.usedVariables());
+
+            // Извлекаем переменные из внешнего scope через AST
+            Map<String, String> outerVariables = SymbolExtractorUtils.extractOuterScopeVariables(
+                    root, fileContent, startLine - 1, langId);
+
+            // Определяем параметры (используемые, но не объявленные внутри)
+            Set<String> parameters = new HashSet<>(usedVariables);
+            parameters.removeAll(declaredVariables);
+            parameters.retainAll(outerVariables.keySet());
+
+            // Проверяем наличие return
+            hasReturn = checkForReturn(code);
+            if (hasReturn) {
+                inferredReturnType = inferReturnTypeFromCode(code, variableTypes, outerVariables);
+            }
+
+            // Создаём список параметров с типами из AST
+            List<ParameterInfo> parameterInfos = parameters.stream()
+                    .sorted()
+                    .map(name -> {
+                        String type = outerVariables.getOrDefault(name, variableTypes.getOrDefault(name, "Object"));
+                        return new ParameterInfo(name, type);
+                    })
+                    .toList();
+
+            return new ExtractionAnalysis(parameterInfos, hasReturn, inferredReturnType);
+        }
+
+        // Fallback на regex анализ
+        return analyzeExtractionWithRegex(code, allLines, startLine);
+    }
+
+    /**
+     * Fallback regex-based анализ переменных.
+     */
+    private ExtractionAnalysis analyzeExtractionWithRegex(List<String> code, List<String> allLines, int startLine) {
+        Set<String> usedVariables = new HashSet<>();
+        Set<String> declaredVariables = new HashSet<>();
+        Map<String, String> variableTypes = new HashMap<>();
+        boolean hasReturn = false;
+        String inferredReturnType = "void";
+
+        String typePattern = "(var|int|long|short|byte|char|String|boolean|double|float|" +
+                "Object|List|Map|Set|Array|ArrayList|HashMap|HashSet|TreeMap|TreeSet|" +
+                "Integer|Long|Double|Float|Boolean|Character|Short|Byte|" +
+                "[A-Z][a-zA-Z0-9_<>\\[\\],\\s]*)";
+
+        Pattern varDecl = Pattern.compile(typePattern + "\\s+([a-z_][a-zA-Z0-9_]*)\\s*[=;,)]");
+        Pattern enhancedFor = Pattern.compile("for\\s*\\(\\s*" + typePattern + "\\s+([a-z_][a-zA-Z0-9_]*)\\s*:");
+        Pattern varUsage = Pattern.compile("\\b([a-z_][a-zA-Z0-9_]*)\\b");
+        Pattern returnPattern = Pattern.compile("\\breturn\\s+(.+?)\\s*;");
+        Pattern methodCall = Pattern.compile("\\b([a-z_][a-zA-Z0-9_]*)\\s*\\(");
+
+        Set<String> javaKeywords = Set.of(
+                "this", "super", "true", "false", "null", "new", "return", "if", "else",
+                "for", "while", "do", "switch", "case", "default", "break", "continue",
+                "try", "catch", "finally", "throw", "throws", "class", "interface", "enum",
+                "extends", "implements", "import", "package", "public", "private", "protected",
+                "static", "final", "abstract", "synchronized", "volatile", "transient",
+                "native", "strictfp", "instanceof", "void", "int", "long", "short", "byte",
+                "char", "boolean", "double", "float", "var"
+        );
+
+        Set<String> methodCalls = new HashSet<>();
+
+        for (String line : code) {
+            Matcher methodMatcher = methodCall.matcher(line);
+            while (methodMatcher.find()) {
+                methodCalls.add(methodMatcher.group(1));
+            }
+
+            Matcher declMatcher = varDecl.matcher(line);
+            while (declMatcher.find()) {
+                String type = declMatcher.group(1).trim();
+                String name = declMatcher.group(2);
+                declaredVariables.add(name);
+                variableTypes.put(name, normalizeType(type));
+            }
+
+            Matcher forMatcher = enhancedFor.matcher(line);
+            while (forMatcher.find()) {
+                String type = forMatcher.group(1).trim();
+                String name = forMatcher.group(2);
+                declaredVariables.add(name);
+                variableTypes.put(name, normalizeType(type));
+            }
+
+            Matcher usageMatcher = varUsage.matcher(line);
+            while (usageMatcher.find()) {
+                String name = usageMatcher.group(1);
+                if (!javaKeywords.contains(name)) {
+                    usedVariables.add(name);
+                }
+            }
+
+            Matcher returnMatcher = returnPattern.matcher(line);
+            if (returnMatcher.find()) {
+                hasReturn = true;
+                String returnExpr = returnMatcher.group(1).trim();
+                inferredReturnType = inferReturnType(returnExpr, variableTypes);
+            }
+        }
+
+        usedVariables.removeAll(methodCalls);
+
         Set<String> parameters = new HashSet<>(usedVariables);
         parameters.removeAll(declaredVariables);
-        parameters.removeAll(Set.of("this", "true", "false", "null", "new", "return"));
+        parameters.removeAll(javaKeywords);
 
-        // Проверяем переменные объявленные до извлекаемого кода
-        Set<String> availableVars = findDeclaredVariablesBefore(allLines, startLine);
-        parameters.retainAll(availableVars);
+        Map<String, String> outerVariables = findOuterScopeVariablesRegex(allLines, startLine, code.size());
+        parameters.retainAll(outerVariables.keySet());
 
         List<ParameterInfo> parameterInfos = parameters.stream()
-                .map(name -> new ParameterInfo(name, "Object")) // Упрощённый тип
+                .sorted()
+                .map(name -> {
+                    String type = outerVariables.getOrDefault(name, "Object");
+                    return new ParameterInfo(name, type);
+                })
                 .toList();
 
         return new ExtractionAnalysis(parameterInfos, hasReturn, inferredReturnType);
     }
 
     /**
-     * Находит переменные объявленные до указанной строки.
+     * Проверяет наличие return в коде.
      */
-    private Set<String> findDeclaredVariablesBefore(List<String> lines, int beforeLine) {
-        Set<String> vars = new HashSet<>();
-        Pattern varDecl = Pattern.compile("\\b(var|int|long|String|boolean|double|float|Object|List|Map|Set)\\s+([a-z][a-zA-Z0-9_]*)\\b");
+    private boolean checkForReturn(List<String> code) {
+        Pattern returnPattern = Pattern.compile("\\breturn\\s+.+?\\s*;");
+        for (String line : code) {
+            if (returnPattern.matcher(line).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        for (int i = 0; i < beforeLine - 1 && i < lines.size(); i++) {
-            Matcher matcher = varDecl.matcher(lines.get(i));
-            while (matcher.find()) {
-                vars.add(matcher.group(2));
+    /**
+     * Выводит тип возврата из кода.
+     */
+    private String inferReturnTypeFromCode(List<String> code, Map<String, String> variableTypes,
+                                            Map<String, String> outerVariables) {
+        Pattern returnPattern = Pattern.compile("\\breturn\\s+(.+?)\\s*;");
+        for (String line : code) {
+            Matcher matcher = returnPattern.matcher(line);
+            if (matcher.find()) {
+                String expr = matcher.group(1).trim();
+                // Сначала проверяем в locальных переменных, затем во внешних
+                if (variableTypes.containsKey(expr)) {
+                    return variableTypes.get(expr);
+                }
+                if (outerVariables.containsKey(expr)) {
+                    return outerVariables.get(expr);
+                }
+                return inferReturnType(expr, variableTypes);
+            }
+        }
+        return "void";
+    }
+
+    /**
+     * Нормализует тип (убирает лишние пробелы, упрощает generics для вывода).
+     */
+    private String normalizeType(String type) {
+        if (type == null) return "Object";
+        type = type.trim();
+
+        // Упрощаем var до Object (в реальном коде нужен анализ правой части)
+        if (type.equals("var")) return "Object";
+
+        // Убираем множественные пробелы
+        type = type.replaceAll("\\s+", " ");
+
+        return type;
+    }
+
+    /**
+     * Пытается определить тип возвращаемого значения по выражению.
+     */
+    private String inferReturnType(String expr, Map<String, String> knownTypes) {
+        if (expr == null || expr.isEmpty()) return "void";
+
+        // Литералы
+        if (expr.matches("\\d+L?")) return "long";
+        if (expr.matches("\\d+\\.\\d+[fF]?")) return expr.endsWith("f") || expr.endsWith("F") ? "float" : "double";
+        if (expr.matches("\\d+")) return "int";
+        if (expr.equals("true") || expr.equals("false")) return "boolean";
+        if (expr.startsWith("\"")) return "String";
+        if (expr.startsWith("'")) return "char";
+
+        // Известная переменная
+        if (knownTypes.containsKey(expr)) {
+            return knownTypes.get(expr);
+        }
+
+        // new Type(...)
+        Matcher newMatcher = Pattern.compile("new\\s+([A-Z][a-zA-Z0-9_<>]*)").matcher(expr);
+        if (newMatcher.find()) {
+            return newMatcher.group(1);
+        }
+
+        return "Object";
+    }
+
+    /**
+     * Находит переменные доступные во внешнем scope (fallback regex версия).
+     *
+     * @param lines все строки файла
+     * @param extractStart начало извлекаемого блока (1-based)
+     * @param extractLength длина извлекаемого блока
+     * @return карта: имя переменной -> тип
+     */
+    private Map<String, String> findOuterScopeVariablesRegex(List<String> lines, int extractStart, int extractLength) {
+        Map<String, String> vars = new LinkedHashMap<>();
+
+        String typePattern = "(final\\s+)?(var|int|long|short|byte|char|String|boolean|double|float|" +
+                "Object|List|Map|Set|[A-Z][a-zA-Z0-9_<>\\[\\],\\s]*)";
+
+        // Паттерн для объявления локальных переменных
+        Pattern varDecl = Pattern.compile(typePattern + "\\s+([a-z_][a-zA-Z0-9_]*)\\s*[=;,)]");
+
+        // Паттерн для параметров метода: (Type name или Type name, или Type name)
+        Pattern methodParam = Pattern.compile(typePattern + "\\s+([a-z_][a-zA-Z0-9_]*)\\s*[,)]");
+
+        // Паттерн для enhanced for
+        Pattern enhancedFor = Pattern.compile("for\\s*\\(\\s*(final\\s+)?" + typePattern + "\\s+([a-z_][a-zA-Z0-9_]*)\\s*:");
+
+        // Анализируем строки ДО извлекаемого блока
+        for (int i = 0; i < extractStart - 1 && i < lines.size(); i++) {
+            String line = lines.get(i);
+
+            // Локальные переменные
+            Matcher declMatcher = varDecl.matcher(line);
+            while (declMatcher.find()) {
+                String type = declMatcher.group(2).trim();
+                String name = declMatcher.group(3);
+                vars.put(name, normalizeType(type));
+            }
+
+            // Параметры метода (если строка содержит сигнатуру метода)
+            if (line.contains("(") && (line.contains("void") || line.contains("public") ||
+                    line.contains("private") || line.contains("protected"))) {
+                Matcher paramMatcher = methodParam.matcher(line);
+                while (paramMatcher.find()) {
+                    String type = paramMatcher.group(2).trim();
+                    String name = paramMatcher.group(3);
+                    vars.put(name, normalizeType(type));
+                }
+            }
+
+            // Enhanced for переменные
+            Matcher forMatcher = enhancedFor.matcher(line);
+            while (forMatcher.find()) {
+                String type = forMatcher.group(2).trim();
+                String name = forMatcher.group(3);
+                vars.put(name, normalizeType(type));
             }
         }
 

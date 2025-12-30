@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
@@ -49,7 +50,31 @@ public final class SymbolResolver {
     /**
      * Executor для параллельного поиска.
      */
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    /**
+     * Глобальный таймаут на операцию поиска по проекту.
+     */
+    private static final Duration OPERATION_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Индекс символов для быстрого поиска.
+     */
+    private final SymbolIndex symbolIndex = SymbolIndex.getInstance();
+
+    static {
+        // Shutdown hook для корректного завершения executor
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+            }
+        }));
+    }
 
     private SymbolResolver() {}
 
@@ -602,9 +627,31 @@ public final class SymbolResolver {
 
     /**
      * Ищет определение в проекте.
+     * Использует SymbolIndex если доступен, иначе fallback на сканирование.
      */
     private Optional<SymbolInfo> findDefinitionInProject(Path currentFile, String symbolName,
                                                           String langId) throws IOException {
+        // 1. Сначала пробуем индекс (O(1) lookup)
+        if (symbolIndex.isIndexed()) {
+            Optional<Location> indexedLocation = symbolIndex.findFirstDefinition(symbolName);
+            if (indexedLocation.isPresent()) {
+                Location loc = indexedLocation.get();
+                // Загружаем полную информацию о символе
+                try {
+                    TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(loc.path());
+                    List<SymbolInfo> defs = extractor.extractDefinitions(
+                            pr.tree(), loc.path(), pr.content(), pr.langId());
+                    return defs.stream()
+                            .filter(s -> s.name().equals(symbolName))
+                            .filter(s -> isDefinitionKind(s.kind()))
+                            .findFirst();
+                } catch (Exception e) {
+                    // Fallback к сканированию
+                }
+            }
+        }
+
+        // 2. Fallback: сканирование файлов
         Path projectRoot = findProjectRoot(currentFile);
         if (projectRoot == null) {
             return Optional.empty();
@@ -614,7 +661,7 @@ public final class SymbolResolver {
         String globPattern = LanguageDetector.getGlobPattern(langId);
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + globPattern);
 
-        // Сначала быстрый grep для предварительного отсева
+        // Быстрый поиск с использованием FastSearch.containsText()
         List<Path> candidateFiles = new ArrayList<>();
 
         try {
@@ -628,10 +675,9 @@ public final class SymbolResolver {
                                 return FileVisitResult.TERMINATE;
                             }
                             if (matcher.matches(file) && !file.equals(currentFile)) {
-                                // Быстрая проверка: содержит ли файл искомый символ
+                                // Быстрая проверка без полного чтения файла в память
                                 try {
-                                    String content = Files.readString(file);
-                                    if (content.contains(symbolName)) {
+                                    if (FastSearch.containsText(file, symbolName)) {
                                         candidateFiles.add(file);
                                         count++;
                                     }
@@ -661,9 +707,9 @@ public final class SymbolResolver {
             // Игнорируем ошибки обхода
         }
 
-        // Параллельно парсим кандидатов
-        List<Future<Optional<SymbolInfo>>> futures = candidateFiles.stream()
-                .map(file -> executor.submit(() -> {
+        // Параллельный поиск с глобальным таймаутом
+        List<CompletableFuture<Optional<SymbolInfo>>> futures = candidateFiles.stream()
+                .map(file -> CompletableFuture.supplyAsync(() -> {
                     try {
                         TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
                         List<SymbolInfo> defs = extractor.extractDefinitions(
@@ -675,17 +721,29 @@ public final class SymbolResolver {
                     } catch (Exception e) {
                         return Optional.<SymbolInfo>empty();
                     }
-                }))
+                }, executor))
                 .toList();
 
-        for (Future<Optional<SymbolInfo>> future : futures) {
-            try {
-                Optional<SymbolInfo> result = future.get(5, TimeUnit.SECONDS);
-                if (result.isPresent()) {
-                    return result;
+        try {
+            // Глобальный таймаут на всю операцию
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .orTimeout(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .join();
+        } catch (CompletionException e) {
+            // Таймаут или другая ошибка - возвращаем что успели найти
+        }
+
+        // Возвращаем первый найденный результат
+        for (CompletableFuture<Optional<SymbolInfo>> future : futures) {
+            if (future.isDone() && !future.isCompletedExceptionally()) {
+                try {
+                    Optional<SymbolInfo> result = future.getNow(Optional.empty());
+                    if (result.isPresent()) {
+                        return result;
+                    }
+                } catch (Exception e) {
+                    // Игнорируем
                 }
-            } catch (Exception e) {
-                // Игнорируем ошибки
             }
         }
 
@@ -707,7 +765,8 @@ public final class SymbolResolver {
                     .filter(matcher::matches)
                     .filter(file -> {
                         try {
-                            return Files.readString(file).contains(symbolName);
+                            // Быстрая проверка без полного чтения файла
+                            return FastSearch.containsText(file, symbolName);
                         } catch (IOException e) {
                             return false;
                         }
@@ -715,9 +774,9 @@ public final class SymbolResolver {
                     .toList();
         }
 
-        // Параллельный поиск ссылок
-        List<Future<List<Location>>> futures = candidateFiles.stream()
-                .map(file -> executor.submit(() -> {
+        // Параллельный поиск ссылок с глобальным таймаутом
+        List<CompletableFuture<List<Location>>> futures = candidateFiles.stream()
+                .map(file -> CompletableFuture.supplyAsync(() -> {
                     try {
                         TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
                         return extractor.findReferences(
@@ -725,15 +784,25 @@ public final class SymbolResolver {
                     } catch (Exception e) {
                         return Collections.<Location>emptyList();
                     }
-                }))
+                }, executor))
                 .toList();
 
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .orTimeout(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .join();
+        } catch (CompletionException e) {
+            // Таймаут - возвращаем что успели найти
+        }
+
         List<Location> references = new ArrayList<>();
-        for (Future<List<Location>> future : futures) {
-            try {
-                references.addAll(future.get(5, TimeUnit.SECONDS));
-            } catch (Exception e) {
-                // Игнорируем
+        for (CompletableFuture<List<Location>> future : futures) {
+            if (future.isDone() && !future.isCompletedExceptionally()) {
+                try {
+                    references.addAll(future.getNow(Collections.emptyList()));
+                } catch (Exception e) {
+                    // Игнорируем
+                }
             }
         }
 
@@ -742,6 +811,8 @@ public final class SymbolResolver {
 
     /**
      * Ищет ссылки в проекте.
+     * ВАЖНО: Для поиска ИСПОЛЬЗОВАНИЙ символа нужно сканировать файлы по тексту (FastSearch),
+     * а не использовать SymbolIndex, который хранит только ОПРЕДЕЛЕНИЯ символов.
      */
     private List<Location> findReferencesInProject(Path currentFile, String symbolName,
                                                     String langId) throws IOException {
@@ -750,6 +821,49 @@ public final class SymbolResolver {
             return findReferencesInDirectory(currentFile.getParent(), symbolName, langId);
         }
 
+        // Для поиска ссылок (использований) нужно сканировать файлы по тексту,
+        // а не использовать индекс определений (он хранит только места где символ ОПРЕДЕЛЁН)
+        List<Path> candidateFiles = scanFilesForSymbol(projectRoot, symbolName, langId);
+
+        // Параллельный поиск ссылок с глобальным таймаутом
+        List<CompletableFuture<List<Location>>> futures = candidateFiles.stream()
+                .map(file -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
+                        return extractor.findReferences(
+                                pr.tree(), file, pr.content(), pr.langId(), symbolName);
+                    } catch (Exception e) {
+                        return Collections.<Location>emptyList();
+                    }
+                }, executor))
+                .toList();
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .orTimeout(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .join();
+        } catch (CompletionException e) {
+            // Таймаут - возвращаем что успели найти
+        }
+
+        List<Location> allReferences = new ArrayList<>();
+        for (CompletableFuture<List<Location>> future : futures) {
+            if (future.isDone() && !future.isCompletedExceptionally()) {
+                try {
+                    allReferences.addAll(future.getNow(Collections.emptyList()));
+                } catch (Exception e) {
+                    // Игнорируем
+                }
+            }
+        }
+
+        return allReferences;
+    }
+
+    /**
+     * Сканирует файлы проекта для поиска символа (fallback если индекс не доступен).
+     */
+    private List<Path> scanFilesForSymbol(Path projectRoot, String symbolName, String langId) {
         String globPattern = LanguageDetector.getGlobPattern(langId);
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + globPattern);
 
@@ -767,8 +881,8 @@ public final class SymbolResolver {
                             }
                             if (matcher.matches(file)) {
                                 try {
-                                    String content = Files.readString(file);
-                                    if (content.contains(symbolName)) {
+                                    // Быстрая проверка без полного чтения файла
+                                    if (FastSearch.containsText(file, symbolName)) {
                                         candidateFiles.add(file);
                                         count++;
                                     }
@@ -797,28 +911,6 @@ public final class SymbolResolver {
             // Игнорируем
         }
 
-        // Параллельный поиск ссылок
-        List<Future<List<Location>>> futures = candidateFiles.stream()
-                .map(file -> executor.submit(() -> {
-                    try {
-                        TreeSitterManager.ParseResult pr = treeManager.getCachedOrParseWithContent(file);
-                        return extractor.findReferences(
-                                pr.tree(), file, pr.content(), pr.langId(), symbolName);
-                    } catch (Exception e) {
-                        return Collections.<Location>emptyList();
-                    }
-                }))
-                .toList();
-
-        List<Location> allReferences = new ArrayList<>();
-        for (Future<List<Location>> future : futures) {
-            try {
-                allReferences.addAll(future.get(5, TimeUnit.SECONDS));
-            } catch (Exception e) {
-                // Игнорируем
-            }
-        }
-
-        return allReferences;
+        return candidateFiles;
     }
 }

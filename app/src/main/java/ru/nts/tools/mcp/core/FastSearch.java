@@ -343,4 +343,116 @@ public class FastSearch {
         }
         return false;
     }
+
+    /**
+     * Быстрая проверка, содержит ли файл текст, без полного чтения в память.
+     * Использует Boyer-Moore-Horspool для больших паттернов.
+     *
+     * @param path путь к файлу
+     * @param text искомый текст
+     * @return true если файл содержит текст
+     * @throws IOException при ошибке чтения
+     */
+    public static boolean containsText(Path path, String text) throws IOException {
+        if (text == null || text.isEmpty()) {
+            return true;
+        }
+
+        byte[] pattern = text.getBytes(StandardCharsets.UTF_8);
+        int patternLen = pattern.length;
+
+        // Для коротких паттернов используем простой поиск
+        if (patternLen < BMH_MIN_PATTERN_LEN) {
+            return containsTextSimple(path, pattern);
+        }
+
+        // Для длинных паттернов используем Boyer-Moore-Horspool
+        return containsTextBMH(path, pattern);
+    }
+
+    /**
+     * Простой потоковый поиск для коротких паттернов.
+     */
+    private static boolean containsTextSimple(Path path, byte[] pattern) throws IOException {
+        int patternLen = pattern.length;
+
+        try (InputStream is = new BufferedInputStream(Files.newInputStream(path), BUFFER_SIZE)) {
+            byte[] window = new byte[patternLen];
+            int windowFill = 0;
+
+            // Заполняем начальное окно
+            int b;
+            while (windowFill < patternLen && (b = is.read()) != -1) {
+                window[windowFill++] = (byte) b;
+            }
+
+            if (windowFill < patternLen) return false;
+            if (Arrays.equals(window, pattern)) return true;
+
+            // Скользящее окно
+            while ((b = is.read()) != -1) {
+                System.arraycopy(window, 1, window, 0, patternLen - 1);
+                window[patternLen - 1] = (byte) b;
+
+                if (Arrays.equals(window, pattern)) return true;
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Boyer-Moore-Horspool поиск для длинных паттернов.
+     * Читает файл блоками для эффективности.
+     */
+    private static boolean containsTextBMH(Path path, byte[] pattern) throws IOException {
+        int m = pattern.length;
+
+        // Строим таблицу сдвигов
+        int[] badChar = new int[256];
+        Arrays.fill(badChar, m);
+        for (int i = 0; i < m - 1; i++) {
+            badChar[pattern[i] & 0xFF] = m - 1 - i;
+        }
+
+        try (InputStream is = new BufferedInputStream(Files.newInputStream(path), BUFFER_SIZE)) {
+            // Буфер с перекрытием для обработки границ блоков
+            byte[] buffer = new byte[BUFFER_SIZE + m - 1];
+            int overlap = 0;
+
+            while (true) {
+                // Копируем перекрытие с предыдущего блока
+                if (overlap > 0) {
+                    System.arraycopy(buffer, BUFFER_SIZE, buffer, 0, overlap);
+                }
+
+                // Читаем новый блок
+                int bytesRead = is.readNBytes(buffer, overlap, BUFFER_SIZE);
+                if (bytesRead == 0) break;
+
+                int totalLen = overlap + bytesRead;
+                int searchEnd = totalLen - m;
+
+                // Boyer-Moore-Horspool поиск в буфере
+                int i = 0;
+                while (i <= searchEnd) {
+                    int j = m - 1;
+                    while (j >= 0 && buffer[i + j] == pattern[j]) {
+                        j--;
+                    }
+                    if (j < 0) {
+                        return true; // Найдено!
+                    }
+                    i += badChar[buffer[i + m - 1] & 0xFF];
+                }
+
+                // Сохраняем перекрытие для следующего блока
+                overlap = Math.min(m - 1, totalLen);
+                if (overlap > 0 && totalLen > overlap) {
+                    System.arraycopy(buffer, totalLen - overlap, buffer, BUFFER_SIZE, overlap);
+                }
+            }
+        }
+
+        return false;
+    }
 }

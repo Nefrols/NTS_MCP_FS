@@ -18,9 +18,12 @@ package ru.nts.tools.mcp.core.treesitter.extractors;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo.ParameterInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.*;
@@ -76,7 +79,9 @@ public class CSharpSymbolExtractor implements LanguageSymbolExtractor {
         String name = getNodeText(nameNode, content);
         Location location = nodeToLocation(node, path);
         String doc = extractPrecedingComment(node, content);
-        String signature = extractMethodSignature(node, content);
+
+        // Извлекаем параметры
+        List<ParameterInfo> params = extractCSharpParameters(node, content);
 
         // Get return type
         TSNode returnType = findChildByType(node, "predefined_type");
@@ -84,7 +89,9 @@ public class CSharpSymbolExtractor implements LanguageSymbolExtractor {
         if (returnType == null) returnType = findChildByType(node, "generic_name");
         String type = returnType != null ? getNodeText(returnType, content) : null;
 
-        return Optional.of(new SymbolInfo(name, SymbolKind.METHOD, type, signature, doc, location, parentName));
+        String signature = buildCSharpSignature(name, params, type);
+
+        return Optional.of(new SymbolInfo(name, SymbolKind.METHOD, type, signature, params, doc, location, parentName));
     }
 
     private Optional<SymbolInfo> extractConstructor(TSNode node, Path path, String content, String parentName) {
@@ -94,9 +101,109 @@ public class CSharpSymbolExtractor implements LanguageSymbolExtractor {
         String name = getNodeText(nameNode, content);
         Location location = nodeToLocation(node, path);
         String doc = extractPrecedingComment(node, content);
-        String signature = extractMethodSignature(node, content);
 
-        return Optional.of(new SymbolInfo(name, SymbolKind.CONSTRUCTOR, null, signature, doc, location, parentName));
+        // Извлекаем параметры
+        List<ParameterInfo> params = extractCSharpParameters(node, content);
+        String signature = buildCSharpSignature(name, params, null);
+
+        return Optional.of(new SymbolInfo(name, SymbolKind.CONSTRUCTOR, null, signature, params, doc, location, parentName));
+    }
+
+    /**
+     * Извлекает параметры C# метода/конструктора.
+     * Формат: Type name, ref Type name, out Type name, params Type[] name
+     */
+    private List<ParameterInfo> extractCSharpParameters(TSNode node, String content) {
+        List<ParameterInfo> params = new ArrayList<>();
+
+        TSNode paramList = findChildByType(node, "parameter_list");
+        if (paramList == null) return params;
+
+        int childCount = paramList.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = paramList.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            if (child.getType().equals("parameter")) {
+                extractCSharpParameter(child, content, params);
+            }
+        }
+
+        return params;
+    }
+
+    private void extractCSharpParameter(TSNode paramNode, String content, List<ParameterInfo> params) {
+        String type = "object";
+        String name = null;
+        boolean isParams = false;
+
+        int childCount = paramNode.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = paramNode.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            String childType = child.getType();
+            String text = getNodeText(child, content);
+
+            // Модификаторы
+            if (text.equals("params")) {
+                isParams = true;
+            } else if (text.equals("ref") || text.equals("out") || text.equals("in")) {
+                type = text + " " + type;
+            }
+            // Типы
+            else if (childType.equals("predefined_type") || childType.equals("identifier") ||
+                     childType.equals("generic_name") || childType.equals("nullable_type") ||
+                     childType.equals("array_type")) {
+                type = text;
+            }
+            // Имя параметра - обычно последний identifier
+            else if (childType.equals("identifier") && i == childCount - 1) {
+                name = text;
+            }
+        }
+
+        // Если имя не найдено отдельно, ищем его
+        if (name == null) {
+            TSNode nameNode = null;
+            for (int i = childCount - 1; i >= 0; i--) {
+                TSNode child = paramNode.getChild(i);
+                if (child != null && child.getType().equals("identifier")) {
+                    nameNode = child;
+                    break;
+                }
+            }
+            if (nameNode != null) {
+                name = getNodeText(nameNode, content);
+            }
+        }
+
+        if (name != null) {
+            params.add(new ParameterInfo(name, type, isParams));
+        }
+    }
+
+    /**
+     * Строит сигнатуру C# метода.
+     */
+    private String buildCSharpSignature(String name, List<ParameterInfo> params, String returnType) {
+        StringBuilder sb = new StringBuilder();
+        if (returnType != null && !returnType.isEmpty()) {
+            sb.append(returnType).append(" ");
+        }
+        sb.append(name).append("(");
+
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sb.append(", ");
+            ParameterInfo param = params.get(i);
+            if (param.isVarargs()) {
+                sb.append("params ");
+            }
+            sb.append(param.type()).append(" ").append(param.name());
+        }
+
+        sb.append(")");
+        return sb.toString();
     }
 
     private Optional<SymbolInfo> extractProperty(TSNode node, Path path, String content, String parentName) {

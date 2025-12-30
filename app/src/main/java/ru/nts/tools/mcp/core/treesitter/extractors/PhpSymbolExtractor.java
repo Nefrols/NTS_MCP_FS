@@ -18,9 +18,12 @@ package ru.nts.tools.mcp.core.treesitter.extractors;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo.ParameterInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.*;
@@ -95,7 +98,12 @@ public class PhpSymbolExtractor implements LanguageSymbolExtractor {
         Location location = nodeToLocation(node, path);
         String doc = extractPrecedingComment(node, content);
 
-        return Optional.of(new SymbolInfo(name, SymbolKind.FUNCTION, null, null, doc, location, parentName));
+        // Извлекаем параметры и возвращаемый тип
+        List<ParameterInfo> params = extractPhpParameters(node, content);
+        String returnType = extractPhpReturnType(node, content);
+        String signature = buildPhpSignature(name, params, returnType);
+
+        return Optional.of(new SymbolInfo(name, SymbolKind.FUNCTION, returnType, signature, params, doc, location, parentName));
     }
 
     private Optional<SymbolInfo> extractMethod(TSNode node, Path path, String content, String parentName) {
@@ -108,7 +116,124 @@ public class PhpSymbolExtractor implements LanguageSymbolExtractor {
 
         SymbolKind kind = name.equals("__construct") ? SymbolKind.CONSTRUCTOR : SymbolKind.METHOD;
 
-        return Optional.of(new SymbolInfo(name, kind, null, null, doc, location, parentName));
+        // Извлекаем параметры и возвращаемый тип
+        List<ParameterInfo> params = extractPhpParameters(node, content);
+        String returnType = extractPhpReturnType(node, content);
+        String signature = buildPhpSignature(name, params, returnType);
+
+        return Optional.of(new SymbolInfo(name, kind, returnType, signature, params, doc, location, parentName));
+    }
+
+    /**
+     * Извлекает параметры PHP функции/метода.
+     * Формат: Type $name, ?Type $name = default, ...$name
+     */
+    private List<ParameterInfo> extractPhpParameters(TSNode node, String content) {
+        List<ParameterInfo> params = new ArrayList<>();
+
+        TSNode paramList = findChildByType(node, "formal_parameters");
+        if (paramList == null) return params;
+
+        int childCount = paramList.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = paramList.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            String childType = child.getType();
+            if (childType.equals("simple_parameter") || childType.equals("variadic_parameter") ||
+                childType.equals("property_promotion_parameter")) {
+                extractPhpParameter(child, content, params, childType.equals("variadic_parameter"));
+            }
+        }
+
+        return params;
+    }
+
+    private void extractPhpParameter(TSNode paramNode, String content, List<ParameterInfo> params, boolean isVariadic) {
+        String type = "mixed";
+        String name = null;
+
+        int childCount = paramNode.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = paramNode.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            String childType = child.getType();
+
+            // Типы
+            if (childType.equals("named_type") || childType.equals("primitive_type") ||
+                childType.equals("optional_type") || childType.equals("union_type") ||
+                childType.equals("intersection_type")) {
+                type = getNodeText(child, content);
+            }
+            // Имя переменной
+            else if (childType.equals("variable_name")) {
+                name = getNodeText(child, content);
+                // Remove $ prefix
+                if (name.startsWith("$")) {
+                    name = name.substring(1);
+                }
+            }
+        }
+
+        if (name != null) {
+            params.add(new ParameterInfo(name, type, isVariadic));
+        }
+    }
+
+    /**
+     * Извлекает возвращаемый тип PHP функции.
+     */
+    private String extractPhpReturnType(TSNode node, String content) {
+        int childCount = node.getChildCount();
+        boolean afterColon = false;
+
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = node.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            String childType = child.getType();
+            String text = getNodeText(child, content);
+
+            // Ищем : и тип после него
+            if (text.equals(":")) {
+                afterColon = true;
+                continue;
+            }
+
+            if (afterColon && (childType.equals("named_type") || childType.equals("primitive_type") ||
+                               childType.equals("optional_type") || childType.equals("union_type"))) {
+                return text;
+            }
+        }
+
+        return "";
+    }
+
+    /**
+     * Строит сигнатуру PHP функции.
+     */
+    private String buildPhpSignature(String name, List<ParameterInfo> params, String returnType) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("function ").append(name).append("(");
+
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sb.append(", ");
+            ParameterInfo param = params.get(i);
+            if (!param.type().equals("mixed")) {
+                sb.append(param.type()).append(" ");
+            }
+            if (param.isVarargs()) {
+                sb.append("...");
+            }
+            sb.append("$").append(param.name());
+        }
+
+        sb.append(")");
+        if (!returnType.isEmpty()) {
+            sb.append(": ").append(returnType);
+        }
+        return sb.toString();
     }
 
     private Optional<SymbolInfo> extractProperty(TSNode node, Path path, String content, String parentName) {

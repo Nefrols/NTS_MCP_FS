@@ -18,9 +18,11 @@ package ru.nts.tools.mcp.core.treesitter.extractors;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo.ParameterInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import static ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.*;
@@ -82,7 +84,11 @@ public class CppSymbolExtractor implements LanguageSymbolExtractor {
         String name = getNodeText(nameNode, content);
         Location location = nodeToLocation(node, path);
         String doc = extractPrecedingComment(node, content);
-        String signature = extractMethodSignature(node, content);
+
+        // Извлекаем параметры и возвращаемый тип используя методы из CSymbolExtractor
+        List<ParameterInfo> params = cExtractor.extractCParameters(declarator, content);
+        String returnType = cExtractor.extractCReturnType(node, content);
+        String signature = cExtractor.buildCSignature(name, params, returnType);
 
         // Detect constructor/destructor
         SymbolKind kind = SymbolKind.FUNCTION;
@@ -94,7 +100,7 @@ public class CppSymbolExtractor implements LanguageSymbolExtractor {
             kind = SymbolKind.METHOD;
         }
 
-        return Optional.of(new SymbolInfo(name, kind, null, signature, doc, location, parentName));
+        return Optional.of(new SymbolInfo(name, kind, returnType, signature, params, doc, location, parentName));
     }
 
     private Optional<SymbolInfo> extractField(TSNode node, Path path, String content, String parentName) {

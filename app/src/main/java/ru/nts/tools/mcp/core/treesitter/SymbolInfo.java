@@ -16,6 +16,7 @@
 package ru.nts.tools.mcp.core.treesitter;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -26,6 +27,7 @@ import java.util.Objects;
  * @param kind тип символа (class, method, field и т.д.)
  * @param type тип данных (для переменных/полей/параметров), может быть null
  * @param signature полная сигнатура (для методов/функций), может быть null
+ * @param parameters структурированный список параметров (для методов/функций), может быть null
  * @param documentation документация (Javadoc/docstring), может быть null
  * @param location позиция символа в файле
  * @param parentName имя родительского символа (например, класс для метода), может быть null
@@ -35,6 +37,7 @@ public record SymbolInfo(
         SymbolKind kind,
         String type,
         String signature,
+        List<ParameterInfo> parameters,
         String documentation,
         Location location,
         String parentName
@@ -44,14 +47,22 @@ public record SymbolInfo(
      * Создает SymbolInfo с минимальным набором данных.
      */
     public SymbolInfo(String name, SymbolKind kind, Location location) {
-        this(name, kind, null, null, null, location, null);
+        this(name, kind, null, null, null, null, location, null);
     }
 
     /**
      * Создает SymbolInfo с именем родителя.
      */
     public SymbolInfo(String name, SymbolKind kind, Location location, String parentName) {
-        this(name, kind, null, null, null, location, parentName);
+        this(name, kind, null, null, null, null, location, parentName);
+    }
+
+    /**
+     * Создает SymbolInfo с типом, сигнатурой и документацией (без parameters для обратной совместимости).
+     */
+    public SymbolInfo(String name, SymbolKind kind, String type, String signature,
+                      String documentation, Location location, String parentName) {
+        this(name, kind, type, signature, null, documentation, location, parentName);
     }
 
     /**
@@ -69,21 +80,92 @@ public record SymbolInfo(
      * Создает копию с обновленной документацией.
      */
     public SymbolInfo withDocumentation(String doc) {
-        return new SymbolInfo(name, kind, type, signature, doc, location, parentName);
+        return new SymbolInfo(name, kind, type, signature, parameters, doc, location, parentName);
     }
 
     /**
      * Создает копию с обновленной сигнатурой.
      */
     public SymbolInfo withSignature(String sig) {
-        return new SymbolInfo(name, kind, type, sig, documentation, location, parentName);
+        return new SymbolInfo(name, kind, type, sig, parameters, documentation, location, parentName);
     }
 
     /**
      * Создает копию с обновленным типом.
      */
     public SymbolInfo withType(String newType) {
-        return new SymbolInfo(name, kind, newType, signature, documentation, location, parentName);
+        return new SymbolInfo(name, kind, newType, signature, parameters, documentation, location, parentName);
+    }
+
+    /**
+     * Создает копию с обновленными параметрами.
+     */
+    public SymbolInfo withParameters(List<ParameterInfo> params) {
+        return new SymbolInfo(name, kind, type, signature, params, documentation, location, parentName);
+    }
+
+    /**
+     * Возвращает нормализованную сигнатуру для сравнения перегруженных методов.
+     * Формат: "(Type1, Type2)" - только типы параметров без имён.
+     */
+    public String normalizedParameterSignature() {
+        if (parameters == null || parameters.isEmpty()) {
+            return "()";
+        }
+        StringBuilder sb = new StringBuilder("(");
+        for (int i = 0; i < parameters.size(); i++) {
+            if (i > 0) sb.append(", ");
+            String type = parameters.get(i).type();
+            // Убираем все generics (включая вложенные) для упрощённого сравнения
+            type = removeGenerics(type);
+            // Убираем квалификацию пакетов
+            type = type.replaceAll("\\b[a-z][\\w.]*\\.([A-Z])", "$1");
+            sb.append(type.trim());
+        }
+        sb.append(")");
+        return sb.toString();
+    }
+
+    /**
+     * Удаляет generics из типа, включая вложенные.
+     */
+    private static String removeGenerics(String type) {
+        if (type == null || !type.contains("<")) return type;
+        StringBuilder result = new StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < type.length(); i++) {
+            char c = type.charAt(i);
+            if (c == '<') {
+                depth++;
+            } else if (c == '>') {
+                depth--;
+            } else if (depth == 0) {
+                result.append(c);
+            }
+        }
+        return result.toString();
+    }
+
+    /**
+     * Проверяет соответствие параметров указанной сигнатуре.
+     *
+     * @param signaturePattern сигнатура в формате "(Type1, Type2)" или "()"
+     * @return true если сигнатура совпадает
+     */
+    public boolean matchesParameterSignature(String signaturePattern) {
+        if (signaturePattern == null || signaturePattern.isEmpty()) {
+            return true; // Без фильтра - всегда совпадает
+        }
+        String normalized = normalizedParameterSignature();
+        String patternNormalized = signaturePattern.trim()
+                .replaceAll("\\s*\\(\\s*", "(")
+                .replaceAll("\\s*\\)\\s*", ")")
+                .replaceAll("\\s*,\\s*", ", ");
+        // Удаляем generics из паттерна
+        patternNormalized = removeGenerics(patternNormalized);
+        // Убираем квалификацию пакетов
+        patternNormalized = patternNormalized.replaceAll("\\b[a-z][\\w.]*\\.([A-Z])", "$1");
+        return normalized.equals(patternNormalized);
     }
 
     /**
@@ -227,6 +309,44 @@ public record SymbolInfo(
         public int hashCode() {
             return Objects.hash(path.toAbsolutePath().normalize(),
                     startLine, startColumn, endLine, endColumn);
+        }
+    }
+
+    /**
+     * Информация о параметре метода/функции.
+     * Извлекается из AST tree-sitter для точного сравнения сигнатур.
+     *
+     * @param name имя параметра
+     * @param type тип параметра (полный, включая generics)
+     * @param isVarargs true если это varargs параметр (String... args)
+     */
+    public record ParameterInfo(
+            String name,
+            String type,
+            boolean isVarargs
+    ) {
+        /**
+         * Создает ParameterInfo для обычного параметра.
+         */
+        public ParameterInfo(String name, String type) {
+            this(name, type, false);
+        }
+
+        /**
+         * Возвращает нормализованный тип для сравнения.
+         * Убирает generics и квалификацию пакетов.
+         */
+        public String normalizedType() {
+            if (type == null) return "";
+            return type
+                    .replaceAll("<[^>]*>", "")
+                    .replaceAll("\\b[a-z][\\w.]*\\.([A-Z])", "$1")
+                    .trim();
+        }
+
+        @Override
+        public String toString() {
+            return type + " " + name + (isVarargs ? " (varargs)" : "");
         }
     }
 }

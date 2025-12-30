@@ -174,6 +174,9 @@ public class EditFileTool implements McpTool {
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
         boolean dryRun = params.path("dryRun").asBoolean(false);
+
+        validateOperationsContentConflict(params);
+
         // Выбор режима: мульти-файловое или одиночное редактирование
         if (params.has("edits")) {
             JsonNode editsNode = params.get("edits");
@@ -448,8 +451,11 @@ public class EditFileTool implements McpTool {
         }
 
         // Проверяем, что токен покрывает диапазон редактирования
-        // InfinityRange: для файлов, созданных в текущей транзакции, проверка границ отключена
-        boolean skipBoundaryCheck = TransactionManager.isFileCreatedInTransaction(path);
+        // InfinityRange: для файлов, созданных в текущей транзакции или сессии, проверка границ отключена
+        // Это решает проблему "статичных токенов в батчах" - когда файл создаётся через `create`,
+        // а затем редактируется в последующих вызовах, токен автоматически покрывает весь файл
+        boolean skipBoundaryCheck = TransactionManager.isFileCreatedInTransaction(path) ||
+                                    TransactionManager.isFileCreatedInSession(path);
         if (!skipBoundaryCheck && !token.covers(editStart, editEnd)) {
             throw new SecurityException(String.format("Token does not cover edit range [%d-%d]. Token covers [%d-%d]. " + "Read the required lines first with nts_file_read.", editStart, editEnd, token.startLine(), token.endLine()));
         }
@@ -679,6 +685,54 @@ public class EditFileTool implements McpTool {
             String[] newLines = textToInsert.split("\n", -1);
             for (int i = 0; i < newLines.length; i++) {
                 lines.add(start - 1 + i, newLines[i]);
+            }
+        }
+    }
+
+    /**
+     * Валидирует отсутствие конфликта между operations и content верхнего уровня.
+     *
+     * @param params параметры запроса
+     * @throws IllegalArgumentException если обнаружен конфликт
+     */
+    private void validateOperationsContentConflict(JsonNode params) {
+        boolean hasOperations = params.has("operations") && params.get("operations").isArray()
+                && params.get("operations").size() > 0;
+        boolean hasTopLevelContent = params.has("content") && !params.get("content").asText("").isEmpty();
+        boolean hasStartLine = params.has("startLine");
+
+        if (hasOperations && hasTopLevelContent) {
+            throw new IllegalArgumentException(
+                    "CONFLICT: Both 'operations' array and top-level 'content' are provided.\n" +
+                    "When using 'operations', content must be specified INSIDE each operation object.\n" +
+                    "Top-level 'content' is ignored when 'operations' is present.\n\n" +
+                    "SOLUTION: Either:\n" +
+                    "  1. Use operations[{startLine, content, ...}] without top-level content\n" +
+                    "  2. Use startLine + content (without operations array) for single edit\n\n" +
+                    "EXAMPLE (correct batch):\n" +
+                    "  {\"operations\": [{\"startLine\": 5, \"content\": \"new line 5\"}, " +
+                    "{\"startLine\": 10, \"content\": \"new line 10\"}]}");
+        }
+
+        // Предупреждение если есть operations и startLine верхнего уровня
+        if (hasOperations && hasStartLine) {
+            // startLine игнорируется при использовании operations, но это не ошибка
+            // Можно добавить warning в лог, но не блокировать операцию
+        }
+
+        // Валидируем также edits массив
+        if (params.has("edits") && params.get("edits").isArray()) {
+            for (int i = 0; i < params.get("edits").size(); i++) {
+                JsonNode edit = params.get("edits").get(i);
+                boolean editHasOps = edit.has("operations") && edit.get("operations").isArray()
+                        && edit.get("operations").size() > 0;
+                boolean editHasContent = edit.has("content") && !edit.get("content").asText("").isEmpty();
+
+                if (editHasOps && editHasContent) {
+                    throw new IllegalArgumentException(
+                            "CONFLICT in edits[" + i + "]: Both 'operations' and 'content' provided.\n" +
+                            "When using 'operations', content must be specified INSIDE each operation object.");
+                }
             }
         }
     }

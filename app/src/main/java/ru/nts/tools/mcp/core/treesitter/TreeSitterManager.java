@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32C;
 
 /**
@@ -65,6 +66,17 @@ public final class TreeSitterManager {
      * Файлы большего размера не парсятся для предотвращения OOM.
      */
     private static final long MAX_PARSE_SIZE_BYTES = 5 * 1024 * 1024;
+
+    /**
+     * Максимальный общий размер кэша AST деревьев (50MB).
+     * При превышении старые записи будут удалены.
+     */
+    private static final long MAX_CACHED_AST_BYTES = 50 * 1024 * 1024;
+
+    /**
+     * Текущий размер кэша в байтах (приблизительно).
+     */
+    private final AtomicLong cachedAstSize = new AtomicLong(0);
 
     private TreeSitterManager() {}
 
@@ -184,17 +196,19 @@ public final class TreeSitterManager {
 
         TSTree tree = parse(content, langId);
 
-        // Ограничиваем размер кэша
+        // Оценка размера AST (примерно 3x от размера исходного кода)
+        long estimatedSize = (long) content.length() * 3;
+
+        // Проверяем лимиты кэша
+        evictIfNeeded(estimatedSize);
+
+        // Ограничиваем размер кэша по количеству
         if (treeCache.size() >= MAX_CACHE_SIZE) {
-            // Удаляем самые старые записи
-            treeCache.entrySet().stream()
-                    .sorted((a, b) -> a.getValue().parsedAt.compareTo(b.getValue().parsedAt))
-                    .limit(MAX_CACHE_SIZE / 4)
-                    .map(Map.Entry::getKey)
-                    .forEach(treeCache::remove);
+            evictOldestEntries(MAX_CACHE_SIZE / 4);
         }
 
-        treeCache.put(normalizedPath, new CachedTree(tree, currentCrc, Instant.now(), langId));
+        treeCache.put(normalizedPath, new CachedTree(tree, currentCrc, Instant.now(), langId, estimatedSize));
+        cachedAstSize.addAndGet(estimatedSize);
         return tree;
     }
 
@@ -237,14 +251,18 @@ public final class TreeSitterManager {
 
         // Не кэшируем очень большие файлы для экономии памяти
         if (lineCount <= MAX_LINES_FOR_CACHING) {
+            // Оценка размера AST
+            long estimatedSize = (long) content.length() * 3;
+
+            // Проверяем лимиты кэша
+            evictIfNeeded(estimatedSize);
+
             if (treeCache.size() >= MAX_CACHE_SIZE) {
-                treeCache.entrySet().stream()
-                        .sorted((a, b) -> a.getValue().parsedAt.compareTo(b.getValue().parsedAt))
-                        .limit(MAX_CACHE_SIZE / 4)
-                        .map(Map.Entry::getKey)
-                        .forEach(treeCache::remove);
+                evictOldestEntries(MAX_CACHE_SIZE / 4);
             }
-            treeCache.put(normalizedPath, new CachedTree(tree, currentCrc, Instant.now(), langId));
+
+            treeCache.put(normalizedPath, new CachedTree(tree, currentCrc, Instant.now(), langId, estimatedSize));
+            cachedAstSize.addAndGet(estimatedSize);
         }
 
         return new ParseResult(tree, content, langId, currentCrc);
@@ -290,7 +308,10 @@ public final class TreeSitterManager {
      * @param path путь к файлу
      */
     public void invalidateCache(Path path) {
-        treeCache.remove(path.toAbsolutePath().normalize());
+        CachedTree removed = treeCache.remove(path.toAbsolutePath().normalize());
+        if (removed != null) {
+            cachedAstSize.addAndGet(-removed.estimatedSize);
+        }
     }
 
     /**
@@ -298,13 +319,21 @@ public final class TreeSitterManager {
      */
     public void clearCache() {
         treeCache.clear();
+        cachedAstSize.set(0);
     }
 
     /**
-     * Возвращает текущий размер кэша.
+     * Возвращает текущий размер кэша (количество записей).
      */
     public int getCacheSize() {
         return treeCache.size();
+    }
+
+    /**
+     * Возвращает оценочный размер кэша в байтах.
+     */
+    public long getCacheSizeBytes() {
+        return cachedAstSize.get();
     }
 
     /**
@@ -333,9 +362,34 @@ public final class TreeSitterManager {
     }
 
     /**
+     * Удаляет старые записи если размер кэша превышает лимит.
+     */
+    private void evictIfNeeded(long additionalSize) {
+        long targetSize = MAX_CACHED_AST_BYTES - additionalSize;
+        while (cachedAstSize.get() > targetSize && !treeCache.isEmpty()) {
+            evictOldestEntries(1);
+        }
+    }
+
+    /**
+     * Удаляет указанное количество старых записей.
+     */
+    private void evictOldestEntries(int count) {
+        treeCache.entrySet().stream()
+                .sorted((a, b) -> a.getValue().parsedAt.compareTo(b.getValue().parsedAt))
+                .limit(count)
+                .forEach(entry -> {
+                    CachedTree removed = treeCache.remove(entry.getKey());
+                    if (removed != null) {
+                        cachedAstSize.addAndGet(-removed.estimatedSize);
+                    }
+                });
+    }
+
+    /**
      * Кэшированное AST дерево с метаданными.
      */
-    private record CachedTree(TSTree tree, long crc32c, Instant parsedAt, String langId) {}
+    private record CachedTree(TSTree tree, long crc32c, Instant parsedAt, String langId, long estimatedSize) {}
 
     /**
      * Результат парсинга с контентом.

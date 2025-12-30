@@ -29,6 +29,14 @@ public class SessionLineAccessTracker {
     // Per-session хранилище токенов (Path -> TreeMap<startLine, Token>)
     private final Map<Path, TreeMap<Integer, LineAccessToken>> tokens = new HashMap<>();
 
+    // Path aliasing: отслеживает перемещения файлов (oldPath -> currentPath)
+    // Позволяет использовать старые токены после move/rename вне батча
+    private final Map<Path, Path> pathAliases = new HashMap<>();
+
+    // Reverse alias map: currentPath -> Set<oldPaths>
+    // Для проверки токенов с хешем старого пути против нового пути
+    private final Map<Path, Set<Path>> reverseAliases = new HashMap<>();
+
     // Синхронизация для потокобезопасности внутри сессии
     private final Object lock = new Object();
 
@@ -323,12 +331,20 @@ public class SessionLineAccessTracker {
     /**
      * Переносит токены при перемещении/переименовании файла.
      * rangeCrc сохраняется, так как содержимое файла не меняется при перемещении.
+     * Также регистрирует alias для того, чтобы старые токены работали вне batch.
      */
     public void moveTokens(Path oldPath, Path newPath) {
         Path absOld = oldPath.toAbsolutePath().normalize();
         Path absNew = newPath.toAbsolutePath().normalize();
 
         synchronized (lock) {
+            // Регистрируем alias: старый путь -> новый путь
+            // Это позволяет использовать старые токены после move/rename вне батча
+            pathAliases.put(absOld, absNew);
+
+            // Reverse alias для проверки токенов со старым хешем
+            reverseAliases.computeIfAbsent(absNew, k -> new HashSet<>()).add(absOld);
+
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.remove(absOld);
             if (fileTokens != null) {
                 TreeMap<Integer, LineAccessToken> newFileTokens = new TreeMap<>();
@@ -342,6 +358,93 @@ public class SessionLineAccessTracker {
                 tokens.put(absNew, newFileTokens);
             }
         }
+    }
+
+    /**
+     * Регистрирует alias пути: oldPath -> newPath.
+     * Позволяет использовать токены с oldPath для файлов по newPath.
+     */
+    public void registerPathAlias(Path oldPath, Path newPath) {
+        Path absOld = oldPath.toAbsolutePath().normalize();
+        Path absNew = newPath.toAbsolutePath().normalize();
+
+        synchronized (lock) {
+            pathAliases.put(absOld, absNew);
+            reverseAliases.computeIfAbsent(absNew, k -> new HashSet<>()).add(absOld);
+        }
+    }
+
+    /**
+     * Возвращает все известные предыдущие пути для текущего пути (транзитивно).
+     * Следует по цепочке алиасов, собирая все старые пути.
+     * Используется для валидации токенов со старыми хешами.
+     *
+     * @param currentPath Текущий путь файла
+     * @return Множество всех предыдущих путей (может быть пустым)
+     */
+    public Set<Path> getPreviousPaths(Path currentPath) {
+        Path absPath = currentPath.toAbsolutePath().normalize();
+
+        synchronized (lock) {
+            Set<Path> allPreviousPaths = new HashSet<>();
+            collectPreviousPathsRecursively(absPath, allPreviousPaths);
+            return allPreviousPaths;
+        }
+    }
+
+    /**
+     * Рекурсивно собирает все предыдущие пути.
+     */
+    private void collectPreviousPathsRecursively(Path path, Set<Path> collected) {
+        Set<Path> directPrevious = reverseAliases.get(path);
+        if (directPrevious == null) {
+            return;
+        }
+
+        for (Path prev : directPrevious) {
+            if (!collected.contains(prev)) {
+                collected.add(prev);
+                // Рекурсивно собираем предыдущие пути для каждого найденного
+                collectPreviousPathsRecursively(prev, collected);
+            }
+        }
+    }
+
+    /**
+     * Резолвит текущий путь по возможному старому пути.
+     * Следует цепочке алиасов до конечного пути.
+     *
+     * @param path Путь (возможно устаревший)
+     * @return Актуальный путь или исходный, если алиасов нет
+     */
+    public Path resolveCurrentPath(Path path) {
+        Path absPath = path.toAbsolutePath().normalize();
+
+        synchronized (lock) {
+            Path current = absPath;
+            Set<Path> visited = new HashSet<>();
+
+            // Следуем по цепочке алиасов (защита от циклов)
+            while (pathAliases.containsKey(current) && !visited.contains(current)) {
+                visited.add(current);
+                current = pathAliases.get(current);
+            }
+
+            return current;
+        }
+    }
+
+    /**
+     * Проверяет, является ли один путь алиасом другого (прямо или транзитивно).
+     *
+     * @param possibleOldPath Возможный старый путь
+     * @param currentPath Текущий путь
+     * @return true если possibleOldPath является алиасом currentPath
+     */
+    public boolean isAliasOf(Path possibleOldPath, Path currentPath) {
+        Path resolved = resolveCurrentPath(possibleOldPath);
+        Path normalizedCurrent = currentPath.toAbsolutePath().normalize();
+        return resolved.equals(normalizedCurrent);
     }
 
     /**
@@ -422,11 +525,13 @@ public class SessionLineAccessTracker {
     }
 
     /**
-     * Сбрасывает все токены.
+     * Сбрасывает все токены и алиасы путей.
      */
     public void reset() {
         synchronized (lock) {
             tokens.clear();
+            pathAliases.clear();
+            reverseAliases.clear();
         }
     }
 }

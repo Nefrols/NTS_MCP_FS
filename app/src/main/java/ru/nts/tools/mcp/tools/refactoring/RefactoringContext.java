@@ -268,6 +268,46 @@ public class RefactoringContext {
         writtenFiles.add(path.toAbsolutePath().normalize());
     }
 
+    /**
+     * Переносит токены доступа и виртуальный контент при перемещении файла.
+     *
+     * @param oldPath старый путь к файлу
+     * @param newPath новый путь к файлу
+     */
+    public void handleFileMove(Path oldPath, Path newPath) {
+        Path normalizedOld = oldPath.toAbsolutePath().normalize();
+        Path normalizedNew = newPath.toAbsolutePath().normalize();
+
+        // 1. Переносим токены доступа
+        ru.nts.tools.mcp.core.LineAccessTracker.moveTokens(normalizedOld, normalizedNew);
+
+        // 2. Переносим виртуальный контент если есть
+        String virtualContent = virtualContents.remove(normalizedOld);
+        if (virtualContent != null) {
+            virtualContents.put(normalizedNew, virtualContent);
+        }
+
+        // 3. Переносим cached токен доступа
+        String token = accessTokens.remove(normalizedOld);
+        if (token != null) {
+            accessTokens.put(normalizedNew, token);
+        }
+
+        // 4. Обновляем список записанных файлов
+        if (writtenFiles.remove(normalizedOld)) {
+            writtenFiles.add(normalizedNew);
+        }
+
+        // 5. Переносим снапшот для отслеживания внешних изменений
+        sessionContext.externalChanges().moveSnapshot(normalizedOld, normalizedNew);
+
+        // 6. Записываем перемещение для Path Lineage (Deep Undo)
+        transactionManager.recordFileMove(normalizedOld, normalizedNew);
+
+        // 7. Отмечаем новый путь как разблокированный в транзакции
+        transactionManager.markFileAccessedInTransaction(normalizedNew);
+    }
+
     private long calculateCRC32(byte[] bytes) {
         CRC32C crc = new CRC32C();
         crc.update(bytes);

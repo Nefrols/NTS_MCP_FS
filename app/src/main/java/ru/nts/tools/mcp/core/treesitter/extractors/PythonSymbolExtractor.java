@@ -18,9 +18,12 @@ package ru.nts.tools.mcp.core.treesitter.extractors;
 import org.treesitter.TSNode;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
+import ru.nts.tools.mcp.core.treesitter.SymbolInfo.ParameterInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.SymbolKind;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils.*;
@@ -47,7 +50,163 @@ public class PythonSymbolExtractor implements LanguageSymbolExtractor {
         SymbolKind kind = name.equals("__init__") ? SymbolKind.CONSTRUCTOR :
                 (parentName != null ? SymbolKind.METHOD : SymbolKind.FUNCTION);
 
-        return Optional.of(new SymbolInfo(name, kind, null, null, doc, location, parentName));
+        // Извлекаем параметры из AST
+        List<ParameterInfo> params = extractPythonParameters(node, content, parentName != null);
+
+        // Извлекаем тип возврата
+        String returnType = extractPythonReturnType(node, content);
+
+        // Строим сигнатуру
+        String signature = buildPythonSignature(name, params, returnType);
+
+        return Optional.of(new SymbolInfo(name, kind, returnType, signature, params, doc, location, parentName));
+    }
+
+    /**
+     * Извлекает параметры функции Python из AST.
+     * Форматы: param, param: type, param=default, *args, **kwargs
+     */
+    private List<ParameterInfo> extractPythonParameters(TSNode node, String content, boolean isMethod) {
+        List<ParameterInfo> params = new ArrayList<>();
+
+        TSNode paramList = findChildByType(node, "parameters");
+        if (paramList == null) return params;
+
+        int childCount = paramList.getChildCount();
+        boolean firstParam = true;
+
+        for (int i = 0; i < childCount; i++) {
+            TSNode child = paramList.getChild(i);
+            if (child == null || child.isNull()) continue;
+
+            String childType = child.getType();
+
+            // Пропускаем self/cls для методов (первый параметр)
+            if (firstParam && isMethod) {
+                if (childType.equals("identifier")) {
+                    String paramName = getNodeText(child, content);
+                    if (paramName.equals("self") || paramName.equals("cls")) {
+                        firstParam = false;
+                        continue;
+                    }
+                }
+            }
+
+            ParameterInfo param = null;
+
+            switch (childType) {
+                case "identifier" -> {
+                    // Простой параметр без типа
+                    param = new ParameterInfo(getNodeText(child, content), "Any", false);
+                }
+                case "typed_parameter" -> {
+                    param = extractTypedParameter(child, content);
+                }
+                case "default_parameter" -> {
+                    param = extractDefaultParameter(child, content);
+                }
+                case "typed_default_parameter" -> {
+                    param = extractTypedDefaultParameter(child, content);
+                }
+                case "list_splat_pattern" -> {
+                    // *args
+                    TSNode argName = findChildByType(child, "identifier");
+                    if (argName != null) {
+                        param = new ParameterInfo(getNodeText(argName, content), "tuple", true);
+                    }
+                }
+                case "dictionary_splat_pattern" -> {
+                    // **kwargs
+                    TSNode kwargName = findChildByType(child, "identifier");
+                    if (kwargName != null) {
+                        param = new ParameterInfo(getNodeText(kwargName, content), "dict", true);
+                    }
+                }
+            }
+
+            if (param != null) {
+                params.add(param);
+                firstParam = false;
+            }
+        }
+
+        return params;
+    }
+
+    private ParameterInfo extractTypedParameter(TSNode node, String content) {
+        TSNode nameNode = findChildByType(node, "identifier");
+        if (nameNode == null) return null;
+
+        String name = getNodeText(nameNode, content);
+        String type = "Any";
+
+        TSNode typeNode = findChildByType(node, "type");
+        if (typeNode != null) {
+            type = getNodeText(typeNode, content);
+        }
+
+        return new ParameterInfo(name, type, false);
+    }
+
+    private ParameterInfo extractDefaultParameter(TSNode node, String content) {
+        TSNode nameNode = findChildByType(node, "identifier");
+        if (nameNode == null) return null;
+
+        String name = getNodeText(nameNode, content);
+        return new ParameterInfo(name, "Any", false);
+    }
+
+    private ParameterInfo extractTypedDefaultParameter(TSNode node, String content) {
+        TSNode nameNode = findChildByType(node, "identifier");
+        if (nameNode == null) return null;
+
+        String name = getNodeText(nameNode, content);
+        String type = "Any";
+
+        TSNode typeNode = findChildByType(node, "type");
+        if (typeNode != null) {
+            type = getNodeText(typeNode, content);
+        }
+
+        return new ParameterInfo(name, type, false);
+    }
+
+    /**
+     * Извлекает тип возврата функции Python.
+     */
+    private String extractPythonReturnType(TSNode node, String content) {
+        TSNode returnType = findChildByType(node, "type");
+        if (returnType != null) {
+            return getNodeText(returnType, content);
+        }
+        return "None";
+    }
+
+    /**
+     * Строит сигнатуру функции Python.
+     */
+    private String buildPythonSignature(String name, List<ParameterInfo> params, String returnType) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("def ").append(name).append("(");
+
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sb.append(", ");
+            ParameterInfo param = params.get(i);
+            if (param.isVarargs()) {
+                sb.append("*").append(param.name());
+            } else {
+                sb.append(param.name());
+                if (!"Any".equals(param.type())) {
+                    sb.append(": ").append(param.type());
+                }
+            }
+        }
+
+        sb.append(")");
+        if (!"None".equals(returnType)) {
+            sb.append(" -> ").append(returnType);
+        }
+        return sb.toString();
     }
 
     private Optional<SymbolInfo> extractClass(TSNode node, Path path, String content, String parentName) {

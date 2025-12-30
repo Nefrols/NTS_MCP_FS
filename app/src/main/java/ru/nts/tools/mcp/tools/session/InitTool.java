@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
 import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.treesitter.SymbolIndex;
 import ru.nts.tools.mcp.McpServer;
 
 import java.nio.file.Files;
@@ -122,6 +123,12 @@ public class InitTool implements McpTool {
 
         Path projectRoot = PathSanitizer.getRoot();
         List<Path> allRoots = PathSanitizer.getRoots();
+
+        // Запускаем асинхронную индексацию символов для быстрой навигации
+        SymbolIndex symbolIndex = SymbolIndex.getInstance();
+        if (!symbolIndex.isIndexed() && !symbolIndex.isIndexing()) {
+            symbolIndex.indexProjectAsync(projectRoot);
+        }
 
         // Формируем информацию о roots
         String rootsInfo;

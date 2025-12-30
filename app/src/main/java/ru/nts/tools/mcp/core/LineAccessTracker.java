@@ -109,9 +109,40 @@ public class LineAccessTracker {
 
     /**
      * Переносит токены при перемещении/переименовании файла.
+     * Также регистрирует alias для использования старых токенов вне batch.
      */
     public static void moveTokens(Path oldPath, Path newPath) {
         ctx().moveTokens(oldPath, newPath);
+    }
+
+    /**
+     * Регистрирует alias пути: oldPath -> newPath.
+     */
+    public static void registerPathAlias(Path oldPath, Path newPath) {
+        ctx().registerPathAlias(oldPath, newPath);
+    }
+
+    /**
+     * Резолвит текущий путь по возможному старому пути.
+     * Следует цепочке алиасов до конечного пути.
+     */
+    public static Path resolveCurrentPath(Path path) {
+        return ctx().resolveCurrentPath(path);
+    }
+
+    /**
+     * Проверяет, является ли один путь алиасом другого.
+     */
+    public static boolean isAliasOf(Path possibleOldPath, Path currentPath) {
+        return ctx().isAliasOf(possibleOldPath, currentPath);
+    }
+
+    /**
+     * Возвращает все известные предыдущие пути для текущего пути.
+     * Используется для валидации токенов со старыми хешами.
+     */
+    public static java.util.Set<Path> getPreviousPaths(Path currentPath) {
+        return ctx().getPreviousPaths(currentPath);
     }
 
     /**

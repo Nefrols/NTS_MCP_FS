@@ -64,6 +64,10 @@ public class SessionTransactionManager {
     // Виртуальный контент файлов в текущей транзакции (для batch refactoring)
     private final ThreadLocal<Map<Path, String>> virtualContents = ThreadLocal.withInitial(HashMap::new);
 
+    // Файлы, созданные в текущей СЕССИИ (не очищается при commit/rollback)
+    // Используется для пропуска проверки границ токена между разными вызовами инструментов
+    private final Set<Path> filesCreatedInSession = Collections.synchronizedSet(new HashSet<>());
+
     private Path getSnapshotDir() throws IOException {
         // Используем currentOrDefault() для согласованности
         Path dir = SessionContext.currentOrDefault().getSnapshotsDir();
@@ -157,11 +161,15 @@ public class SessionTransactionManager {
     /**
      * Регистрирует файл как созданный в текущей транзакции.
      * Для таких файлов отключается проверка границ строк (InfinityRange).
+     * Также добавляет в сессионное хранилище для межтранзакционной проверки.
      */
     public void markFileCreatedInTransaction(Path path) {
+        Path normalized = path.toAbsolutePath().normalize();
         if (isInTransaction()) {
-            filesCreatedInTransaction.get().add(path.toAbsolutePath().normalize());
+            filesCreatedInTransaction.get().add(normalized);
         }
+        // Также добавляем в сессионное хранилище (не очищается при commit)
+        filesCreatedInSession.add(normalized);
     }
 
     /**
@@ -170,6 +178,14 @@ public class SessionTransactionManager {
      */
     public boolean isFileCreatedInTransaction(Path path) {
         return filesCreatedInTransaction.get().contains(path.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Проверяет, был ли файл создан в текущей сессии (в любой транзакции).
+     * Используется для пропуска проверки границ токена между разными вызовами инструментов.
+     */
+    public boolean isFileCreatedInSession(Path path) {
+        return filesCreatedInSession.contains(path.toAbsolutePath().normalize());
     }
 
     /**
@@ -652,6 +668,7 @@ public class SessionTransactionManager {
         }
         currentTransaction.remove();
         nestingLevel.set(0);
+        filesCreatedInSession.clear();
     }
 
     // ==================== Inner Classes ====================

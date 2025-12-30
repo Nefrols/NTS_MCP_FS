@@ -63,6 +63,15 @@ public class RenameOperation implements RefactoringOperation {
         if (!isValidIdentifier(newName)) {
             throw new IllegalArgumentException("Invalid identifier: '" + newName + "'");
         }
+
+        // Валидация signature если указана
+        if (params.has("signature")) {
+            String signature = params.get("signature").asText();
+            if (!signature.isEmpty() && !signature.matches("\\(.*\\)")) {
+                throw new IllegalArgumentException(
+                        "Invalid signature format: '" + signature + "'. Expected format: (Type1, Type2) or ()");
+            }
+        }
     }
 
     @Override
@@ -164,11 +173,17 @@ public class RenameOperation implements RefactoringOperation {
 
     /**
      * Находит символ по имени или позиции.
+     * При поиске по line без column, если указан kind, ищем символ нужного типа на строке.
+     * Поддерживает параметр signature для различения перегрузок методов.
+     * Формат signature: "(Type1, Type2)" или "()" для методов без параметров.
      */
     private SymbolInfo findSymbol(JsonNode params, Path path, RefactoringContext context)
             throws RefactoringException {
 
         try {
+            // Получаем фильтр по сигнатуре если указан
+            String signatureFilter = params.has("signature") ? params.get("signature").asText() : null;
+
             if (params.has("symbol")) {
                 // Поиск по имени
                 String symbolName = params.get("symbol").asText();
@@ -178,26 +193,42 @@ public class RenameOperation implements RefactoringOperation {
                 List<SymbolInfo> matches = symbols.stream()
                         .filter(s -> s.name().equals(symbolName))
                         .filter(s -> kindFilter == null || matchesKind(s, kindFilter))
+                        .filter(s -> signatureFilter == null || matchesSignature(s, signatureFilter, path, context))
                         .toList();
 
                 if (matches.isEmpty()) {
                     return null;
                 }
                 if (matches.size() > 1) {
-                    throw RefactoringException.ambiguousSymbol(symbolName,
-                            matches.stream()
-                                    .map(s -> s.kind() + " at " + s.location().formatShort())
-                                    .toList());
+                    // Если есть несколько совпадений и не указана сигнатура, выдаём подсказку
+                    List<String> suggestions = matches.stream()
+                            .map(s -> formatSymbolWithSignature(s, path, context))
+                            .toList();
+                    throw RefactoringException.ambiguousSymbol(symbolName, suggestions);
                 }
                 return matches.get(0);
 
             } else if (params.has("line")) {
                 // Поиск по позиции
                 int line = params.get("line").asInt();
-                int column = params.has("column") ? params.get("column").asInt() : 1;
+                String kindFilter = params.has("kind") ? params.get("kind").asText() : null;
 
-                return context.getSymbolResolver().hover(path, line, column)
-                        .orElse(null);
+                // REPORT4 Fix 1.2: При указанном kind приоритетно ищем по типу на строке
+                // Это предотвращает путаницу между типами возврата и методами на той же строке
+                if (kindFilter != null) {
+                    SymbolInfo byKind = findSymbolAtLineByKind(path, line, kindFilter, context);
+                    if (byKind != null) {
+                        return byKind;
+                    }
+                    // Если не нашли по kind, не fallback на hover - это предотвращает
+                    // случайное переименование типа вместо метода
+                    return null;
+                }
+
+                // Без kind используем hover с column (по умолчанию 1)
+                int column = params.has("column") ? params.get("column").asInt() : 1;
+                Optional<SymbolInfo> found = context.getSymbolResolver().hover(path, line, column);
+                return found.orElse(null);
             }
 
             return null;
@@ -205,6 +236,52 @@ public class RenameOperation implements RefactoringOperation {
         } catch (IOException e) {
             throw new RefactoringException("Failed to analyze file: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Находит символ заданного типа на указанной строке.
+     * Используется когда column не указан, но указан kind.
+     *
+     * @param path путь к файлу
+     * @param line номер строки (1-based)
+     * @param kindFilter тип символа (method, class, field и т.д.)
+     * @param context контекст рефакторинга
+     * @return найденный символ или null
+     */
+    private SymbolInfo findSymbolAtLineByKind(Path path, int line, String kindFilter,
+                                               RefactoringContext context) throws IOException {
+        List<SymbolInfo> symbols = context.getSymbolResolver().listSymbols(path);
+
+        // Ищем символы, определённые на указанной строке с нужным типом
+        List<SymbolInfo> matches = symbols.stream()
+                .filter(s -> s.location().startLine() == line)
+                .filter(s -> matchesKind(s, kindFilter))
+                .toList();
+
+        if (matches.size() == 1) {
+            return matches.get(0);
+        }
+
+        if (matches.size() > 1) {
+            // Несколько символов одного типа на строке - возвращаем первый
+            // (в реальности это редкий случай)
+            return matches.get(0);
+        }
+
+        // Если точного совпадения по startLine нет, ищем символы, включающие эту строку
+        List<SymbolInfo> containing = symbols.stream()
+                .filter(s -> s.location().startLine() <= line && s.location().endLine() >= line)
+                .filter(s -> matchesKind(s, kindFilter))
+                .toList();
+
+        if (!containing.isEmpty()) {
+            // Возвращаем наиболее специфичный (с наименьшим диапазоном)
+            return containing.stream()
+                    .min(Comparator.comparingInt(s -> s.location().endLine() - s.location().startLine()))
+                    .orElse(null);
+        }
+
+        return null;
     }
 
     /**
@@ -575,6 +652,290 @@ public class RenameOperation implements RefactoringOperation {
             case "parameter" -> symbol.kind() == SymbolInfo.SymbolKind.PARAMETER;
             default -> true;
         };
+    }
+
+    /**
+     * Проверяет соответствие символа указанной сигнатуре.
+     * Позволяет избирательно переименовывать перегруженные методы.
+     * Использует структурированные параметры из AST (ООП подход).
+     *
+     * @param symbol проверяемый символ
+     * @param signature требуемая сигнатура в формате "(Type1, Type2)" или "()"
+     * @param path путь к файлу (не используется, оставлен для совместимости)
+     * @param context контекст рефакторинга (не используется)
+     * @return true если сигнатура совпадает
+     */
+    private boolean matchesSignature(SymbolInfo symbol, String signature, Path path,
+                                      RefactoringContext context) {
+        // Только для методов/функций
+        if (symbol.kind() != SymbolInfo.SymbolKind.METHOD &&
+                symbol.kind() != SymbolInfo.SymbolKind.FUNCTION) {
+            return true; // Для не-методов сигнатура не применима
+        }
+
+        // Используем структурированные параметры из AST
+        if (symbol.parameters() != null) {
+            return symbol.matchesParameterSignature(signature);
+        }
+
+        // Fallback: если параметры не извлечены, используем строковый парсинг
+        return matchesSignatureFallback(symbol, signature, path);
+    }
+
+    /**
+     * Fallback для matchesSignature когда параметры не извлечены из AST.
+     */
+    private boolean matchesSignatureFallback(SymbolInfo symbol, String signature, Path path) {
+        try {
+            String content = Files.readString(path);
+            String[] lines = content.split("\n", -1);
+            int lineIdx = symbol.location().startLine() - 1;
+
+            if (lineIdx < 0 || lineIdx >= lines.length) {
+                return true;
+            }
+
+            String line = lines[lineIdx];
+            String extractedSig = extractMethodSignature(line, symbol.name());
+            if (extractedSig == null) {
+                return true;
+            }
+
+            String normalizedExpected = normalizeSignature(signature);
+            String normalizedActual = normalizeSignature(extractedSig);
+
+            return normalizedExpected.equals(normalizedActual);
+
+        } catch (IOException e) {
+            return true;
+        }
+    }
+
+    /**
+     * Извлекает сигнатуру метода из строки кода.
+     * Использует balanced matching для корректной обработки вложенных скобок.
+     *
+     * @param line строка с определением метода
+     * @param methodName имя метода
+     * @return сигнатура в формате "(Type1, Type2)" или null
+     */
+    private String extractMethodSignature(String line, String methodName) {
+        // Находим начало параметров после имени метода
+        int nameIdx = line.indexOf(methodName);
+        if (nameIdx < 0) return null;
+
+        int openParen = line.indexOf('(', nameIdx + methodName.length());
+        if (openParen < 0) return null;
+
+        // Используем balanced matching для нахождения закрывающей скобки
+        int closeParen = findMatchingParen(line, openParen);
+        if (closeParen < 0) return null;
+
+        String params = line.substring(openParen + 1, closeParen).trim();
+        if (params.isEmpty()) {
+            return "()";
+        }
+
+        // Разбиваем параметры с учётом вложенных generics
+        List<String> paramList = splitByCommaBalanced(params);
+        List<String> types = new ArrayList<>();
+
+        for (String param : paramList) {
+            String trimmed = param.trim();
+            if (trimmed.isEmpty()) continue;
+
+            String type = extractParameterType(trimmed);
+            if (type != null) {
+                types.add(type);
+            }
+        }
+
+        return "(" + String.join(", ", types) + ")";
+    }
+
+    /**
+     * Находит индекс закрывающей скобки, соответствующей открывающей.
+     */
+    private int findMatchingParen(String str, int openIndex) {
+        if (openIndex < 0 || openIndex >= str.length() || str.charAt(openIndex) != '(') {
+            return -1;
+        }
+        int depth = 1;
+        for (int i = openIndex + 1; i < str.length(); i++) {
+            char c = str.charAt(i);
+            if (c == '(' || c == '<' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == '>' || c == ']' || c == '}') {
+                depth--;
+                if (depth == 0 && c == ')') return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Разбивает строку по запятым с учётом вложенных скобок и generics.
+     */
+    private List<String> splitByCommaBalanced(String str) {
+        List<String> result = new ArrayList<>();
+        int depth = 0;
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < str.length(); i++) {
+            char c = str.charAt(i);
+            if (c == '<' || c == '(' || c == '[' || c == '{') {
+                depth++;
+                current.append(c);
+            } else if (c == '>' || c == ')' || c == ']' || c == '}') {
+                depth--;
+                current.append(c);
+            } else if (c == ',' && depth == 0) {
+                result.add(current.toString());
+                current = new StringBuilder();
+            } else {
+                current.append(c);
+            }
+        }
+        if (current.length() > 0) {
+            result.add(current.toString());
+        }
+        return result;
+    }
+
+    /**
+     * Извлекает тип параметра из объявления.
+     * Поддерживает сложные generics типа Map<String, List<Integer>>.
+     */
+    private String extractParameterType(String paramDecl) {
+        String trimmed = paramDecl.trim();
+
+        // Удаляем модификаторы (final, @annotations)
+        trimmed = trimmed.replaceAll("^(?:final\\s+|@\\w+\\s*)+", "");
+
+        // Kotlin style: "name: Type" или "name: Type?"
+        if (trimmed.contains(":")) {
+            int colonIdx = trimmed.indexOf(':');
+            String typeAndRest = trimmed.substring(colonIdx + 1).trim();
+            // Извлекаем тип (может содержать generics)
+            return extractTypeWithGenerics(typeAndRest);
+        }
+
+        // Java style: "Type name" или "Type<Generic> name" или "Type... name"
+        // Находим последний идентификатор (имя параметра)
+        // Тип - всё что до него
+
+        // Находим границу между типом и именем
+        // Тип заканчивается на: >, ], пробел после буквы, ...
+        int lastSpace = -1;
+        int depth = 0;
+        for (int i = trimmed.length() - 1; i >= 0; i--) {
+            char c = trimmed.charAt(i);
+            if (c == '>' || c == ']' || c == ')') depth++;
+            else if (c == '<' || c == '[' || c == '(') depth--;
+            else if (Character.isWhitespace(c) && depth == 0) {
+                lastSpace = i;
+                break;
+            }
+        }
+
+        if (lastSpace > 0) {
+            String type = trimmed.substring(0, lastSpace).trim();
+            // Обрабатываем varargs
+            type = type.replace("...", "[]");
+            return type;
+        }
+
+        // Fallback: возвращаем как есть (для простых типов без имени)
+        if (trimmed.matches("[A-Z][\\w<>\\[\\],\\s?]*")) {
+            return trimmed;
+        }
+
+        return null;
+    }
+
+    /**
+     * Извлекает тип с generics из строки.
+     */
+    private String extractTypeWithGenerics(String str) {
+        StringBuilder result = new StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < str.length(); i++) {
+            char c = str.charAt(i);
+            if (c == '<' || c == '[') {
+                depth++;
+                result.append(c);
+            } else if (c == '>' || c == ']') {
+                depth--;
+                result.append(c);
+            } else if (Character.isWhitespace(c) && depth == 0) {
+                // Конец типа
+                break;
+            } else if (c == '?' && depth == 0) {
+                // Kotlin nullable suffix
+                result.append(c);
+                break;
+            } else {
+                result.append(c);
+            }
+        }
+        return result.toString().trim();
+    }
+
+    /**
+     * Нормализует сигнатуру для сравнения.
+     * Удаляет пробелы, приводит к единому формату.
+     */
+    private String normalizeSignature(String signature) {
+        if (signature == null) return "()";
+
+        // Убираем пробелы вокруг скобок и запятых
+        String normalized = signature.trim()
+                .replaceAll("\\s*\\(\\s*", "(")
+                .replaceAll("\\s*\\)\\s*", ")")
+                .replaceAll("\\s*,\\s*", ",");
+
+        // Убираем generics для упрощённого сравнения
+        // List<String> -> List
+        normalized = normalized.replaceAll("<[^>]*>", "");
+
+        // Убираем квалификацию пакетов
+        // java.lang.String -> String
+        normalized = normalized.replaceAll("\\b[a-z][\\w.]*\\.([A-Z])", "$1");
+
+        return normalized;
+    }
+
+    /**
+     * Форматирует символ с сигнатурой для вывода пользователю.
+     * Использует структурированные параметры из AST если доступны.
+     */
+    private String formatSymbolWithSignature(SymbolInfo symbol, Path path, RefactoringContext context) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(symbol.kind()).append(" at ").append(symbol.location().formatShort());
+
+        if (symbol.kind() == SymbolInfo.SymbolKind.METHOD ||
+                symbol.kind() == SymbolInfo.SymbolKind.FUNCTION) {
+
+            // Используем структурированные параметры из AST
+            if (symbol.parameters() != null && !symbol.parameters().isEmpty()) {
+                sb.append(" signature: ").append(symbol.normalizedParameterSignature());
+            }
+            // Fallback: извлекаем из строки
+            else {
+                try {
+                    String content = Files.readString(path);
+                    String[] lines = content.split("\n", -1);
+                    int lineIdx = symbol.location().startLine() - 1;
+
+                    if (lineIdx >= 0 && lineIdx < lines.length) {
+                        String sig = extractMethodSignature(lines[lineIdx], symbol.name());
+                        if (sig != null) {
+                            sb.append(" signature: ").append(sig);
+                        }
+                    }
+                } catch (IOException ignored) {}
+            }
+        }
+
+        return sb.toString();
     }
 
     private boolean isValidIdentifier(String name) {

@@ -118,6 +118,14 @@ public class TransactionManager {
     }
 
     /**
+     * Проверяет, был ли файл создан в текущей сессии (в любой транзакции).
+     * Используется для пропуска проверки границ токена между разными вызовами инструментов.
+     */
+    public static boolean isFileCreatedInSession(Path path) {
+        return ctx().isFileCreatedInSession(path);
+    }
+
+    /**
      * Регистрирует файл как разблокированный в текущей транзакции (Session Tokens).
      */
     public static void markFileAccessedInTransaction(Path path) {

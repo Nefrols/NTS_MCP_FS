@@ -245,7 +245,10 @@ public class FileManageTool implements McpTool {
             TransactionManager.rollback();
             throw e;
         }
-        return createResponse("Moved from " + srcStr + " to " + destStr);
+
+        // Возвращаем новые токены для перемещённого файла
+        // Это критично для поддержания валидности токенов после move
+        return createMoveRenameResponse("Moved from " + srcStr + " to " + destStr, dest);
     }
 
     private JsonNode executeRename(Path path, String pathStr, String newName) throws IOException {
@@ -268,7 +271,38 @@ public class FileManageTool implements McpTool {
             TransactionManager.rollback();
             throw e;
         }
-        return createResponse("Renamed " + pathStr + " to " + newName);
+
+        // Возвращаем новые токены для переименованного файла
+        // Это критично для поддержания валидности токенов после rename
+        return createMoveRenameResponse("Renamed " + pathStr + " to " + newName, newPath);
+    }
+
+    /**
+     * Создаёт ответ для move/rename операций с новыми токенами.
+     * КРИТИЧНО: клиент должен использовать новые токены после move/rename,
+     * так как старые токены содержат хеш старого пути и станут невалидными.
+     *
+     * @param msg основное сообщение
+     * @param newPath новый путь к файлу
+     * @return JSON ответ с сообщением и новыми токенами
+     */
+    private JsonNode createMoveRenameResponse(String msg, Path newPath) {
+        StringBuilder text = new StringBuilder(msg);
+
+        // Получаем все токены для нового пути и добавляем их в ответ
+        java.util.List<LineAccessToken> tokens = LineAccessTracker.getTokensForFile(newPath);
+        if (!tokens.isEmpty()) {
+            text.append("\n\n=== Updated Tokens for ").append(newPath.getFileName()).append(" ===");
+            text.append("\n(IMPORTANT: Use these new tokens instead of old ones!)");
+            for (LineAccessToken token : tokens) {
+                text.append("\n[TOKEN ").append(token.startLine()).append("-").append(token.endLine())
+                    .append(": ").append(token.encode()).append("]");
+            }
+        }
+
+        ObjectNode res = mapper.createObjectNode();
+        res.putArray("content").addObject().put("type", "text").put("text", text.toString());
+        return res;
     }
 
     private JsonNode createResponse(String msg) {
