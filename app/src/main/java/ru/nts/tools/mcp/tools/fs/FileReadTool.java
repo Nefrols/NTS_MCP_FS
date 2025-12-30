@@ -313,8 +313,10 @@ public class FileReadTool implements McpTool {
             throw NtsParamException.lineExceeds(startLine, lineCount, path.getFileName().toString());
         }
 
-        // Извлекаем содержимое диапазона (нужно для регистрации токена и валидации)
+        // Извлекаем содержимое диапазона для отображения (с номерами строк)
         String rangeContent = extractLines(lines, startLine, endLine);
+        // Чистое содержимое для CRC токена (без номеров строк) - консистентно с рефакторингом
+        String rawContent = extractRawContent(lines, startLine, endLine);
 
         // Проверяем существующий токен (если передан и force=false)
         boolean force = params.path("force").asBoolean(false);
@@ -322,9 +324,9 @@ public class FileReadTool implements McpTool {
             String tokenStr = params.get("token").asText();
             try {
                 LineAccessToken token = LineAccessToken.decode(tokenStr, path);
-                // Извлекаем содержимое диапазона токена для валидации CRC
-                String tokenRangeContent = extractLines(lines, token.startLine(), Math.min(token.endLine(), lineCount));
-                var validation = LineAccessTracker.validateToken(token, tokenRangeContent, lineCount);
+                // Извлекаем чистое содержимое диапазона токена для валидации CRC
+                String tokenRawContent = extractRawContent(lines, token.startLine(), Math.min(token.endLine(), lineCount));
+                var validation = LineAccessTracker.validateToken(token, tokenRawContent, lineCount);
 
                 if (validation.valid() && token.covers(startLine, endLine)) {
                     // Содержимое диапазона не изменилось и токен покрывает запрошенный диапазон
@@ -335,8 +337,8 @@ public class FileReadTool implements McpTool {
             }
         }
 
-        // Регистрируем доступ и получаем токен (с rangeCrc)
-        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rangeContent, lineCount);
+        // Регистрируем доступ и получаем токен (с rangeCrc от чистого содержимого)
+        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rawContent, lineCount);
 
         // Session Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
@@ -374,11 +376,13 @@ public class FileReadTool implements McpTool {
             start = Math.max(1, start);
             end = Math.min(lineCount, end);
 
-            // Извлекаем содержимое диапазона
+            // Извлекаем содержимое диапазона для отображения (с номерами строк)
             String rangeContent = extractLines(lines, start, end);
+            // Чистое содержимое для CRC токена (без номеров строк)
+            String rawContent = extractRawContent(lines, start, end);
 
-            // Регистрируем доступ с rangeCrc
-            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rangeContent, lineCount);
+            // Регистрируем доступ с rangeCrc от чистого содержимого
+            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rawContent, lineCount);
             tokens.add(token.encode());
 
             sb.append(String.format("\n--- Lines %d-%d ---\n", start, end));
@@ -612,6 +616,25 @@ public class FileReadTool implements McpTool {
                 sb.append("\n");
             }
             sb.append(String.format("%4d\t%s", i + 1, lines[i].replace("\r", "")));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Извлекает чистое содержимое диапазона строк (без номеров строк).
+     * Используется для вычисления CRC токена - должно совпадать с форматом
+     * в ProjectReplaceTool и операциях рефакторинга.
+     */
+    private String extractRawContent(String[] lines, int startLine, int endLine) {
+        int startIdx = Math.max(0, startLine - 1);
+        int endIdx = Math.min(lines.length, endLine);
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = startIdx; i < endIdx; i++) {
+            if (i > startIdx) {
+                sb.append("\n");
+            }
+            sb.append(lines[i]);
         }
         return sb.toString();
     }

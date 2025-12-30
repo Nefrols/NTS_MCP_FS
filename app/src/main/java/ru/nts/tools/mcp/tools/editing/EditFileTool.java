@@ -409,13 +409,14 @@ public class EditFileTool implements McpTool {
             throw NtsTokenException.invalidFormat(tokenStr);
         }
 
-        // Извлекаем содержимое диапазона токена для валидации CRC
+        // Извлекаем чистое содержимое диапазона токена для валидации CRC (без номеров строк)
+        // Это должно совпадать с форматом в registerAccess (FileReadTool, ProjectReplaceTool, рефакторинг)
         int tokenStart = token.startLine();
         int tokenEnd = Math.min(token.endLine(), oldLineCount);
-        String tokenRangeContent = extractLines(contentLines, tokenStart, tokenEnd);
+        String tokenRawContent = extractRawContent(contentLines, tokenStart, tokenEnd);
 
         // Проверяем валидность токена (сравниваем CRC диапазона)
-        var validation = LineAccessTracker.validateToken(token, tokenRangeContent, oldLineCount);
+        var validation = LineAccessTracker.validateToken(token, tokenRawContent, oldLineCount);
         if (!validation.valid()) {
             // Проверяем, является ли это внешним изменением
             ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
@@ -526,14 +527,14 @@ public class EditFileTool implements McpTool {
             stats.newLineCount = newLineCount;
             int lineDelta = newLineCount - oldLineCount;
 
-            // Извлекаем содержимое отредактированного диапазона для нового токена
+            // Извлекаем чистое содержимое отредактированного диапазона для нового токена (без номеров строк)
             int newEditEnd = editEnd + lineDelta;
-            String editedRangeContent = extractLines(currentLines.toArray(new String[0]),
+            String editedRawContent = extractRawContent(currentLines.toArray(new String[0]),
                     editStart, Math.min(newEditEnd, newLineCount));
 
-            // Обновляем токены после редактирования (с rangeCrc)
+            // Обновляем токены после редактирования (с rangeCrc от чистого содержимого)
             LineAccessToken newToken = LineAccessTracker.updateAfterEdit(
-                    path, editStart, editEnd, lineDelta, editedRangeContent, newLineCount);
+                    path, editStart, editEnd, lineDelta, editedRawContent, newLineCount);
             stats.newToken = newToken.encode();
 
             // Обновляем снапшот для отслеживания будущих внешних изменений
@@ -848,6 +849,25 @@ public class EditFileTool implements McpTool {
                 sb.append("\n");
             }
             sb.append(String.format("%4d\t%s", i + 1, lines[i].replace("\r", "")));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Извлекает чистое содержимое диапазона строк (без номеров строк).
+     * Используется для вычисления CRC токена - должно совпадать с форматом
+     * в ProjectReplaceTool и операциях рефакторинга.
+     */
+    private String extractRawContent(String[] lines, int startLine, int endLine) {
+        StringBuilder sb = new StringBuilder();
+        int start = Math.max(0, startLine - 1);
+        int end = Math.min(lines.length, endLine);
+
+        for (int i = start; i < end; i++) {
+            if (i > start) {
+                sb.append("\n");
+            }
+            sb.append(lines[i]);
         }
         return sb.toString();
     }

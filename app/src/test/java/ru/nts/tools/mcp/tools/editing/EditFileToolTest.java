@@ -449,7 +449,8 @@ class EditFileToolTest {
     }
 
     /**
-     * Вспомогательный метод: строит содержимое диапазона для токена.
+     * Извлекает чистое содержимое диапазона строк (без номеров строк).
+     * Консистентно с extractRawContent в FileReadTool/EditFileTool.
      */
     private String buildRangeContent(String content, int startLine, int endLine) {
         String[] lines = content.split("\n", -1);
@@ -458,7 +459,7 @@ class EditFileToolTest {
         int end = Math.min(lines.length, endLine);
         for (int i = start; i < end; i++) {
             if (i > start) sb.append("\n");
-            sb.append(String.format("%4d\t%s", i + 1, lines[i].replace("\r", "")));
+            sb.append(lines[i]);
         }
         return sb.toString();
     }

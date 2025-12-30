@@ -65,6 +65,10 @@ class BatchToolsTest {
         return token.encode();
     }
 
+    /**
+     * Извлекает чистое содержимое диапазона строк (без номеров строк).
+     * Консистентно с extractRawContent в FileReadTool/EditFileTool.
+     */
     private String buildRangeContent(String content, int startLine, int endLine) {
         String[] lines = content.split("\n", -1);
         StringBuilder sb = new StringBuilder();
@@ -72,7 +76,7 @@ class BatchToolsTest {
         int end = Math.min(lines.length, endLine);
         for (int i = start; i < end; i++) {
             if (i > start) sb.append("\n");
-            sb.append(String.format("%4d\t%s", i + 1, lines[i]));
+            sb.append(lines[i]);
         }
         return sb.toString();
     }
