@@ -141,6 +141,7 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 #### 3. 🔒 Enterprise Security & Sandboxing
 *   **Optimistic Locking (LATs):** Agents *must* read a file to get a token (`LAT:...`) before editing. If the file changes externally, the token expires and the external change is automatically recorded in file history. No more race conditions.
 *   **Smart Token Invalidation:** Tokens track **Range CRC** instead of file CRC. Edits outside your token's range don't invalidate it — only changes to the specific lines you're working on trigger re-read. This dramatically reduces unnecessary token refreshes in large files.
+*   **Path Aliasing:** Tokens remain valid after `move`/`rename` operations. The system tracks file identity through path aliases with transitive resolution — even chains like `A → B → C` preserve token validity.
 *   **Strict Sandboxing:** All paths are normalized and pinned to the project root. Impossible to escape via `../../`.
 *   **Infrastructure Protection:** Automatically blocks modification of `.git`, `.env`, and build configs unless explicitly allowed.
 *   **OOM Protection:** Prevents reading massive files (>10MB) that would crash the context window.
@@ -176,11 +177,13 @@ The `nts_code_navigate` tool provides IDE-like code intelligence powered by Tree
 #### 7. 🔄 Semantic Refactoring
 The `nts_code_refactor` tool performs intelligent code transformations.
 *   **Rename:** Updates ALL references across the entire project automatically.
+*   **Change Signature:** Add, remove, rename, retype, or reorder method parameters with automatic call site updates.
 *   **Generate:** Create getters, setters, constructors, builders, toString, equals/hashCode.
 *   **Extract Method:** Pull code into a new method with proper parameters.
 *   **Inline:** Replace method/variable with its body/value.
 *   **Preview Mode:** Review diff before applying (`preview: true`).
 *   **Parallel Reference Search:** Both `nts_code_navigate` and `nts_code_refactor` use parallel file scanning with pre-filtering, searching up to 15 levels deep for maximum coverage.
+*   **Batch Integration:** Returns `affectedFiles` array with tokens for each modified file — enables chaining like `refactor → edit` in `nts_batch_tools`.
 
 ```json
 {
@@ -189,6 +192,15 @@ The `nts_code_refactor` tool performs intelligent code transformations.
   "symbol": "getName",
   "newName": "getFullName",
   "preview": true
+}
+```
+**Response includes tokens for batch chaining:**
+```json
+{
+  "affectedFiles": [
+    { "path": "src/User.java", "accessToken": "LAT:...", "crc32c": "A1B2C3D4", "lineCount": 50 },
+    { "path": "src/UserService.java", "accessToken": "LAT:...", "crc32c": "E5F6G7H8", "lineCount": 120 }
+  ]
 }
 ```
 
@@ -271,12 +283,12 @@ Each file is separated in output with its own TOKEN. Errors in one file don't af
 
 **Why it exists:** Create, delete, move, rename files and directories.
 
-**Discipline role:** 
+**Discipline role:**
 - `create` returns a token — new files are immediately editable
-- `rename`/`move` **transfers tokens** — the system tracks file identity across renames
+- `rename`/`move` **transfers tokens via path aliasing** — tokens remain valid even after the file is moved (transitive chains like `A → B → C` work)
 - `delete` **invalidates tokens** — no editing ghosts
 
-**Connection:** Works with `nts_batch_tools` for atomic multi-file restructuring.
+**Connection:** Works with `nts_batch_tools` for atomic multi-file restructuring. Path aliases persist across the session.
 
 ---
 
@@ -357,14 +369,15 @@ checkpoint("before-risky-refactor")
 
 #### 🔧 `nts_code_refactor` — Intelligent Transformation
 
-**Why it exists:** Rename symbols, generate code, extract methods — with automatic reference updates.
+**Why it exists:** Rename symbols, change signatures, generate code, extract methods — with automatic reference updates.
 
-**Discipline role:** 
+**Discipline role:**
 - `preview: true` shows **all affected files** before applying
 - Semantic rename updates ALL references, not just text matches
 - Atomic: entire refactoring succeeds or fails together
+- **Returns tokens** for all modified files — enables `refactor → edit` chains in batches
 
-**Connection:** Uses tree-sitter for precision. Safer than manual multi-file editing.
+**Connection:** Uses tree-sitter for precision. Integrates with `nts_batch_tools` via `{{step.affectedFiles[0].accessToken}}` interpolation. Safer than manual multi-file editing.
 
 ---
 
@@ -672,6 +685,7 @@ NTS меняет микро-эффективность на макро-надё�
 #### 3. 🔒 Корпоративная безопасность и Песочница
 *   **Оптимистичная блокировка (LATs):** Агент *обязан* прочитать файл и получить токен (`LAT:...`) перед правкой. Если файл изменился извне — токен сгорает, а внешнее изменение автоматически записывается в историю файла. Никаких состояний гонки (Race Conditions).
 *   **Умная инвалидация токенов:** Токены отслеживают **CRC диапазона**, а не всего файла. Правки вне вашего диапазона не инвалидируют токен — только изменения конкретных строк, с которыми вы работаете, требуют перечитывания. Это радикально сокращает ненужные обновления токенов в больших файлах.
+*   **Path Aliasing:** Токены сохраняют валидность после операций `move`/`rename`. Система отслеживает идентичность файла через алиасы путей с транзитивным разрешением — даже цепочки `A → B → C` сохраняют валидность токенов.
 *   **Строгая песочница:** Все пути нормализуются и привязываются к корню проекта. Выход через `../../` невозможен.
 *   **Защита инфраструктуры:** Блокировка изменений `.git`, `.env` и конфигов сборки (можно настроить).
 *   **Защита от OOM:** Блокировка чтения гигантских файлов (>10MB), способных обрушить контекстное окно модели.
@@ -707,11 +721,13 @@ NTS меняет микро-эффективность на макро-надё�
 #### 7. 🔄 Семантический рефакторинг
 Инструмент `nts_code_refactor` выполняет интеллектуальные преобразования кода.
 *   **Rename:** Переименование с автоматическим обновлением ВСЕХ ссылок по проекту.
+*   **Change Signature:** Добавление, удаление, переименование, изменение типа и порядка параметров с автообновлением вызовов.
 *   **Generate:** Генерация getters, setters, конструкторов, builder, toString, equals/hashCode.
 *   **Extract Method:** Извлечение кода в метод с правильными параметрами.
 *   **Inline:** Встраивание метода/переменной.
 *   **Preview Mode:** Просмотр изменений перед применением (`preview: true`).
 *   **Параллельный поиск ссылок:** И `nts_code_navigate`, и `nts_code_refactor` используют параллельное сканирование файлов с предварительной фильтрацией, ищут на глубину до 15 уровней для максимального покрытия.
+*   **Интеграция с Batch:** Возвращает массив `affectedFiles` с токенами для каждого изменённого файла — позволяет строить цепочки `refactor → edit` в `nts_batch_tools`.
 
 ```json
 {
@@ -720,6 +736,15 @@ NTS меняет микро-эффективность на макро-надё�
   "symbol": "getName",
   "newName": "getFullName",
   "preview": true
+}
+```
+**Ответ содержит токены для цепочек в batch:**
+```json
+{
+  "affectedFiles": [
+    { "path": "src/User.java", "accessToken": "LAT:...", "crc32c": "A1B2C3D4", "lineCount": 50 },
+    { "path": "src/UserService.java", "accessToken": "LAT:...", "crc32c": "E5F6G7H8", "lineCount": 120 }
+  ]
 }
 ```
 
@@ -804,10 +829,10 @@ NTS меняет микро-эффективность на макро-надё�
 
 **Роль в дисциплине:**
 - `create` возвращает токен — новые файлы сразу готовы к редактированию
-- `rename`/`move` **переносят токены** — система отслеживает идентичность файла при переименовании
+- `rename`/`move` **переносят токены через path aliasing** — токены остаются валидными даже после перемещения файла (транзитивные цепочки `A → B → C` работают)
 - `delete` **инвалидирует токены** — нельзя редактировать «призраков»
 
-**Связь:** Работает с `nts_batch_tools` для атомарной реструктуризации.
+**Связь:** Работает с `nts_batch_tools` для атомарной реструктуризации. Алиасы путей сохраняются на протяжении сессии.
 
 ---
 
@@ -888,14 +913,15 @@ checkpoint("before-risky-refactor")
 
 #### 🔧 `nts_code_refactor` — Интеллектуальная трансформация
 
-**Зачем:** Переименование символов, генерация кода, извлечение методов — с автоматическим обновлением ссылок.
+**Зачем:** Переименование символов, изменение сигнатур, генерация кода, извлечение методов — с автоматическим обновлением ссылок.
 
 **Роль в дисциплине:**
 - `preview: true` показывает **все затронутые файлы** до применения
 - Семантическое переименование обновляет ВСЕ ссылки, а не просто текстовые совпадения
 - Атомарность: весь рефакторинг успешен или отменён целиком
+- **Возвращает токены** для всех изменённых файлов — позволяет строить цепочки `refactor → edit` в батчах
 
-**Связь:** Использует tree-sitter для точности. Безопаснее ручного редактирования нескольких файлов.
+**Связь:** Использует tree-sitter для точности. Интегрируется с `nts_batch_tools` через интерполяцию `{{step.affectedFiles[0].accessToken}}`. Безопаснее ручного редактирования нескольких файлов.
 
 ---
 
