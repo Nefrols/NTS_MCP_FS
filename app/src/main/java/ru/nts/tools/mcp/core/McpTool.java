@@ -28,9 +28,9 @@ import java.util.concurrent.*;
 public interface McpTool {
 
     /**
-     * Таймаут по умолчанию для выполнения инструментов (30 секунд).
+     * Таймаут по умолчанию для выполнения инструментов (5 минут).
      */
-    int DEFAULT_TIMEOUT_SECONDS = 30;
+    int DEFAULT_TIMEOUT_SECONDS = 300;
 
     /**
      * Инструменты, исключённые из глобального таймаута.

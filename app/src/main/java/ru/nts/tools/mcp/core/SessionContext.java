@@ -15,6 +15,10 @@
  */
 package ru.nts.tools.mcp.core;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -54,16 +58,42 @@ public class SessionContext {
     // Текущий вызываемый инструмент (для диагностики)
     private volatile String currentToolName;
 
+    // Время создания сессии
+    private final Instant createdAt;
+
+    // Время последней активности
+    private volatile Instant lastActivityAt;
+
+    // Имя файла метаданных сессии
+    private static final String SESSION_METADATA_FILE = "session.meta";
+
     /**
      * Создает новый контекст сессии.
      */
     private SessionContext(String sessionId) {
         this.sessionId = sessionId;
-        this.transactionManager = new SessionTransactionManager();
+        this.transactionManager = new SessionTransactionManager(sessionId);
         this.lineAccessTracker = new SessionLineAccessTracker();
         this.searchTracker = new SessionSearchTracker();
         this.fileLineageTracker = new FileLineageTracker();
         this.externalChangeTracker = new ExternalChangeTracker();
+        this.createdAt = Instant.now();
+        this.lastActivityAt = this.createdAt;
+    }
+
+    /**
+     * Создает контекст сессии с восстановленными временными метками.
+     * Используется при реактивации существующей сессии.
+     */
+    private SessionContext(String sessionId, Instant createdAt) {
+        this.sessionId = sessionId;
+        this.transactionManager = new SessionTransactionManager(sessionId);
+        this.lineAccessTracker = new SessionLineAccessTracker();
+        this.searchTracker = new SessionSearchTracker();
+        this.fileLineageTracker = new FileLineageTracker();
+        this.externalChangeTracker = new ExternalChangeTracker();
+        this.createdAt = createdAt;
+        this.lastActivityAt = Instant.now();
     }
 
     // ==================== Static API ====================
@@ -71,13 +101,30 @@ public class SessionContext {
     /**
      * Получает или создает контекст для указанной сессии.
      * Если sessionId == null или пустой, используется "default" сессия.
-     * Это критично для совместимости с клиентами, не передающими sessionId.
+     * Если сессия существует на диске, но не в памяти — реактивирует её.
      */
     public static SessionContext getOrCreate(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = "default";
         }
-        return sessions.computeIfAbsent(sessionId, SessionContext::new);
+        String id = sessionId;
+        return sessions.computeIfAbsent(id, key -> {
+            // Проверяем, существует ли сессия на диске
+            if (existsOnDisk(key)) {
+                // Реактивируем без добавления в map (computeIfAbsent сам добавит)
+                SessionMetadata meta = getSessionMetadata(key);
+                if (meta != null) {
+                    SessionContext ctx = new SessionContext(key, meta.createdAt());
+                    ctx.transactionManager.loadJournal();
+                    if (meta.activeTodoFile() != null) {
+                        ctx.setActiveTodoFile(meta.activeTodoFile());
+                    }
+                    return ctx;
+                }
+            }
+            // Создаём новый контекст
+            return new SessionContext(key);
+        });
     }
 
     /**
@@ -146,6 +193,104 @@ public class SessionContext {
         return sessions.size();
     }
 
+    /**
+     * Проверяет, существует ли сессия на диске (была создана ранее).
+     * Это позволяет определить, можно ли реактивировать сессию после перезапуска сервера.
+     *
+     * @param sessionId ID сессии для проверки
+     * @return true если директория сессии существует на диске
+     */
+    public static boolean existsOnDisk(String sessionId) {
+        if (sessionId == null || sessionId.isBlank() || "default".equals(sessionId)) {
+            return false;
+        }
+        Path sessionDir = PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+        Path metaFile = sessionDir.resolve(SESSION_METADATA_FILE);
+        return Files.exists(metaFile);
+    }
+
+    /**
+     * Возвращает информацию о сессии на диске.
+     *
+     * @param sessionId ID сессии
+     * @return информация о сессии или null если не найдена
+     */
+    public static SessionMetadata getSessionMetadata(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        Path sessionDir = PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+        Path metaFile = sessionDir.resolve(SESSION_METADATA_FILE);
+
+        if (!Files.exists(metaFile)) {
+            return null;
+        }
+
+        try {
+            String content = Files.readString(metaFile);
+            String[] lines = content.split("\n");
+            Instant created = null;
+            Instant lastActivity = null;
+            String activeTodo = null;
+
+            for (String line : lines) {
+                if (line.startsWith("created=")) {
+                    created = Instant.parse(line.substring(8));
+                } else if (line.startsWith("lastActivity=")) {
+                    lastActivity = Instant.parse(line.substring(13));
+                } else if (line.startsWith("activeTodo=")) {
+                    activeTodo = line.substring(11);
+                }
+            }
+
+            return new SessionMetadata(sessionId, created, lastActivity, activeTodo);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Реактивирует существующую сессию из директории на диске.
+     * Восстанавливает контекст сессии и журнал транзакций (undo/redo стеки).
+     * Токены доступа к файлам начинаются с чистого состояния.
+     *
+     * @param sessionId ID сессии для реактивации
+     * @return восстановленный контекст сессии
+     * @throws IllegalArgumentException если сессия не найдена на диске
+     */
+    public static SessionContext reactivateSession(String sessionId) {
+        SessionMetadata meta = getSessionMetadata(sessionId);
+        if (meta == null) {
+            throw new IllegalArgumentException("Session not found on disk: " + sessionId);
+        }
+
+        // Создаём контекст с восстановленным временем создания
+        SessionContext ctx = new SessionContext(sessionId, meta.createdAt());
+        sessions.put(sessionId, ctx);
+
+        // Восстанавливаем журнал транзакций (undo/redo стеки)
+        ctx.transactionManager.loadJournal();
+
+        // Восстанавливаем активный TODO
+        if (meta.activeTodoFile() != null) {
+            ctx.setActiveTodoFile(meta.activeTodoFile());
+        }
+
+        return ctx;
+    }
+
+    /**
+     * Проверяет, активна ли сессия в памяти.
+     */
+    public static boolean isActiveInMemory(String sessionId) {
+        return sessions.containsKey(sessionId);
+    }
+
+    /**
+     * Метаданные сессии для хранения на диске.
+     */
+    public record SessionMetadata(String sessionId, Instant createdAt, Instant lastActivityAt, String activeTodoFile) {}
+
     // ==================== Instance API ====================
 
     public String getSessionId() {
@@ -178,6 +323,8 @@ public class SessionContext {
 
     public void setActiveTodoFile(String fileName) {
         this.activeTodoFile = fileName;
+        // Сохраняем метаданные для персистентности TODO между сессиями
+        saveMetadata();
     }
 
     /**
@@ -214,6 +361,56 @@ public class SessionContext {
      */
     public java.nio.file.Path getSnapshotsDir() {
         return getSessionDir().resolve("snapshots");
+    }
+
+    /**
+     * Возвращает время создания сессии.
+     */
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    /**
+     * Возвращает время последней активности.
+     */
+    public Instant getLastActivityAt() {
+        return lastActivityAt;
+    }
+
+    /**
+     * Обновляет время последней активности.
+     * Вызывается автоматически при каждом вызове инструмента.
+     */
+    public void touchActivity() {
+        this.lastActivityAt = Instant.now();
+        // Синхронно сохраняем метаданные для надёжности при перезапусках
+        saveMetadata();
+    }
+
+    /**
+     * Сохраняет метаданные сессии на диск.
+     * Вызывается при создании сессии и при обновлении активности.
+     */
+    public void saveMetadata() {
+        if ("default".equals(sessionId)) {
+            return; // default сессия не сохраняется
+        }
+
+        Path metaFile = getSessionDir().resolve(SESSION_METADATA_FILE);
+        try {
+            Files.createDirectories(metaFile.getParent());
+            StringBuilder content = new StringBuilder();
+            content.append("sessionId=").append(sessionId).append("\n");
+            content.append("created=").append(createdAt).append("\n");
+            content.append("lastActivity=").append(lastActivityAt).append("\n");
+            if (activeTodoFile != null) {
+                content.append("activeTodo=").append(activeTodoFile).append("\n");
+            }
+            Files.writeString(metaFile, content.toString());
+        } catch (IOException e) {
+            // Логируем, но не прерываем операцию
+            System.err.println("Warning: Failed to save session metadata: " + e.getMessage());
+        }
     }
 
     /**

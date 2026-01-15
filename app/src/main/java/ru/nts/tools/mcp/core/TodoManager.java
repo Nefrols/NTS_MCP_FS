@@ -62,6 +62,8 @@ public class TodoManager {
         @Override
         public String toString() {
             String stats = TransactionManager.getSessionStats();
+            int edits = TransactionManager.getTotalEdits();
+            int undos = TransactionManager.getTotalUndos();
 
             // Получаем sessionId для отображения (важно для LLM!)
             SessionContext ctx = SessionContext.current();
@@ -72,6 +74,8 @@ public class TodoManager {
 
             if (title == null) {
                 sb.append(stats);
+                // Напоминание об undo даже без TODO плана
+                appendUndoReminder(sb, edits, undos);
                 return sb.toString();
             }
 
@@ -95,11 +99,33 @@ public class TodoManager {
                 String shortTask = nextTask.length() > 40 ? nextTask.substring(0, 37) + "..." : nextTask;
                 sb.append(" → #").append(nextId).append(": ").append(shortTask);
             } else if (pending == 0 && total > 0) {
-                sb.append(" → All tasks done!");
+                sb.append(" → All done! Use nts_todo(action='close') to archive.");
             }
 
             sb.append(" | ").append(stats);
+
+            // Напоминание об отметке задач (если есть pending)
+            if (nextTask != null) {
+                sb.append("\n[REMINDER: Mark task done after completion: nts_todo(action='update', id=")
+                  .append(nextId).append(", status='done')]");
+            }
+
+            // Напоминание об undo (если много правок без отмен)
+            appendUndoReminder(sb, edits, undos);
+
             return sb.toString();
+        }
+
+        /**
+         * Добавляет напоминание об undo, если много правок без использования отмены.
+         * Показывается когда edits >= 4 и undos == 0.
+         */
+        private void appendUndoReminder(StringBuilder sb, int edits, int undos) {
+            if (edits >= 4 && undos == 0) {
+                sb.append("\n[TIP: ").append(edits).append(" edits without undo. ")
+                  .append("If something went wrong, use nts_session(action='undo') to rollback ")
+                  .append("instead of multiple fix edits. View history: nts_session(action='journal')]");
+            }
         }
     }
 

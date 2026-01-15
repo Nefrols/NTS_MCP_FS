@@ -86,6 +86,14 @@ public class TransactionManager {
         return ctx().getSessionStats();
     }
 
+    public static int getTotalEdits() {
+        return ctx().getTotalEdits();
+    }
+
+    public static int getTotalUndos() {
+        return ctx().getTotalUndos();
+    }
+
     public static List<String> getSessionInstructions() {
         return ctx().getSessionInstructions();
     }

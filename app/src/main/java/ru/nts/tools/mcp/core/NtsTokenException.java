@@ -87,8 +87,8 @@ public class NtsTokenException extends NtsException {
     }
 
     private static String truncateToken(String token) {
+        // Показываем полный токен - LLM должна видеть какой именно токен не сработал
         if (token == null) return "null";
-        if (token.length() <= 20) return token;
-        return token.substring(0, 10) + "..." + token.substring(token.length() - 10);
+        return token;
     }
 }

@@ -202,10 +202,18 @@ public class FileReadTool implements McpTool {
         }
 
         String action = params.path("action").asText("read").toLowerCase();
-        String pathStr = params.get("path").asText();
+        String pathStr = params.path("path").asText(null);
 
         if ("exists".equals(action)) {
+            if (pathStr == null || pathStr.isBlank()) {
+                throw new IllegalArgumentException("Parameter 'path' is required for action 'exists'.");
+            }
             return executeExists(pathStr);
+        }
+
+        // Все остальные действия требуют path
+        if (pathStr == null || pathStr.isBlank()) {
+            throw new IllegalArgumentException("Parameter 'path' is required for action '" + action + "'.");
         }
 
         Path path = PathSanitizer.sanitize(pathStr, true);

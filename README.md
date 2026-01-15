@@ -251,6 +251,12 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 
 **Discipline role:** Everything the agent does is tracked. There's no "anonymous" editing. If something breaks, the session journal knows exactly what happened and when.
 
+**Session Reactivation:** If the server restarts or connection drops, the session can be reactivated:
+```json
+{ "sessionId": "your-previous-uuid" }
+```
+This restores the session directory with todos and file history. In-memory state (tokens, undo stack) starts fresh, but disk-persisted data is preserved.
+
 **Connection:** All other tools require `sessionId`. This isn't bureaucracy — it's **traceability**.
 
 ---
@@ -819,6 +825,12 @@ NTS меняет микро-эффективность на макро-надё�
 **Зачем:** Создаёт изолированную сессию с собственной историей undo, чекпоинтами и реестром токенов.
 
 **Роль в дисциплине:** Всё, что делает агент, отслеживается. Нет «анонимного» редактирования. Если что-то сломается — журнал сессии знает, что именно произошло и когда.
+
+**Реактивация сессии:** Если сервер перезапустился или соединение прервалось, сессию можно реактивировать:
+```json
+{ "sessionId": "ваш-предыдущий-uuid" }
+```
+Это восстанавливает директорию сессии с todos и историей файлов. Состояние в памяти (токены, стек undo) начинается с чистого листа, но данные на диске сохраняются.
 
 **Связь:** Все остальные инструменты требуют `sessionId`. Это не бюрократия — это **прослеживаемость**.
 

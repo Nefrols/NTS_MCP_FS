@@ -15,6 +15,12 @@
  */
 package ru.nts.tools.mcp.core;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,7 +47,15 @@ public class SessionTransactionManager {
     }
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final int MAX_HISTORY_SIZE = 50;
+    private static final String JOURNAL_FILE = "journal.json";
+    private static final int JOURNAL_VERSION = 1;
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT);
+
+    // ID сессии, которой принадлежит этот менеджер (для корректного пути к журналу)
+    private final String sessionId;
 
     // Per-session стеки (не static!)
     private final List<TransactionEntry> undoStack = new ArrayList<>();
@@ -68,9 +82,23 @@ public class SessionTransactionManager {
     // Используется для пропуска проверки границ токена между разными вызовами инструментов
     private final Set<Path> filesCreatedInSession = Collections.synchronizedSet(new HashSet<>());
 
+    /**
+     * Создаёт менеджер транзакций для указанной сессии.
+     * @param sessionId ID сессии (используется для путей к журналу и снапшотам)
+     */
+    public SessionTransactionManager(String sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    /**
+     * Возвращает путь к директории сессии.
+     */
+    private Path getSessionDir() {
+        return PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+    }
+
     private Path getSnapshotDir() throws IOException {
-        // Используем currentOrDefault() для согласованности
-        Path dir = SessionContext.currentOrDefault().getSnapshotsDir();
+        Path dir = getSessionDir().resolve("snapshots");
         if (!Files.exists(dir)) {
             Files.createDirectories(dir);
         }
@@ -120,6 +148,8 @@ public class SessionTransactionManager {
                     redoStack.clear();
                 }
                 totalEdits.incrementAndGet();
+                // Сохраняем журнал асинхронно
+                saveJournal();
             }
             currentTransaction.remove();
             nestingLevel.set(0);
@@ -322,6 +352,9 @@ public class SessionTransactionManager {
                 redoStack.clear();
             }
 
+            // Сохраняем журнал асинхронно
+            saveJournal();
+
         } catch (IOException e) {
             // Логируем ошибку, но не прерываем работу
             System.err.println("Failed to record external change: " + e.getMessage());
@@ -429,6 +462,8 @@ public class SessionTransactionManager {
                     redoStack.add(redoTx);
                 }
                 totalUndos.incrementAndGet();
+                // Сохраняем журнал асинхронно
+                saveJournal();
             } else if (result.isFailed()) {
                 // STUCK - помечаем транзакцию
                 tx.setStatus(Status.STUCK);
@@ -461,6 +496,8 @@ public class SessionTransactionManager {
                     redoStack.add(redoTx);
                 }
                 totalUndos.incrementAndGet();
+                // Сохраняем журнал асинхронно
+                saveJournal();
                 return "Undone external change: " + extTx.getDescription();
             } catch (IOException e) {
                 extTx.setStatus(Status.STUCK);
@@ -487,6 +524,8 @@ public class SessionTransactionManager {
                 redoStack.add(redoTx);
             }
             totalUndos.incrementAndGet();
+            // Сохраняем журнал асинхронно
+            saveJournal();
             return "Undone: " + (tx.instruction != null ? tx.instruction : tx.description);
         } catch (IOException e) {
             tx.setStatus(Status.STUCK);
@@ -516,6 +555,8 @@ public class SessionTransactionManager {
                 synchronized (undoStack) {
                     undoStack.add(undoTx);
                 }
+                // Сохраняем журнал асинхронно
+                saveJournal();
                 return "Redone: " + (tx.instruction != null ? tx.instruction : tx.description);
             } catch (IOException e) {
                 tx.setStatus(Status.STUCK);
@@ -553,6 +594,20 @@ public class SessionTransactionManager {
         int unlocked = ctx != null ? ctx.tokens().getAccessedFilesCount() : 0;
         return String.format("Session: %d edits, %d undos | Unlocked: %d files",
                 totalEdits.get(), totalUndos.get(), unlocked);
+    }
+
+    /**
+     * Возвращает количество правок в сессии.
+     */
+    public int getTotalEdits() {
+        return totalEdits.get();
+    }
+
+    /**
+     * Возвращает количество отмен в сессии.
+     */
+    public int getTotalUndos() {
+        return totalUndos.get();
     }
 
     public List<String> getSessionInstructions() {
@@ -669,6 +724,274 @@ public class SessionTransactionManager {
         currentTransaction.remove();
         nestingLevel.set(0);
         filesCreatedInSession.clear();
+    }
+
+    // ==================== Journal Persistence ====================
+
+    /**
+     * Возвращает путь к файлу журнала.
+     * Использует sessionId, переданный в конструкторе, а не ThreadLocal контекст.
+     */
+    private Path getJournalPath() {
+        return getSessionDir().resolve(JOURNAL_FILE);
+    }
+
+    /**
+     * Сохраняет журнал транзакций на диск в формате JSON.
+     * Вызывается синхронно после commit(), undo(), redo().
+     */
+    public void saveJournal() {
+        Path journalPath = getJournalPath();
+        try {
+            Files.createDirectories(journalPath.getParent());
+
+            ObjectNode root = MAPPER.createObjectNode();
+            root.put("version", JOURNAL_VERSION);
+            root.put("sessionId", sessionId);
+
+            // Counters
+            ObjectNode counters = root.putObject("counters");
+            counters.put("totalEdits", totalEdits.get());
+            counters.put("totalUndos", totalUndos.get());
+
+            // Undo stack
+            ArrayNode undoArray = root.putArray("undoStack");
+            synchronized (undoStack) {
+                for (TransactionEntry entry : undoStack) {
+                    undoArray.add(serializeEntryToJson(entry));
+                }
+            }
+
+            // Redo stack
+            ArrayNode redoArray = root.putArray("redoStack");
+            synchronized (redoStack) {
+                for (TransactionEntry entry : redoStack) {
+                    redoArray.add(serializeEntryToJson(entry));
+                }
+            }
+
+            MAPPER.writeValue(journalPath.toFile(), root);
+        } catch (IOException e) {
+            System.err.println("Warning: Failed to save transaction journal: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Конвертирует абсолютный путь в относительный (относительно project root).
+     * Если путь не находится внутри project root, возвращает абсолютный путь.
+     */
+    private String toRelativePath(Path absolutePath) {
+        if (absolutePath == null) return null;
+        Path root = PathSanitizer.getRoot();
+        Path normalized = absolutePath.toAbsolutePath().normalize();
+        if (normalized.startsWith(root)) {
+            Path relative = root.relativize(normalized);
+            return relative.toString().replace('\\', '/'); // Unix-style для портируемости
+        }
+        return normalized.toString();
+    }
+
+    /**
+     * Конвертирует относительный путь в абсолютный (относительно project root).
+     * Если путь уже абсолютный, возвращает его нормализованным.
+     */
+    private Path toAbsolutePath(String pathStr) {
+        if (pathStr == null) return null;
+        Path path = Path.of(pathStr.replace('/', java.io.File.separatorChar));
+        if (path.isAbsolute()) {
+            return path.normalize();
+        }
+        return PathSanitizer.getRoot().resolve(path).normalize();
+    }
+
+    /**
+     * Извлекает только имя файла снапшота (uuid.bak) из полного пути.
+     * Снапшоты всегда лежат в директории сессии, поэтому путь избыточен.
+     */
+    private String toSnapshotFileName(Path snapshotPath) {
+        if (snapshotPath == null) return null;
+        return snapshotPath.getFileName().toString();
+    }
+
+    /**
+     * Восстанавливает полный путь к снапшоту из имени файла.
+     */
+    private Path fromSnapshotFileName(String fileName) {
+        if (fileName == null) return null;
+        try {
+            return getSnapshotDir().resolve(fileName);
+        } catch (IOException e) {
+            return getSessionDir().resolve("snapshots").resolve(fileName);
+        }
+    }
+
+    /**
+     * Сериализует запись журнала в JSON ObjectNode.
+     * Пути к файлам - относительно project root.
+     * Пути к снапшотам - только имя файла (uuid.bak), т.к. они всегда в директории сессии.
+     */
+    private ObjectNode serializeEntryToJson(TransactionEntry entry) {
+        ObjectNode node = MAPPER.createObjectNode();
+
+        if (entry instanceof Checkpoint cp) {
+            node.put("type", "CHECKPOINT");
+            node.put("timestamp", cp.timestamp().format(ISO_FORMATTER));
+            node.put("name", cp.name());
+        } else if (entry instanceof ExternalChangeTransaction ext) {
+            node.put("type", "EXTERNAL");
+            node.put("timestamp", ext.timestamp.format(ISO_FORMATTER));
+            node.put("description", ext.getDescription());
+            node.put("status", ext.getStatus().name());
+            node.put("affectedPath", toRelativePath(ext.getAffectedPath()));
+            node.put("snapshot", toSnapshotFileName(ext.getSnapshotPath())); // только имя файла
+            node.put("previousCrc", ext.getPreviousCrc());
+            node.put("currentCrc", ext.getCurrentCrc());
+        } else if (entry instanceof Transaction tx) {
+            node.put("type", "TRANSACTION");
+            node.put("timestamp", tx.timestamp.format(ISO_FORMATTER));
+            node.put("description", tx.description);
+            node.put("instruction", tx.instruction);
+            node.put("status", tx.getStatus().name());
+
+            ObjectNode snapshots = node.putObject("snapshots");
+            for (Map.Entry<Path, Path> e : tx.snapshots.entrySet()) {
+                String filePath = toRelativePath(e.getKey());
+                String snapshotName = toSnapshotFileName(e.getValue()); // только имя файла
+                snapshots.put(filePath, snapshotName);
+            }
+        }
+
+        return node;
+    }
+
+    /**
+     * Загружает журнал транзакций с диска.
+     * Вызывается при реактивации сессии.
+     *
+     * @return true если журнал успешно загружен
+     */
+    public boolean loadJournal() {
+        Path journalPath = getJournalPath();
+        if (!Files.exists(journalPath)) {
+            return false;
+        }
+
+        try {
+            JsonNode root = MAPPER.readTree(journalPath.toFile());
+
+            // Проверяем версию
+            int version = root.path("version").asInt(1);
+
+            // Восстанавливаем счётчики
+            JsonNode counters = root.path("counters");
+            totalEdits.set(counters.path("totalEdits").asInt(0));
+            totalUndos.set(counters.path("totalUndos").asInt(0));
+
+            // Восстанавливаем undo стек
+            JsonNode undoArray = root.path("undoStack");
+            if (undoArray.isArray()) {
+                for (JsonNode node : undoArray) {
+                    TransactionEntry entry = deserializeEntryFromJson(node);
+                    if (entry != null) {
+                        undoStack.add(entry);
+                    }
+                }
+            }
+
+            // Восстанавливаем redo стек
+            JsonNode redoArray = root.path("redoStack");
+            if (redoArray.isArray()) {
+                for (JsonNode node : redoArray) {
+                    TransactionEntry entry = deserializeEntryFromJson(node);
+                    if (entry != null) {
+                        redoStack.add(entry);
+                    }
+                }
+            }
+
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Десериализует запись журнала из JSON.
+     */
+    private TransactionEntry deserializeEntryFromJson(JsonNode node) {
+        try {
+            String type = node.path("type").asText();
+            LocalDateTime timestamp = LocalDateTime.parse(node.path("timestamp").asText(), ISO_FORMATTER);
+
+            switch (type) {
+                case "CHECKPOINT" -> {
+                    String name = node.path("name").asText();
+                    return new Checkpoint(name, timestamp);
+                }
+                case "EXTERNAL" -> {
+                    String description = node.path("description").asText();
+                    Status status = Status.valueOf(node.path("status").asText());
+                    Path affectedPath = toAbsolutePath(node.path("affectedPath").asText());
+                    JsonNode snapshotNode = node.path("snapshot"); // только имя файла
+                    Path snapshotPath = (!snapshotNode.isNull() && !snapshotNode.isMissingNode())
+                            ? fromSnapshotFileName(snapshotNode.asText())
+                            : null;
+                    long prevCrc = node.path("previousCrc").asLong();
+                    long currCrc = node.path("currentCrc").asLong();
+
+                    // Проверяем, существует ли снапшот
+                    if (snapshotPath != null && !Files.exists(snapshotPath)) {
+                        return null; // Пропускаем если снапшот потерян
+                    }
+
+                    ExternalChangeTransaction ext = new ExternalChangeTransaction(
+                            description, timestamp, affectedPath, snapshotPath, prevCrc, currCrc);
+                    ext.setStatus(status);
+                    return ext;
+                }
+                case "TRANSACTION" -> {
+                    String description = node.path("description").asText();
+                    JsonNode instructionNode = node.path("instruction");
+                    String instruction = (!instructionNode.isNull() && !instructionNode.isMissingNode())
+                            ? instructionNode.asText()
+                            : null;
+                    Status status = Status.valueOf(node.path("status").asText());
+
+                    Transaction tx = new Transaction(description, instruction, timestamp);
+                    tx.setStatus(status);
+
+                    // Восстанавливаем снапшоты (файл -> относительный путь, снапшот -> имя файла)
+                    JsonNode snapshotsNode = node.path("snapshots");
+                    if (snapshotsNode.isObject()) {
+                        Iterator<Map.Entry<String, JsonNode>> fields = snapshotsNode.fields();
+                        while (fields.hasNext()) {
+                            Map.Entry<String, JsonNode> field = fields.next();
+                            Path original = toAbsolutePath(field.getKey());
+                            JsonNode backupNode = field.getValue();
+                            Path backup = (!backupNode.isNull() && !backupNode.isMissingNode())
+                                    ? fromSnapshotFileName(backupNode.asText())
+                                    : null;
+
+                            // Проверяем, существует ли снапшот (null означает файл был создан - backup не нужен)
+                            if (backup != null && !Files.exists(backup)) {
+                                continue; // Пропускаем если снапшот потерян
+                            }
+
+                            tx.snapshots.put(original, backup);
+                        }
+                    }
+
+                    // Транзакции создания файлов имеют null снапшоты - это нормально
+                    // Пропускаем только если ВСЕ снапшоты потеряны (файлы с backup'ами которых нет на диске)
+                    // Но если есть хотя бы один снапшот (включая null для созданных файлов) - оставляем
+
+                    return tx;
+                }
+            }
+        } catch (Exception e) {
+            // Ошибка десериализации - пропускаем запись
+        }
+        return null;
     }
 
     // ==================== Inner Classes ====================

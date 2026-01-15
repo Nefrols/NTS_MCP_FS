@@ -579,10 +579,25 @@ public class McpServer {
                                     "in the 'sessionId' parameter for all subsequent requests.");
                             }
                             if (!isValidSession(sessionId)) {
-                                throw new IllegalStateException(
-                                    "INVALID_SESSION: Session ID '" + sessionId + "' is not recognized. " +
-                                    "The session may have expired or never existed. " +
-                                    "Call nts_init to create a new session.");
+                                // Проверяем, существует ли сессия на диске (может быть реактивирована)
+                                if (SessionContext.existsOnDisk(sessionId)) {
+                                    SessionContext.SessionMetadata meta = SessionContext.getSessionMetadata(sessionId);
+                                    String createdInfo = meta != null && meta.createdAt() != null
+                                        ? " (created: " + meta.createdAt() + ")"
+                                        : "";
+                                    throw new IllegalStateException(
+                                        "SESSION_INACTIVE: Session '" + sessionId + "' exists but is not active" + createdInfo + ".\n" +
+                                        "The server may have restarted since your last interaction.\n\n" +
+                                        "[ACTION REQUIRED: Reactivate the session by calling:]\n" +
+                                        "nts_init(sessionId=\"" + sessionId + "\")\n\n" +
+                                        "This will restore your session with preserved todos and file history.\n" +
+                                        "Note: In-memory state (access tokens, undo stack) will start fresh.");
+                                } else {
+                                    throw new IllegalStateException(
+                                        "INVALID_SESSION: Session ID '" + sessionId + "' is not recognized. " +
+                                        "The session may have been deleted or the ID is incorrect. " +
+                                        "Call nts_init() to create a new session.");
+                                }
                             }
                         }
 
@@ -592,7 +607,13 @@ public class McpServer {
                             ctx.setCurrentToolName(toolName);
                         }
                         try {
-                            response.set("result", router.callTool(toolName, params));
+                            JsonNode toolResult = router.callTool(toolName, params);
+                            response.set("result", toolResult);
+
+                            // Обновляем активность сессии после успешного вызова
+                            if (ctx != null && !"default".equals(ctx.getSessionId())) {
+                                ctx.touchActivity();
+                            }
                         } finally {
                             if (ctx != null) {
                                 ctx.setCurrentToolName(null);

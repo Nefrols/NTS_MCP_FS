@@ -554,11 +554,9 @@ public class SessionLineAccessTracker {
         for (LineAccessToken t : fileTokens) {
             sb.append("  • lines ").append(t.startLine()).append("-").append(t.endLine());
 
-            // Показываем короткий ID токена (первые 8 символов после LAT:)
+            // Показываем ПОЛНЫЙ токен - LLM нужен полный токен для использования!
             String encoded = t.encode();
-            if (encoded.startsWith("LAT:") && encoded.length() > 12) {
-                sb.append(": ").append(encoded.substring(0, 12)).append("...");
-            }
+            sb.append(": ").append(encoded);
 
             // Пометка если этот токен покрывает запрошенный диапазон
             if (requestedStart > 0 && requestedEnd > 0 && t.covers(requestedStart, requestedEnd)) {

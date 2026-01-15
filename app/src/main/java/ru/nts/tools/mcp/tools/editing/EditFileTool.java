@@ -89,6 +89,12 @@ public class EditFileTool implements McpTool {
             - Preview: dryRun=true shows diff without writing
 
             OPERATIONS: replace (default), insert_before, insert_after, delete
+
+            RECOVERY TIP:
+            If your edit causes problems or produces unexpected results,
+            use nts_session(action='undo') to INSTANTLY REVERT the change
+            instead of making multiple incremental fix edits.
+            View all changes: nts_session(action='journal')
             """;
     }
 
