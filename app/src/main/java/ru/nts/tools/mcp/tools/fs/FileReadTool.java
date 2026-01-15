@@ -54,6 +54,19 @@ public class FileReadTool implements McpTool {
         "TIP: External changes may be intentional user edits (e.g., an emergency fix or refactoring by IDE/linter). " +
         "Review the changes carefully before proceeding. Your current plan may require adjustment.\n";
 
+    // TIP: Подсказка для работы с большими диапазонами
+    private static final String LARGE_RANGE_TIP =
+        "[TIP: Large range read (%d lines). Consider using 'symbol' parameter for precise symbol boundaries, " +
+        "or nts_file_search(action='grep') to find specific code patterns first.]";
+
+    // TIP: Подсказка о следующем шаге после чтения
+    private static final String WORKFLOW_TIP_EDIT =
+        "[WORKFLOW: Token ready for editing -> nts_edit_file(path, startLine, content, accessToken)]";
+
+    // TIP: Подсказка для файлов с поддержкой tree-sitter
+    private static final String SYMBOL_AVAILABLE_TIP =
+        "[TIP: This file supports symbol navigation. Use 'symbol' parameter to read exact method/class boundaries.]";
+
     @Override
     public String getName() {
         return "nts_file_read";
@@ -70,7 +83,7 @@ public class FileReadTool implements McpTool {
             - Full file read is BLOCKED - always specify line range
             - Returns TOKEN required for editing (nts_edit_file)
             - Re-read with same TOKEN: returns UNCHANGED if file intact
-            - Tokens auto-merge: reading [1-50] then [40-60] -> single token [1-60]
+            - Existing token reuse: if you have [1-100], requesting [50-60] returns the broader token
 
             TIPS:
             - Start with action='info' to see line count and preview
@@ -340,6 +353,9 @@ public class FileReadTool implements McpTool {
         // Регистрируем доступ и получаем токен (с rangeCrc от чистого содержимого)
         LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rawContent, lineCount);
 
+        // Проверяем, был ли возвращён покрывающий токен (шире чем запрошено)
+        String coveringTokenTip = SessionLineAccessTracker.getCoveringTokenTip(newToken, startLine, endLine);
+
         // Session Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
 
@@ -353,10 +369,10 @@ public class FileReadTool implements McpTool {
         // Если читали по символу, добавляем информацию о символе
         if (foundSymbol != null) {
             return createSymbolReadResponse(path, lineCount, fileData.charset().name(), crc32,
-                    startLine, endLine, rangeContent, newToken.encode(), foundSymbol, hasExternalChange);
+                    startLine, endLine, rangeContent, newToken, foundSymbol, hasExternalChange, coveringTokenTip);
         }
 
-        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, rangeContent, newToken.encode(), hasExternalChange);
+        return createReadResponse(path, lineCount, fileData.charset().name(), crc32, startLine, endLine, rangeContent, newToken, hasExternalChange, coveringTokenTip);
     }
 
     private JsonNode executeReadRanges(Path path, JsonNode rangesNode, String[] lines, long crc32, int lineCount, Charset charset, boolean hasExternalChange) {
@@ -385,8 +401,15 @@ public class FileReadTool implements McpTool {
             LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rawContent, lineCount);
             tokens.add(token.encode());
 
+            // Проверяем был ли возвращён покрывающий токен
+            String coveringTip = SessionLineAccessTracker.getCoveringTokenTip(token, start, end);
+
             sb.append(String.format("\n--- Lines %d-%d ---\n", start, end));
-            sb.append(String.format("[TOKEN: %s]\n", token.encode()));
+            sb.append(String.format("[ACCESS: lines %d-%d | TOKEN: %s]\n",
+                    token.startLine(), token.endLine(), token.encode()));
+            if (!coveringTip.isEmpty()) {
+                sb.append(coveringTip).append("\n");
+            }
             sb.append(rangeContent);
             sb.append("\n");
         }
@@ -509,7 +532,14 @@ public class FileReadTool implements McpTool {
 
         // Подсказка для больших файлов
         if (isLargeFile) {
-            sb.append("\n[TIP: Large file. Use grep to find specific code, or read targeted ranges.]");
+            sb.append("\n[TIP: Large file. Use nts_file_search(action='grep') to find specific code patterns.]");
+        }
+
+        // TIP о доступных возможностях навигации
+        boolean hasTreeSitter = LanguageDetector.detect(path).isPresent();
+        if (hasTreeSitter) {
+            sb.append("\n").append(SYMBOL_AVAILABLE_TIP);
+            sb.append("\n[TIP: Use nts_code_navigate(action='symbols') to list all classes, methods, and functions.]");
         }
 
         return createResponse(sb.toString().trim());
@@ -651,21 +681,49 @@ public class FileReadTool implements McpTool {
         return crc.getValue();
     }
 
-    private JsonNode createReadResponse(Path path, int totalLines, String encoding, long crc32, int startLine, int endLine, String content, String token, boolean hasExternalChange) {
+    private JsonNode createReadResponse(Path path, int totalLines, String encoding, long crc32,
+                                         int startLine, int endLine, String content,
+                                         LineAccessToken token, boolean hasExternalChange, String coveringTokenTip) {
         StringBuilder sb = new StringBuilder();
         if (hasExternalChange) {
             sb.append(EXTERNAL_CHANGE_TIP);
         }
-        sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n", path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
-        sb.append(String.format("[TOKEN: %s]\n\n", token));
-        sb.append(content);
+        sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n",
+                path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
+
+        // Показываем диапазон токена явно для LLM
+        sb.append(String.format("[ACCESS: lines %d-%d | TOKEN: %s]\n",
+                token.startLine(), token.endLine(), token.encode()));
+
+        // TIP если вернулся покрывающий токен
+        if (coveringTokenTip != null && !coveringTokenTip.isEmpty()) {
+            sb.append(coveringTokenTip).append("\n");
+        }
+
+        sb.append("\n").append(content);
+
+        // TIPs для улучшения workflow
+        int rangeSize = endLine - startLine + 1;
+        sb.append("\n\n");
+
+        // TIP для больших диапазонов
+        if (rangeSize > 100) {
+            boolean hasTreeSitter = LanguageDetector.detect(path).isPresent();
+            if (hasTreeSitter) {
+                sb.append(String.format(LARGE_RANGE_TIP, rangeSize)).append("\n");
+            }
+        }
+
+        // TIP о следующем шаге
+        sb.append(WORKFLOW_TIP_EDIT);
 
         return createResponse(sb.toString());
     }
 
     private JsonNode createSymbolReadResponse(Path path, int totalLines, String encoding, long crc32,
-                                               int startLine, int endLine, String content, String token,
-                                               SymbolInfo symbol, boolean hasExternalChange) {
+                                               int startLine, int endLine, String content,
+                                               LineAccessToken token, SymbolInfo symbol,
+                                               boolean hasExternalChange, String coveringTokenTip) {
         StringBuilder sb = new StringBuilder();
         if (hasExternalChange) {
             sb.append(EXTERNAL_CHANGE_TIP);
@@ -677,7 +735,15 @@ public class FileReadTool implements McpTool {
         sb.append("]\n");
         sb.append(String.format("[FILE: %s | LINES: %d-%d of %d | ENCODING: %s | CRC32C: %X]\n",
                 path.getFileName(), startLine, endLine, totalLines, encoding, crc32));
-        sb.append(String.format("[TOKEN: %s]\n", token));
+
+        // Показываем диапазон токена явно для LLM
+        sb.append(String.format("[ACCESS: lines %d-%d | TOKEN: %s]\n",
+                token.startLine(), token.endLine(), token.encode()));
+
+        // TIP если вернулся покрывающий токен
+        if (coveringTokenTip != null && !coveringTokenTip.isEmpty()) {
+            sb.append(coveringTokenTip).append("\n");
+        }
 
         if (symbol.signature() != null) {
             sb.append("[SIGNATURE: ").append(symbol.signature()).append("]\n");

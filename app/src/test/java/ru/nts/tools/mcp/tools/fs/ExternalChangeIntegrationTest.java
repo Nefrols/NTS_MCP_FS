@@ -79,7 +79,8 @@ class ExternalChangeIntegrationTest {
 
     private String extractToken(JsonNode result) {
         String text = result.get("content").get(0).get("text").asText();
-        int tokenStart = text.indexOf("[TOKEN: ") + 8;
+        // Новый формат: [ACCESS: lines X-Y | TOKEN: LAT:...]
+        int tokenStart = text.indexOf("TOKEN: ") + 7;
         int tokenEnd = text.indexOf("]", tokenStart);
         return text.substring(tokenStart, tokenEnd);
     }

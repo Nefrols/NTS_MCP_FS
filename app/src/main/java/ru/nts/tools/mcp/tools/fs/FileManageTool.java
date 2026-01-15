@@ -41,6 +41,21 @@ public class FileManageTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    // TIP: После создания файла
+    private static final String CREATE_WORKFLOW_TIP =
+        "[WORKFLOW: File created with full access token. " +
+        "Edit directly -> nts_edit_file(path, startLine=1, content, accessToken=TOKEN_ABOVE)]";
+
+    // TIP: После удаления файла
+    private static final String DELETE_WARNING_TIP =
+        "[WARNING: All access tokens for this file are now INVALID. " +
+        "If you need to recreate the file, use nts_file_manage(action='create').]";
+
+    // TIP: После move/rename
+    private static final String MOVE_IMPORT_TIP =
+        "[TIP: If this is a class file, update import statements in other files. " +
+        "Use nts_file_search(action='grep', pattern='import.*OldName') to find them.]";
+
     @Override
     public String getName() {
         return "nts_file_manage";
@@ -154,8 +169,8 @@ public class FileManageTool implements McpTool {
         int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
         LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, content, lineCount);
 
-        return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]",
-                pathStr, lineCount, crc, token.encode()));
+        return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]\n\n%s",
+                pathStr, lineCount, crc, token.encode(), CREATE_WORKFLOW_TIP));
     }
 
     /**
@@ -209,7 +224,7 @@ public class FileManageTool implements McpTool {
             TransactionManager.rollback();
             throw e;
         }
-        return createResponse("Deleted: " + pathStr);
+        return createResponse("Deleted: " + pathStr + "\n\n" + DELETE_WARNING_TIP);
     }
 
     private void deleteRecursive(Path path) throws IOException {
@@ -299,6 +314,12 @@ public class FileManageTool implements McpTool {
                 text.append("\n[TOKEN ").append(token.startLine()).append("-").append(token.endLine())
                     .append(": ").append(token.encode()).append("]");
             }
+        }
+
+        // TIP об обновлении импортов для Java/Kotlin файлов
+        String fileName = newPath.getFileName().toString();
+        if (fileName.endsWith(".java") || fileName.endsWith(".kt")) {
+            text.append("\n\n").append(MOVE_IMPORT_TIP);
         }
 
         ObjectNode res = mapper.createObjectNode();

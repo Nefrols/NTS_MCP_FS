@@ -51,6 +51,18 @@ public class EditFileTool implements McpTool {
      */
     private final ObjectMapper mapper = new ObjectMapper();
 
+    // TIP: Напоминание об обновлённом токене
+    private static final String TOKEN_UPDATED_TIP =
+        "Line count changed (%+d). Use NEW TOKEN above for subsequent edits to this file.";
+
+    // TIP: Напоминание о тестировании
+    private static final String TEST_REMINDER_TIP =
+        "Consider running tests to verify your changes work correctly.";
+
+    // TIP: Предупреждение о связанных файлах при изменении сигнатуры
+    private static final String SIGNATURE_CHANGE_TIP =
+        "Method signature may have changed. Check call sites with nts_code_navigate(action='references').";
+
     @Override
     public String getName() {
         return "nts_edit_file";
@@ -448,7 +460,22 @@ public class EditFileTool implements McpTool {
                 );
             }
 
-            throw new SecurityException("Token validation failed: " + validation.fullMessage());
+            // Формируем информативное сообщение для LLM
+            String tokenStatus = SessionContext.currentOrDefault().tokens()
+                    .getTokenStatusForLLM(path, tokenStart, tokenEnd);
+
+            throw new SecurityException(String.format(
+                "Token validation failed: %s\n" +
+                "[TOKEN: lines %d-%d | CRC in token: %X | CRC in file: %X]\n" +
+                "[ACTION REQUIRED: Re-read lines %d-%d with nts_file_read to get a fresh token]\n" +
+                "%s",
+                validation.fullMessage(),
+                tokenStart, tokenEnd,
+                token.rangeCrc32c(),
+                LineAccessToken.computeRangeCrc(tokenRawContent),
+                tokenStart, tokenEnd,
+                tokenStatus.isEmpty() ? "" : "\n" + tokenStatus
+            ));
         }
 
         // Проверяем, что токен покрывает диапазон редактирования
@@ -458,7 +485,18 @@ public class EditFileTool implements McpTool {
         boolean skipBoundaryCheck = TransactionManager.isFileCreatedInTransaction(path) ||
                                     TransactionManager.isFileCreatedInSession(path);
         if (!skipBoundaryCheck && !token.covers(editStart, editEnd)) {
-            throw new SecurityException(String.format("Token does not cover edit range [%d-%d]. Token covers [%d-%d]. " + "Read the required lines first with nts_file_read.", editStart, editEnd, token.startLine(), token.endLine()));
+            String tokenStatus = SessionContext.currentOrDefault().tokens()
+                    .getTokenStatusForLLM(path, editStart, editEnd);
+
+            throw new SecurityException(String.format(
+                "Token does not cover edit range [%d-%d]. Token covers [%d-%d].\n" +
+                "[ACTION REQUIRED: Read lines %d-%d with nts_file_read first]\n" +
+                "%s",
+                editStart, editEnd,
+                token.startLine(), token.endLine(),
+                editStart, editEnd,
+                tokenStatus.isEmpty() ? "" : "\n" + tokenStatus
+            ));
         }
 
         // Session Tokens: отмечаем файл как разблокированный в транзакции
@@ -543,6 +581,22 @@ public class EditFileTool implements McpTool {
 
             // Сохраняем виртуальный контент для batch-операций (refactor сможет использовать)
             SessionContext.currentOrDefault().transactions().setVirtualContent(path, newContent);
+
+            // Добавляем полезные TIPs
+            if (lineDelta != 0) {
+                stats.tips.add(String.format(TOKEN_UPDATED_TIP, lineDelta));
+            }
+
+            // TIP о тестировании при значительных изменениях
+            if (Math.abs(lineDelta) > 5 || stats.total() > 3) {
+                stats.tips.add(TEST_REMINDER_TIP);
+            }
+
+            // TIP о проверке связанных файлов при изменении сигнатуры метода
+            if (stats.diff != null && (stats.diff.contains("public ") || stats.diff.contains("private ") ||
+                    stats.diff.contains("protected ")) && stats.diff.contains("(")) {
+                stats.tips.add(SIGNATURE_CHANGE_TIP);
+            }
         }
         return stats;
     }

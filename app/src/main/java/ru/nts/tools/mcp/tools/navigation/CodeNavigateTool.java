@@ -46,6 +46,22 @@ public class CodeNavigateTool implements McpTool {
     private final ObjectMapper mapper = new ObjectMapper();
     private final SymbolResolver resolver = SymbolResolver.getInstance();
 
+    // TIP: После нахождения определения
+    private static final String DEFINITION_WORKFLOW_TIP =
+        "[WORKFLOW: To edit this symbol -> nts_edit_file(path, startLine, content, accessToken=TOKEN_ABOVE)]";
+
+    // TIP: После нахождения определения - предложение искать ссылки
+    private static final String FIND_REFERENCES_TIP =
+        "[TIP: To find all usages -> nts_code_navigate(action='references', path, symbol='%s')]";
+
+    // TIP: После списка символов
+    private static final String SYMBOLS_WORKFLOW_TIP =
+        "[TIP: To read specific symbol -> nts_file_read(path, symbol='symbolName')]";
+
+    // TIP: Предупреждение о scope=project
+    private static final String PROJECT_SCOPE_WARNING =
+        "[WARNING: scope='project' scans many files. For large codebases, start with scope='file' or 'directory'.]";
+
     @Override
     public String getName() {
         return "nts_code_navigate";
@@ -223,7 +239,11 @@ public class CodeNavigateTool implements McpTool {
 
         sb.append("\n**Context:**\n```").append(getLanguageForCodeBlock(loc.path())).append("\n");
         sb.append(context);
-        sb.append("\n```");
+        sb.append("\n```\n\n");
+
+        // TIPs для workflow
+        sb.append(DEFINITION_WORKFLOW_TIP).append("\n");
+        sb.append(String.format(FIND_REFERENCES_TIP, def.name()));
 
         return createTextResponse(sb.toString());
     }
@@ -265,6 +285,11 @@ public class CodeNavigateTool implements McpTool {
 
         StringBuilder sb = new StringBuilder();
         sb.append("**Found ").append(references.size()).append(" reference(s):**\n\n");
+
+        // TIP о scope для будущих поисков
+        if ("project".equals(scope) && byFile.size() > 10) {
+            sb.append(PROJECT_SCOPE_WARNING).append("\n\n");
+        }
 
         for (var entry : byFile.entrySet()) {
             Path file = entry.getKey();
@@ -397,6 +422,9 @@ public class CodeNavigateTool implements McpTool {
             sb.append("\n");
         }
 
+        // TIP о workflow
+        sb.append(SYMBOLS_WORKFLOW_TIP);
+
         return createTextResponse(sb.toString());
     }
 
@@ -427,7 +455,9 @@ public class CodeNavigateTool implements McpTool {
     }
 
     /**
-     * Builds formatted range content for token registration.
+     * Builds raw range content for token registration (without line numbers).
+     * Format must match extractRawContent in FileReadTool and EditFileTool
+     * for correct CRC computation.
      */
     private String buildRangeContent(String[] lines, int startLine, int endLine) {
         StringBuilder sb = new StringBuilder();
@@ -435,7 +465,7 @@ public class CodeNavigateTool implements McpTool {
         int end = Math.min(lines.length, endLine);
         for (int i = start; i < end; i++) {
             if (i > start) sb.append("\n");
-            sb.append(String.format("%4d\t%s", i + 1, lines[i]));
+            sb.append(lines[i]);
         }
         return sb.toString();
     }

@@ -160,6 +160,23 @@ The server automatically detects when files are modified **outside of MCP** (by 
 *   **Smart Prompts:** When an external change is detected, the agent receives a TIP recommending to review changes before proceeding, as they may be intentional user edits.
 *   **Undo Support:** If needed, external changes can be undone through the standard undo mechanism.
 
+#### 4.2. 💡 Smart Contextual TIPs
+Every tool response includes intelligent contextual hints that guide the agent through optimal workflows.
+*   **Workflow Guidance:** After each operation, TIPs suggest the logical next step (e.g., "Token ready for editing → nts_edit_file(...)").
+*   **Performance Hints:** Large range reads trigger suggestions to use symbol-based navigation or grep for precision.
+*   **Error Prevention:** Pattern analysis detects regex-like queries used without `isRegex=true` and warns proactively.
+*   **Token Management:** When line counts change after edit, TIPs remind to use the NEW token for subsequent operations.
+*   **Refactoring Awareness:** Signature changes trigger suggestions to check call sites via `nts_code_navigate(action='references')`.
+*   **Import Updates:** After move/rename of Java/Kotlin files, TIPs suggest searching for import statements that need updating.
+
+**Example TIPs in action:**
+```
+[WORKFLOW: Token ready for editing -> nts_edit_file(path, startLine, content, accessToken)]
+[TIP: Large range read (150 lines). Consider using 'symbol' parameter for precise symbol boundaries.]
+[TIP: Pattern contains regex-like characters (.*). If you intended regex search, add isRegex=true parameter.]
+[TIP: Line count changed (+5). Use NEW TOKEN above for subsequent edits to this file.]
+```
+
 #### 5. ✅ Built-in TODO System
 A specialized tool (`nts_todo`) allows the agent to maintain a Markdown-based plan.
 *   The active plan state is fed into the **HUD**.
@@ -251,6 +268,8 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 
 **Connection:** The token returned here is **required** for `nts_edit_file`. Read → Token → Edit. No shortcuts.
 
+**Smart TIPs:** Responses include workflow hints (e.g., "Token ready for editing") and suggest symbol-based reading for large ranges.
+
 **Bulk Read:** Read multiple related files in a single request:
 ```json
 {
@@ -273,7 +292,11 @@ Each file is separated in output with its own TOKEN. Errors in one file don't af
 1. **Token required** — proves agent read the current state
 2. **Diff in response** — agent immediately sees what changed
 3. **CRC check** — if file changed externally, edit fails safely
-4. **Smart Tips** — when replacing a single line with multi-line content without `endLine`, a `[TIP]` suggests using `insert_after` or specifying the range
+4. **Smart TIPs** — contextual hints for common issues:
+   - Multi-line content replacing single line without `endLine` → suggests `insert_after` or range
+   - Line count changed → reminds to use NEW token for subsequent edits
+   - Signature change detected → suggests checking call sites with `nts_code_navigate`
+   - Significant changes → reminds to run tests
 
 **Connection:** Consumes token from `nts_file_read`, produces new token for subsequent edits. Chain of custody is unbroken.
 
@@ -302,6 +325,8 @@ Each file is separated in output with its own TOKEN. Errors in one file don't af
 grep("TODO") → finds line 47 → returns TOKEN for lines 45-50
            → agent can edit lines 45-50 directly
 ```
+
+**Smart TIPs:** After grep, workflow hints remind that tokens are ready for direct editing. If pattern looks like regex but `isRegex=false`, suggests enabling it.
 
 **Connection:** Bridges discovery and action. Reduces round-trips while maintaining token discipline.
 
@@ -704,6 +729,23 @@ NTS меняет микро-эффективность на макро-надё�
 *   **Умные подсказки:** При обнаружении внешнего изменения агент получает TIP с рекомендацией изучить изменения перед продолжением работы, т.к. они могут быть преднамеренной правкой пользователя.
 *   **Поддержка отката:** При необходимости внешние изменения можно откатить через стандартный механизм undo.
 
+#### 4.2. 💡 Умные контекстные подсказки (Smart TIPs)
+Каждый ответ инструмента содержит интеллектуальные контекстные подсказки, направляющие агента по оптимальному workflow.
+*   **Руководство по workflow:** После каждой операции TIPs предлагают логичный следующий шаг (например, «Токен готов для редактирования → nts_edit_file(...)»).
+*   **Подсказки производительности:** Чтение большого диапазона предлагает использовать symbol-навигацию или grep для точности.
+*   **Предотвращение ошибок:** Анализ паттернов определяет regex-подобные запросы без `isRegex=true` и предупреждает заранее.
+*   **Управление токенами:** При изменении количества строк после правки TIPs напоминают использовать НОВЫЙ токен.
+*   **Осведомлённость о рефакторинге:** Изменения сигнатуры предлагают проверить места вызова через `nts_code_navigate(action='references')`.
+*   **Обновление импортов:** После move/rename Java/Kotlin файлов TIPs предлагают поискать import-ы для обновления.
+
+**Примеры TIPs в действии:**
+```
+[WORKFLOW: Token ready for editing -> nts_edit_file(path, startLine, content, accessToken)]
+[TIP: Large range read (150 lines). Consider using 'symbol' parameter for precise symbol boundaries.]
+[TIP: Pattern contains regex-like characters (.*). If you intended regex search, add isRegex=true parameter.]
+[TIP: Line count changed (+5). Use NEW TOKEN above for subsequent edits to this file.]
+```
+
 #### 5. ✅ Встроенная система TODO
 Специальный инструмент `nts_todo` позволяет агенту вести план в формате Markdown.
 *   Активный план транслируется в **HUD**.
@@ -795,6 +837,8 @@ NTS меняет микро-эффективность на макро-надё�
 
 **Связь:** Токен, возвращённый здесь, **обязателен** для `nts_edit_file`. Read → Token → Edit. Без сокращений.
 
+**Умные TIPs:** Ответы содержат подсказки workflow (например, «Токен готов для редактирования») и предлагают symbol-чтение для больших диапазонов.
+
 **Массовое чтение (Bulk Read):** Чтение нескольких связанных файлов одним запросом:
 ```json
 {
@@ -817,7 +861,11 @@ NTS меняет микро-эффективность на макро-надё�
 1. **Токен обязателен** — доказывает, что агент прочитал текущее состояние
 2. **Diff в ответе** — агент сразу видит, что изменилось
 3. **Проверка CRC** — если файл изменён извне, правка безопасно отклоняется
-4. **Умные подсказки** — при замене одной строки многострочным содержимым без указания `endLine` добавляется `[TIP]` с предложением использовать `insert_after` или указать диапазон
+4. **Умные TIPs** — контекстные подсказки для типичных ситуаций:
+   - Многострочный контент заменяет одну строку без `endLine` → предлагает `insert_after` или указать диапазон
+   - Изменилось количество строк → напоминает использовать НОВЫЙ токен
+   - Обнаружено изменение сигнатуры → предлагает проверить места вызова через `nts_code_navigate`
+   - Значительные изменения → напоминает запустить тесты
 
 **Связь:** Потребляет токен от `nts_file_read`, выдаёт новый токен для последующих правок. Цепочка владения не прерывается.
 
@@ -846,6 +894,8 @@ NTS меняет микро-эффективность на макро-надё�
 grep("TODO") → находит строку 47 → возвращает TOKEN для строк 45-50
            → агент может редактировать строки 45-50 напрямую
 ```
+
+**Умные TIPs:** После grep подсказки workflow напоминают, что токены готовы для прямого редактирования. Если паттерн похож на regex, но `isRegex=false`, предлагает включить его.
 
 **Связь:** Мост между обнаружением и действием. Сокращает обращения, сохраняя токенную дисциплину.
 

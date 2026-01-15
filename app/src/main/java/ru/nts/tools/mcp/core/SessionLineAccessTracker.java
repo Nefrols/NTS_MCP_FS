@@ -42,14 +42,26 @@ public class SessionLineAccessTracker {
 
     /**
      * Регистрирует доступ к диапазону строк и возвращает токен.
-     * Реализует автослияние: если запрошенный диапазон внутри существующего - возвращает старый токен.
+     *
+     * Логика регистрации:
+     * 1. Точное совпадение диапазона + CRC совпадает → возвращаем существующий токен
+     * 2. Точное совпадение диапазона + CRC изменился → создаём новый (файл изменился)
+     * 3. Существующий токен ПОКРЫВАЕТ запрос → возвращаем покрывающий токен
+     * 4. Иначе → создаём новый токен
+     *
+     * ВАЖНО про CRC:
+     * - CRC вычисляется для конкретного диапазона строк
+     * - CRC токена [1-100] != CRC диапазона [50-60] (это разные диапазоны!)
+     * - Проверка CRC при ИСПОЛЬЗОВАНИИ токена (validateToken) гарантирует,
+     *   что содержимое диапазона токена не изменилось с момента чтения
+     * - При возврате покрывающего токена, его CRC будет проверен при использовании
      *
      * @param path Путь к файлу
      * @param startLine Начало диапазона (1-based)
      * @param endLine Конец диапазона (1-based)
      * @param rangeContent Содержимое диапазона строк (для вычисления CRC)
      * @param lineCount Общее количество строк в файле
-     * @return Токен доступа к диапазону
+     * @return Токен доступа к диапазону (может быть шире запрошенного!)
      */
     public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
         Path absPath = path.toAbsolutePath().normalize();
@@ -58,56 +70,46 @@ public class SessionLineAccessTracker {
         synchronized (lock) {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.computeIfAbsent(absPath, k -> new TreeMap<>());
 
-            // Проверяем, есть ли существующий токен, покрывающий запрошенный диапазон
-            // Range CRC MUST match - if content changed (undo/redo/external), need new token
+            // 1. Проверяем точное совпадение диапазона
+            LineAccessToken exactMatch = fileTokens.get(startLine);
+            if (exactMatch != null &&
+                    exactMatch.endLine() == endLine &&
+                    exactMatch.lineCount() == lineCount) {
+                // Точное совпадение диапазона - проверяем CRC
+                if (exactMatch.rangeCrc32c() == rangeCrc) {
+                    // Содержимое не изменилось - возвращаем существующий токен
+                    return exactMatch;
+                }
+                // CRC изменился (undo/redo/external) - удаляем устаревший токен
+                fileTokens.remove(startLine);
+            }
+
+            // 2. Проверяем, есть ли токен, покрывающий запрошенный диапазон
+            // Если да - возвращаем его (LLM получит более широкий доступ)
+            // CRC покрывающего токена будет проверен при использовании (validateToken)
             for (LineAccessToken existing : fileTokens.values()) {
-                if (existing.lineCount() == lineCount &&
-                        existing.covers(startLine, endLine)) {
-                    // Токен покрывает диапазон - проверяем CRC для валидности
-                    if (existing.rangeCrc32c() == rangeCrc) {
-                        // CRC совпадает - содержимое не изменилось, возвращаем существующий токен
-                        return existing;
-                    } else {
-                        // CRC не совпадает - содержимое изменилось (undo/redo/external)
-                        // Удаляем стейл токен и продолжаем создание нового
-                        fileTokens.remove(existing.startLine());
-                        break;
-                    }
+                if (existing.lineCount() == lineCount && existing.covers(startLine, endLine)) {
+                    // Покрывающий токен найден - возвращаем его
+                    return existing;
                 }
             }
 
-            // Удаляем токены, которые полностью внутри нового диапазона
+            // 3. Удаляем токены, которые полностью внутри нового диапазона
             fileTokens.entrySet().removeIf(entry -> {
                 LineAccessToken t = entry.getValue();
-                return startLine <= t.startLine() && t.endLine() <= endLine;
+                return t.lineCount() == lineCount &&
+                       startLine <= t.startLine() && t.endLine() <= endLine;
             });
 
-            // Объединяем с перекрывающимися/смежными токенами
-            int mergedStart = startLine;
-            int mergedEnd = endLine;
-
-            List<Integer> toRemove = new ArrayList<>();
-            for (Map.Entry<Integer, LineAccessToken> entry : fileTokens.entrySet()) {
+            // 4. Удаляем пересекающиеся токены (не сливаем - каждый токен имеет свой CRC)
+            fileTokens.entrySet().removeIf(entry -> {
                 LineAccessToken t = entry.getValue();
-                if (t.lineCount() != lineCount) {
-                    continue;
-                }
-                // Смежные или перекрывающиеся
-                if (t.startLine() <= mergedEnd + 1 && t.endLine() >= mergedStart - 1) {
-                    mergedStart = Math.min(mergedStart, t.startLine());
-                    mergedEnd = Math.max(mergedEnd, t.endLine());
-                    toRemove.add(entry.getKey());
-                }
-            }
+                return t.lineCount() == lineCount && t.overlaps(startLine, endLine);
+            });
 
-            for (Integer key : toRemove) {
-                fileTokens.remove(key);
-            }
-
-            // Для объединённого диапазона нужен новый CRC
-            // Если диапазон расширился, используем переданный CRC (вызывающий код должен передать правильный)
-            LineAccessToken newToken = new LineAccessToken(absPath, mergedStart, mergedEnd, rangeCrc, lineCount);
-            fileTokens.put(mergedStart, newToken);
+            // 5. Создаём новый токен с CRC для запрошенного диапазона
+            LineAccessToken newToken = new LineAccessToken(absPath, startLine, endLine, rangeCrc, lineCount);
+            fileTokens.put(startLine, newToken);
 
             return newToken;
         }
@@ -524,6 +526,72 @@ public class SessionLineAccessTracker {
                     indent, t.startLine(), t.endLine(), t.encode()));
         }
         return result;
+    }
+
+    /**
+     * Возвращает компактный статус токенов для файла в формате удобном для LLM.
+     *
+     * Формат:
+     * [YOUR ACCESS: filename.java]
+     *   • lines 1-50: token_short_id (covers requested range)
+     *   • lines 100-150: token_short_id
+     *
+     * @param path Путь к файлу
+     * @param requestedStart Начало запрошенного диапазона (для пометки покрывающего токена), 0 если не нужно
+     * @param requestedEnd Конец запрошенного диапазона, 0 если не нужно
+     * @return Форматированная строка статуса или пустая строка если токенов нет
+     */
+    public String getTokenStatusForLLM(Path path, int requestedStart, int requestedEnd) {
+        List<LineAccessToken> fileTokens = getTokensForFile(path);
+        if (fileTokens.isEmpty()) {
+            return "";
+        }
+
+        String fileName = path.getFileName().toString();
+        StringBuilder sb = new StringBuilder();
+        sb.append("[YOUR ACCESS: ").append(fileName).append("]\n");
+
+        for (LineAccessToken t : fileTokens) {
+            sb.append("  • lines ").append(t.startLine()).append("-").append(t.endLine());
+
+            // Показываем короткий ID токена (первые 8 символов после LAT:)
+            String encoded = t.encode();
+            if (encoded.startsWith("LAT:") && encoded.length() > 12) {
+                sb.append(": ").append(encoded.substring(0, 12)).append("...");
+            }
+
+            // Пометка если этот токен покрывает запрошенный диапазон
+            if (requestedStart > 0 && requestedEnd > 0 && t.covers(requestedStart, requestedEnd)) {
+                if (t.startLine() != requestedStart || t.endLine() != requestedEnd) {
+                    sb.append(" ← covers your request [").append(requestedStart).append("-").append(requestedEnd).append("]");
+                }
+            }
+            sb.append("\n");
+        }
+
+        return sb.toString().trim();
+    }
+
+    /**
+     * Возвращает TIP для LLM когда возвращается покрывающий токен.
+     *
+     * @param token Возвращённый токен
+     * @param requestedStart Запрошенное начало диапазона
+     * @param requestedEnd Запрошенный конец диапазона
+     * @return TIP строка или пустая строка если диапазоны совпадают
+     */
+    public static String getCoveringTokenTip(LineAccessToken token, int requestedStart, int requestedEnd) {
+        if (token.startLine() == requestedStart && token.endLine() == requestedEnd) {
+            return ""; // Диапазоны совпадают, TIP не нужен
+        }
+
+        return String.format(
+            "[TIP: You requested lines %d-%d, but you already have access to lines %d-%d. " +
+            "Returning existing token. Use this token for editing any lines within %d-%d.]",
+            requestedStart, requestedEnd,
+            token.startLine(), token.endLine(),
+            token.startLine(), token.endLine()
+        );
     }
 
     /**

@@ -36,6 +36,21 @@ public class FileSearchTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    // TIP: Подсказка о workflow после grep
+    private static final String GREP_WORKFLOW_TIP =
+        "[WORKFLOW: Tokens from grep output are ready for editing -> " +
+        "nts_edit_file(path, startLine, content, accessToken=TOKEN_FROM_ABOVE)]";
+
+    // TIP: Подсказка при большом количестве совпадений
+    private static final String MANY_MATCHES_TIP =
+        "[TIP: Many matches found. Consider narrowing search with more specific pattern, " +
+        "or use isRegex=true for regex patterns like 'method.*Name']";
+
+    // TIP: Паттерн похож на regex
+    private static final String REGEX_HINT_TIP =
+        "[TIP: Pattern contains regex-like characters (%s). " +
+        "If you intended regex search, add isRegex=true parameter.]";
+
     @Override
     public String getName() {
         return "nts_file_search";
@@ -350,7 +365,54 @@ public class FileSearchTool implements McpTool {
             }
             sb.append("\n");
         }
+
+        // TIPs для улучшения workflow
+        sb.append("\n");
+
+        // TIP о workflow
+        sb.append(GREP_WORKFLOW_TIP).append("\n");
+
+        // TIP если много совпадений
+        int totalMatches = sortedResults.stream().mapToInt(r -> (int) r.lines().stream().filter(MatchedLine::isMatch).count()).sum();
+        if (totalMatches > 20) {
+            sb.append(MANY_MATCHES_TIP).append("\n");
+        }
+
+        // TIP если паттерн похож на regex но isRegex=false
+        if (!isRegex && looksLikeRegex(query)) {
+            String regexChars = detectRegexChars(query);
+            sb.append(String.format(REGEX_HINT_TIP, regexChars)).append("\n");
+        }
+
         return createResponse(sb.toString().trim());
+    }
+
+    /**
+     * Определяет, похож ли паттерн на регулярное выражение.
+     */
+    private boolean looksLikeRegex(String pattern) {
+        // Проверяем наличие типичных regex-символов
+        return pattern.contains(".*") || pattern.contains(".+") ||
+               pattern.contains("\\d") || pattern.contains("\\w") || pattern.contains("\\s") ||
+               pattern.contains("[") || pattern.contains("(") ||
+               pattern.contains("^") || pattern.contains("$") ||
+               pattern.contains("?") || pattern.contains("+");
+    }
+
+    /**
+     * Извлекает обнаруженные regex-символы для подсказки.
+     */
+    private String detectRegexChars(String pattern) {
+        List<String> found = new ArrayList<>();
+        if (pattern.contains(".*")) found.add(".*");
+        else if (pattern.contains(".+")) found.add(".+");
+        if (pattern.contains("\\d")) found.add("\\d");
+        if (pattern.contains("\\w")) found.add("\\w");
+        if (pattern.contains("[")) found.add("[...]");
+        if (pattern.contains("(")) found.add("(...)");
+        if (pattern.contains("?")) found.add("?");
+        if (pattern.contains("+") && !pattern.contains(".+")) found.add("+");
+        return String.join(", ", found.isEmpty() ? List.of("regex chars") : found);
     }
 
     /**
@@ -399,7 +461,9 @@ public class FileSearchTool implements McpTool {
     }
 
     /**
-     * Строит содержимое диапазона из карты текстов строк с форматированием номеров строк.
+     * Строит чистое содержимое диапазона из карты текстов строк (без номеров строк).
+     * Формат должен совпадать с extractRawContent в FileReadTool и EditFileTool
+     * для корректного вычисления CRC токена.
      */
     private String buildRangeContent(Map<Integer, String> lineTexts, int startLine, int endLine) {
         StringBuilder sb = new StringBuilder();
@@ -407,8 +471,7 @@ public class FileSearchTool implements McpTool {
             if (i > startLine) {
                 sb.append("\n");
             }
-            String text = lineTexts.getOrDefault(i, "");
-            sb.append(String.format("%4d\t%s", i, text));
+            sb.append(lineTexts.getOrDefault(i, ""));
         }
         return sb.toString();
     }

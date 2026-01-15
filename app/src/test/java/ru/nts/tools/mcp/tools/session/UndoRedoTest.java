@@ -72,8 +72,8 @@ class UndoRedoTest {
         readParams.put("endLine", 10000);
         JsonNode result = readTool.execute(readParams);
         String text = result.get("content").get(0).get("text").asText();
-        // Extract token from response: [TOKEN: LAT:...]
-        int start = text.indexOf("[TOKEN: ") + 8;
+        // Extract token from response: [ACCESS: lines X-Y | TOKEN: LAT:...]
+        int start = text.indexOf("TOKEN: ") + 7;
         int end = text.indexOf("]", start);
         return text.substring(start, end);
     }
