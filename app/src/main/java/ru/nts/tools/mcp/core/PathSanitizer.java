@@ -63,7 +63,13 @@ public class PathSanitizer {
      * Набор имен файлов и папок, доступ к которым для LLM заблокирован или ограничен.
      * Включает инфраструктурные компоненты (Git, Gradle) и служебную директорию транзакций MCP.
      */
-    private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts", ".nts");
+    private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts");
+
+    /**
+     * Корневая директория для хранения сессий (~/.nts/).
+     * Находится в домашней директории пользователя, аналогично ~/.claude/ или ~/.gemini/.
+     */
+    private static volatile Path sessionRoot = Paths.get(System.getProperty("user.home"), ".nts").toAbsolutePath().normalize();
 
     /**
      * Переопределяет корень проекта (единственный root).
@@ -227,5 +233,20 @@ public class PathSanitizer {
      */
     public static Path getRoot() {
         return primaryRoot;
+    }
+
+    /**
+     * Возвращает корень для хранения сессий (~/.nts/).
+     * Сессии хранятся отдельно от рабочей директории проекта.
+     */
+    public static Path getSessionRoot() {
+        return sessionRoot;
+    }
+
+    /**
+     * Переопределяет корень хранения сессий (для тестов).
+     */
+    public static void setSessionRoot(Path newRoot) {
+        sessionRoot = newRoot.toAbsolutePath().normalize();
     }
 }

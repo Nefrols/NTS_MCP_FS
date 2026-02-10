@@ -33,6 +33,7 @@ class ExtendedHudTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
+        PathSanitizer.setSessionRoot(tempDir);
         // Полностью сбрасываем все сессии для чистого состояния
         SessionContext.resetAll();
         // Устанавливаем стабильную сессию для всех тестов

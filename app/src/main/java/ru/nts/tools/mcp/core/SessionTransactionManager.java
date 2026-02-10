@@ -57,6 +57,9 @@ public class SessionTransactionManager {
     // ID сессии, которой принадлежит этот менеджер (для корректного пути к журналу)
     private final String sessionId;
 
+    // Ссылка на SessionContext для делегации сохранения журнала
+    private final SessionContext sessionContext;
+
     // Per-session стеки (не static!)
     private final List<TransactionEntry> undoStack = new ArrayList<>();
     private final List<TransactionEntry> redoStack = new ArrayList<>();
@@ -86,15 +89,16 @@ public class SessionTransactionManager {
      * Создаёт менеджер транзакций для указанной сессии.
      * @param sessionId ID сессии (используется для путей к журналу и снапшотам)
      */
-    public SessionTransactionManager(String sessionId) {
+    public SessionTransactionManager(String sessionId, SessionContext sessionContext) {
         this.sessionId = sessionId;
+        this.sessionContext = sessionContext;
     }
 
     /**
      * Возвращает путь к директории сессии.
      */
     private Path getSessionDir() {
-        return PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+        return PathSanitizer.getSessionRoot().resolve("sessions/" + sessionId);
     }
 
     private Path getSnapshotDir() throws IOException {
@@ -364,6 +368,50 @@ public class SessionTransactionManager {
     public void createCheckpoint(String name) {
         synchronized (undoStack) {
             undoStack.add(new Checkpoint(name, LocalDateTime.now()));
+        }
+    }
+
+    public String diffBetweenCheckpoints(String fromName, String toName) {
+        synchronized (undoStack) {
+            int fromIdx = -1, toIdx = -1;
+            for (int i = 0; i < undoStack.size(); i++) {
+                if (undoStack.get(i) instanceof Checkpoint cp) {
+                    if (fromName.equals(cp.name)) fromIdx = i;
+                    if (toName.equals(cp.name)) toIdx = i;
+                }
+            }
+            if (fromIdx < 0) throw new IllegalArgumentException("Checkpoint not found: " + fromName);
+            if (toIdx < 0) throw new IllegalArgumentException("Checkpoint not found: " + toName);
+            if (fromIdx >= toIdx) throw new IllegalArgumentException(
+                    "'" + fromName + "' must be earlier than '" + toName + "'");
+
+            // Collect transactions between checkpoints
+            Map<Path, int[]> fileStats = new java.util.LinkedHashMap<>(); // [added, deleted, edits]
+            int txCount = 0;
+            for (int i = fromIdx + 1; i <= toIdx; i++) {
+                if (undoStack.get(i) instanceof Transaction tx) {
+                    txCount++;
+                    for (var entry : tx.stats.entrySet()) {
+                        Path path = entry.getKey();
+                        FileDiffStats ds = entry.getValue();
+                        int[] counts = fileStats.computeIfAbsent(path, k -> new int[3]);
+                        counts[0] += ds.added();
+                        counts[1] += ds.deleted();
+                        counts[2]++;
+                    }
+                }
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("=== DIFF: '%s' -> '%s' (%d transactions, %d files) ===\n\n",
+                    fromName, toName, txCount, fileStats.size()));
+            Path root = PathSanitizer.getRoot();
+            for (var e : fileStats.entrySet()) {
+                String rel = root != null ? root.relativize(e.getKey()).toString() : e.getKey().toString();
+                int[] c = e.getValue();
+                sb.append(String.format("%-60s +%d/-%d  (%d edits)\n", rel, c[0], c[1], c[2]));
+            }
+            return sb.toString();
         }
     }
 
@@ -737,42 +785,89 @@ public class SessionTransactionManager {
     }
 
     /**
-     * Сохраняет журнал транзакций на диск в формате JSON.
+     * Сохраняет журнал сессии через SessionContext (единый journal.json).
      * Вызывается синхронно после commit(), undo(), redo().
      */
     public void saveJournal() {
-        Path journalPath = getJournalPath();
-        try {
-            Files.createDirectories(journalPath.getParent());
+        if (sessionContext != null) {
+            sessionContext.saveJournal();
+        }
+    }
 
-            ObjectNode root = MAPPER.createObjectNode();
-            root.put("version", JOURNAL_VERSION);
-            root.put("sessionId", sessionId);
+    /**
+     * Записывает секции транзакций в ObjectNode журнала.
+     * Вызывается из SessionContext.saveJournal() для формирования единого файла.
+     */
+    public void writeTransactionsTo(ObjectNode root) {
+        // Stats
+        ObjectNode stats = root.putObject("stats");
+        stats.put("totalEdits", totalEdits.get());
+        stats.put("totalUndos", totalUndos.get());
 
-            // Counters
-            ObjectNode counters = root.putObject("counters");
-            counters.put("totalEdits", totalEdits.get());
-            counters.put("totalUndos", totalUndos.get());
+        // Transactions
+        ObjectNode transactions = root.putObject("transactions");
 
-            // Undo stack
-            ArrayNode undoArray = root.putArray("undoStack");
-            synchronized (undoStack) {
-                for (TransactionEntry entry : undoStack) {
-                    undoArray.add(serializeEntryToJson(entry));
+        ArrayNode undoArray = transactions.putArray("undoStack");
+        synchronized (undoStack) {
+            for (TransactionEntry entry : undoStack) {
+                undoArray.add(serializeEntryToJson(entry));
+            }
+        }
+
+        ArrayNode redoArray = transactions.putArray("redoStack");
+        synchronized (redoStack) {
+            for (TransactionEntry entry : redoStack) {
+                redoArray.add(serializeEntryToJson(entry));
+            }
+        }
+    }
+
+    /**
+     * Загружает транзакции из JSON узла журнала.
+     * Поддерживает как v1 (top-level stacks), так и v2 (nested transactions).
+     */
+    public void loadTransactionsFrom(JsonNode root) {
+        // Restore counters
+        JsonNode statsNode = root.path("stats");
+        if (statsNode.isMissingNode()) {
+            // v1 format: counters at top level
+            statsNode = root.path("counters");
+        }
+        totalEdits.set(statsNode.path("totalEdits").asInt(0));
+        totalUndos.set(statsNode.path("totalUndos").asInt(0));
+
+        // Find undo/redo arrays
+        JsonNode txNode = root.path("transactions");
+        JsonNode undoArray;
+        JsonNode redoArray;
+        if (!txNode.isMissingNode() && txNode.isObject()) {
+            // v2 format: nested under "transactions"
+            undoArray = txNode.path("undoStack");
+            redoArray = txNode.path("redoStack");
+        } else {
+            // v1 format: top level
+            undoArray = root.path("undoStack");
+            redoArray = root.path("redoStack");
+        }
+
+        // Restore undo stack
+        if (undoArray.isArray()) {
+            for (JsonNode node : undoArray) {
+                TransactionEntry entry = deserializeEntryFromJson(node);
+                if (entry != null) {
+                    undoStack.add(entry);
                 }
             }
+        }
 
-            // Redo stack
-            ArrayNode redoArray = root.putArray("redoStack");
-            synchronized (redoStack) {
-                for (TransactionEntry entry : redoStack) {
-                    redoArray.add(serializeEntryToJson(entry));
+        // Restore redo stack
+        if (redoArray.isArray()) {
+            for (JsonNode node : redoArray) {
+                TransactionEntry entry = deserializeEntryFromJson(node);
+                if (entry != null) {
+                    redoStack.add(entry);
                 }
             }
-
-            MAPPER.writeValue(journalPath.toFile(), root);
-        } catch (IOException e) {
-            System.err.println("Warning: Failed to save transaction journal: " + e.getMessage());
         }
     }
 
@@ -865,8 +960,8 @@ public class SessionTransactionManager {
     }
 
     /**
-     * Загружает журнал транзакций с диска.
-     * Вызывается при реактивации сессии.
+     * Загружает журнал транзакций с диска (legacy, для backward compatibility).
+     * В новой архитектуре загрузка делегируется через loadTransactionsFrom().
      *
      * @return true если журнал успешно загружен
      */
@@ -878,37 +973,7 @@ public class SessionTransactionManager {
 
         try {
             JsonNode root = MAPPER.readTree(journalPath.toFile());
-
-            // Проверяем версию
-            int version = root.path("version").asInt(1);
-
-            // Восстанавливаем счётчики
-            JsonNode counters = root.path("counters");
-            totalEdits.set(counters.path("totalEdits").asInt(0));
-            totalUndos.set(counters.path("totalUndos").asInt(0));
-
-            // Восстанавливаем undo стек
-            JsonNode undoArray = root.path("undoStack");
-            if (undoArray.isArray()) {
-                for (JsonNode node : undoArray) {
-                    TransactionEntry entry = deserializeEntryFromJson(node);
-                    if (entry != null) {
-                        undoStack.add(entry);
-                    }
-                }
-            }
-
-            // Восстанавливаем redo стек
-            JsonNode redoArray = root.path("redoStack");
-            if (redoArray.isArray()) {
-                for (JsonNode node : redoArray) {
-                    TransactionEntry entry = deserializeEntryFromJson(node);
-                    if (entry != null) {
-                        redoStack.add(entry);
-                    }
-                }
-            }
-
+            loadTransactionsFrom(root);
             return true;
         } catch (Exception e) {
             return false;

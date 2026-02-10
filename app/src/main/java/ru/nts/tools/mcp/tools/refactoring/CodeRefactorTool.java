@@ -66,13 +66,26 @@ public class CodeRefactorTool implements McpTool {
                   scope: file|directory|project (default: project)
 
                 CHANGE_SIGNATURE:
-                  path + symbol (method) + params: [{name, type, action: add|remove|rename|retype|reorder}]
-                  Automatically updates ALL call sites across the project!
+                  path + symbol (method name) + params array. Updates ALL call sites!
+                  Each param: {name, type, action, [newName], [defaultValue]}
+                  Examples:
+                    Add param:    params: [{"name": "timeout", "type": "int", "defaultValue": "30", "action": "add"}]
+                    Remove param: params: [{"name": "oldParam", "action": "remove"}]
+                    Rename param: params: [{"name": "old", "newName": "new", "action": "rename"}]
+                    Change type:  params: [{"name": "id", "type": "long", "action": "retype"}]
+                    Reorder:      params: [{"name": "b", "action": "reorder"}, {"name": "a", "action": "reorder"}]
+                    Combined:     params: [{"name": "x", "action": "remove"}, {"name": "y", "type": "String", "action": "add"}]
 
                 GENERATE:
                   path + symbol (class name) + what (accessors|constructor|builder|toString)
 
                 LANGUAGES: Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML
+
+                EXTRACT_VARIABLE (inverse of inline):
+                  path + startLine + variableName [+ endLine] [+ startColumn/endColumn] [+ variableType] [+ replaceAll]
+                  Extracts expression into a named variable. Auto-detects type for most languages.
+                  replaceAll=true (default): replaces ALL identical expressions in the same scope.
+                  Example: extract_variable(path='Foo.java', startLine=15, startColumn=20, endColumn=45, variableName='maxRetries')
 
                 OTHER: delete, wrap, extract_method, inline, move, batch
 
@@ -100,10 +113,11 @@ public class CodeRefactorTool implements McpTool {
         actionEnum.add("wrap");
         actionEnum.add("extract_method");
         actionEnum.add("inline");
+        actionEnum.add("extract_variable");
         actionEnum.add("change_signature");
         actionEnum.add("move");
         actionEnum.add("batch");
-        action.put("description", "Operation: rename (+ newName), generate (+ what), delete, wrap, extract_method, inline, change_signature, move, batch");
+        action.put("description", "Operation: rename (+ newName), generate (+ what), delete, wrap, extract_method, extract_variable (+ variableName), inline, change_signature, move, batch");
 
         // path
         ObjectNode path = properties.putObject("path");
@@ -203,6 +217,23 @@ public class CodeRefactorTool implements McpTool {
         ObjectNode methodName = properties.putObject("methodName");
         methodName.put("type", "string");
         methodName.put("description", "Name for the extracted method");
+
+        // variableName (for extract_variable)
+        ObjectNode variableName = properties.putObject("variableName");
+        variableName.put("type", "string");
+        variableName.put("description", "[extract_variable] Name for the new variable");
+
+        // variableType (for extract_variable)
+        ObjectNode variableType = properties.putObject("variableType");
+        variableType.put("type", "string");
+        variableType.put("default", "auto");
+        variableType.put("description", "[extract_variable] Type for the variable. 'auto' = infer from expression (default)");
+
+        // replaceAll (for extract_variable)
+        ObjectNode replaceAll = properties.putObject("replaceAll");
+        replaceAll.put("type", "boolean");
+        replaceAll.put("default", true);
+        replaceAll.put("description", "[extract_variable] Replace ALL occurrences of expression in scope (default: true)");
 
         // targetPath (for move)
         ObjectNode targetPath = properties.putObject("targetPath");

@@ -39,6 +39,7 @@ public final class RefactoringEngine {
         registerOperation(new WrapOperation());
         registerOperation(new ExtractMethodOperation());
         registerOperation(new InlineOperation());
+        registerOperation(new ExtractVariableOperation());
         registerOperation(new ChangeSignatureOperation());
         registerOperation(new MoveOperation());
         registerOperation(new BatchOperation());

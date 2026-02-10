@@ -109,6 +109,11 @@ public class InitTool implements McpTool {
                 "Use this when resuming work after server restart or connection drop. " +
                 "If omitted, a new session is created.");
 
+        props.putObject("workingDirectory").put("type", "string").put("description",
+                "Optional. Working directory path for this session (e.g., 'D:/projects/my-app'). " +
+                "Stored in journal.json for session identification and recovery. " +
+                "If omitted, uses the current project root (PathSanitizer.getRoot()).");
+
         schema.putArray("required"); // Empty array - no required params
         return schema;
     }
@@ -155,6 +160,16 @@ public class InitTool implements McpTool {
             ctx = SessionContext.getOrCreate(sessionId);
         }
 
+        // Устанавливаем рабочую директорию сессии
+        String workingDir = params.path("workingDirectory").asText(null);
+        if (workingDir != null && !workingDir.isBlank()) {
+            ctx.setWorkingDirectory(Path.of(workingDir));
+        } else if (!isReactivation) {
+            // Для новых сессий — используем текущий project root
+            ctx.setWorkingDirectory(PathSanitizer.getRoot());
+        }
+        // Для реактивации без workingDirectory — оставляем восстановленное из journal.json
+
         // Регистрируем сессию как валидную
         McpServer.registerValidSession(sessionId);
         SessionContext.setCurrent(ctx);
@@ -164,8 +179,8 @@ public class InitTool implements McpTool {
         Files.createDirectories(ctx.getTodosDir());
         Files.createDirectories(ctx.getSnapshotsDir());
 
-        // Сохраняем метаданные сессии
-        ctx.saveMetadata();
+        // Сохраняем журнал сессии (journal.json)
+        ctx.saveJournal();
 
         Path projectRoot = PathSanitizer.getRoot();
         List<Path> allRoots = PathSanitizer.getRoots();
@@ -225,6 +240,8 @@ public class InitTool implements McpTool {
         yamlData.append("---\nsessionId: ").append(sessionId).append("\n");
         yamlData.append("reactivated: ").append(isReactivation).append("\n");
         yamlData.append("primaryRoot: ").append(projectRoot).append("\n");
+        yamlData.append("workingDirectory: ").append(ctx.getWorkingDirectory()).append("\n");
+        yamlData.append("sessionDirectory: ").append(sessionDir).append("\n");
         if (allRoots.size() > 1) {
             yamlData.append("roots:\n");
             for (Path root : allRoots) {

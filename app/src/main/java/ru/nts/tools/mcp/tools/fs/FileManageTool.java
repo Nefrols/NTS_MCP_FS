@@ -68,6 +68,7 @@ public class FileManageTool implements McpTool {
 
             ACTIONS:
             - create - New file with optional initial content. Parent dirs auto-created.
+            - copy   - Duplicate file/dir to new path. Use recursive=true for directories.
             - delete - Remove file/directory. Use recursive=true for non-empty dirs.
             - move   - Relocate file/dir to new path. Preserves access tokens!
             - rename - Change filename in same directory. Preserves access tokens!
@@ -76,6 +77,7 @@ public class FileManageTool implements McpTool {
             - create: Returns access token for immediate editing (no read needed!)
             - move/rename: Tokens transferred via PATH ALIASING - even chains work!
               Example: A.java -> B.java -> C.java - token from A.java still valid for C.java
+            - copy: Returns access token for the new copy (source unchanged)
             - delete: All tokens for the file are invalidated
 
             SAFETY:
@@ -97,7 +99,7 @@ public class FileManageTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("action").put("type", "string").put("description",
-                "Operation: 'create', 'delete', 'move', 'rename'. Required.");
+                "Operation: 'create', 'copy', 'delete', 'move', 'rename'. Required.");
 
         props.putObject("path").put("type", "string").put("description",
                 "Target path (relative to project root). For create: new file path. " +
@@ -108,16 +110,16 @@ public class FileManageTool implements McpTool {
                 "Tip: Use nts_edit_file for complex content - it has better formatting.");
 
         props.putObject("targetPath").put("type", "string").put("description",
-                "For 'move': destination path. Parent directories created automatically. " +
-                "Example: move 'src/old.java' to 'src/util/new.java'.");
+                "For 'move'/'copy': destination path. Parent directories created automatically. " +
+                "Example: move/copy 'src/old.java' to 'src/util/new.java'.");
 
         props.putObject("newName").put("type", "string").put("description",
                 "For 'rename': new filename only (not full path). Stays in same directory. " +
                 "Example: rename 'OldClass.java' to 'NewClass.java'.");
 
         props.putObject("recursive").put("type", "boolean").put("description",
-                "For 'delete': required if target is non-empty directory. " +
-                "CAUTION: Deletes all contents! Default: false.");
+                "For 'delete': required if target is non-empty directory. CAUTION: Deletes all contents! " +
+                "For 'copy': required to copy directories. Default: false.");
 
         schema.putArray("required").add("action").add("path");
         return schema;
@@ -131,6 +133,8 @@ public class FileManageTool implements McpTool {
 
         return switch (action) {
             case "create" -> executeCreate(path, pathStr, params.path("content").asText(""));
+            case "copy" -> executeCopy(path, pathStr, params.get("targetPath").asText(),
+                    params.path("recursive").asBoolean(false));
             case "delete" -> executeDelete(path, pathStr, params.path("recursive").asBoolean(false));
             case "move" -> executeMove(path, pathStr, params.get("targetPath").asText());
             case "rename" -> executeRename(path, pathStr, params.get("newName").asText());
@@ -171,6 +175,77 @@ public class FileManageTool implements McpTool {
 
         return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]\n\n%s",
                 pathStr, lineCount, crc, token.encode(), CREATE_WORKFLOW_TIP));
+    }
+
+    private JsonNode executeCopy(Path src, String srcStr, String destStr, boolean recursive) throws Exception {
+        if (!Files.exists(src)) {
+            throw new IOException("Source not found: " + srcStr);
+        }
+        Path dest = PathSanitizer.sanitize(destStr, false);
+
+        if (Files.isDirectory(src)) {
+            if (!recursive) {
+                throw new IllegalArgumentException(
+                        "Source is a directory. Use recursive=true to copy directories.");
+            }
+            return executeCopyDirectory(src, srcStr, dest, destStr);
+        }
+
+        TransactionManager.startTransaction("Copy " + srcStr + " to " + destStr);
+        try {
+            if (dest.getParent() != null) {
+                Files.createDirectories(dest.getParent());
+            }
+            TransactionManager.backup(dest);
+            Files.copy(src, dest);
+            TransactionManager.markFileAccessedInTransaction(dest);
+            TransactionManager.commit();
+        } catch (Exception e) {
+            TransactionManager.rollback();
+            throw e;
+        }
+
+        // Регистрируем токен доступа для копии
+        String content = Files.readString(dest);
+        long crc = calculateCRC32(dest);
+        int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
+        LineAccessToken token = LineAccessTracker.registerAccess(dest, 1, lineCount, content, lineCount);
+
+        return createResponse(String.format("Copied %s to %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]\n\n%s",
+                srcStr, destStr, lineCount, crc, token.encode(), CREATE_WORKFLOW_TIP));
+    }
+
+    private JsonNode executeCopyDirectory(Path src, String srcStr, Path dest, String destStr) throws Exception {
+        TransactionManager.startTransaction("Copy directory " + srcStr + " to " + destStr);
+        try {
+            int[] fileCount = {0};
+            try (var stream = Files.walk(src)) {
+                stream.forEach(sourcePath -> {
+                    try {
+                        Path targetPath = dest.resolve(src.relativize(sourcePath));
+                        if (Files.isDirectory(sourcePath)) {
+                            Files.createDirectories(targetPath);
+                        } else {
+                            TransactionManager.backup(targetPath);
+                            Files.copy(sourcePath, targetPath);
+                            TransactionManager.markFileAccessedInTransaction(targetPath);
+                            fileCount[0]++;
+                        }
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
+            TransactionManager.commit();
+            return createResponse(String.format("Copied directory %s to %s (%d files)",
+                    srcStr, destStr, fileCount[0]));
+        } catch (Exception e) {
+            TransactionManager.rollback();
+            if (e instanceof RuntimeException re && re.getCause() instanceof IOException ioe) {
+                throw ioe;
+            }
+            throw e;
+        }
     }
 
     /**

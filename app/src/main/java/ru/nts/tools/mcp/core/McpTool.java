@@ -58,6 +58,9 @@ public interface McpTool {
      * глобального таймаута и внедрения HUD.
      */
     default JsonNode executeWithFeedback(JsonNode params) {
+        // Валидация обязательных параметров по схеме
+        validateRequiredParams(params);
+
         JsonNode response;
         try {
             // Проверяем, нужен ли таймаут для этого инструмента
@@ -154,6 +157,20 @@ public interface McpTool {
             throw new RuntimeException("Tool execution was interrupted", e);
         } finally {
             executor.shutdownNow();
+        }
+    }
+
+    private void validateRequiredParams(JsonNode params) {
+        JsonNode schema = getInputSchema();
+        if (schema == null || !schema.has("required")) return;
+        JsonNode required = schema.get("required");
+        if (!required.isArray()) return;
+        for (JsonNode req : required) {
+            String fieldName = req.asText();
+            if (!params.has(fieldName) || params.get(fieldName).isNull()) {
+                throw new IllegalArgumentException(
+                        "Missing required parameter: '" + fieldName + "' for tool " + getName());
+            }
         }
     }
 

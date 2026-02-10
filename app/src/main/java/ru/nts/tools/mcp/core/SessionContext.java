@@ -15,10 +15,17 @@
  */
 package ru.nts.tools.mcp.core;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -64,21 +71,34 @@ public class SessionContext {
     // Время последней активности
     private volatile Instant lastActivityAt;
 
-    // Имя файла метаданных сессии
-    private static final String SESSION_METADATA_FILE = "session.meta";
+    // Рабочая директория проекта (для идентификации сессии)
+    private volatile Path workingDirectory;
+
+    // Произвольные метаданные от CLI/внешних инструментов
+    private final Map<String, String> metadata = new ConcurrentHashMap<>();
+
+    // Имя файла журнала сессии
+    private static final String JOURNAL_FILE = "journal.json";
+    private static final int JOURNAL_VERSION = 2;
+    private static final ObjectMapper JOURNAL_MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT);
+
+    // Блокировка для атомарной записи журнала
+    private final Object journalLock = new Object();
 
     /**
      * Создает новый контекст сессии.
      */
     private SessionContext(String sessionId) {
         this.sessionId = sessionId;
-        this.transactionManager = new SessionTransactionManager(sessionId);
+        this.transactionManager = new SessionTransactionManager(sessionId, this);
         this.lineAccessTracker = new SessionLineAccessTracker();
         this.searchTracker = new SessionSearchTracker();
         this.fileLineageTracker = new FileLineageTracker();
         this.externalChangeTracker = new ExternalChangeTracker();
         this.createdAt = Instant.now();
         this.lastActivityAt = this.createdAt;
+        this.workingDirectory = PathSanitizer.getRoot();
     }
 
     /**
@@ -87,13 +107,14 @@ public class SessionContext {
      */
     private SessionContext(String sessionId, Instant createdAt) {
         this.sessionId = sessionId;
-        this.transactionManager = new SessionTransactionManager(sessionId);
+        this.transactionManager = new SessionTransactionManager(sessionId, this);
         this.lineAccessTracker = new SessionLineAccessTracker();
         this.searchTracker = new SessionSearchTracker();
         this.fileLineageTracker = new FileLineageTracker();
         this.externalChangeTracker = new ExternalChangeTracker();
         this.createdAt = createdAt;
         this.lastActivityAt = Instant.now();
+        this.workingDirectory = PathSanitizer.getRoot();
     }
 
     // ==================== Static API ====================
@@ -111,14 +132,14 @@ public class SessionContext {
         return sessions.computeIfAbsent(id, key -> {
             // Проверяем, существует ли сессия на диске
             if (existsOnDisk(key)) {
-                // Реактивируем без добавления в map (computeIfAbsent сам добавит)
                 SessionMetadata meta = getSessionMetadata(key);
                 if (meta != null) {
-                    SessionContext ctx = new SessionContext(key, meta.createdAt());
-                    ctx.transactionManager.loadJournal();
-                    if (meta.activeTodoFile() != null) {
-                        ctx.setActiveTodoFile(meta.activeTodoFile());
+                    SessionContext ctx = new SessionContext(key,
+                            meta.createdAt() != null ? meta.createdAt() : Instant.now());
+                    if (meta.workingDirectory() != null) {
+                        ctx.workingDirectory = Path.of(meta.workingDirectory());
                     }
+                    ctx.loadJournal();
                     return ctx;
                 }
             }
@@ -204,9 +225,11 @@ public class SessionContext {
         if (sessionId == null || sessionId.isBlank() || "default".equals(sessionId)) {
             return false;
         }
-        Path sessionDir = PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
-        Path metaFile = sessionDir.resolve(SESSION_METADATA_FILE);
-        return Files.exists(metaFile);
+        Path sessionDir = PathSanitizer.getSessionRoot().resolve("sessions/" + sessionId);
+        Path journalFile = sessionDir.resolve(JOURNAL_FILE);
+        // Also check legacy format for backward compatibility
+        Path legacyMeta = sessionDir.resolve("session.meta");
+        return Files.exists(journalFile) || Files.exists(legacyMeta);
     }
 
     /**
@@ -219,34 +242,49 @@ public class SessionContext {
         if (sessionId == null || sessionId.isBlank()) {
             return null;
         }
-        Path sessionDir = PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
-        Path metaFile = sessionDir.resolve(SESSION_METADATA_FILE);
+        Path sessionDir = PathSanitizer.getSessionRoot().resolve("sessions/" + sessionId);
+        Path journalFile = sessionDir.resolve(JOURNAL_FILE);
 
-        if (!Files.exists(metaFile)) {
-            return null;
-        }
-
-        try {
-            String content = Files.readString(metaFile);
-            String[] lines = content.split("\n");
-            Instant created = null;
-            Instant lastActivity = null;
-            String activeTodo = null;
-
-            for (String line : lines) {
-                if (line.startsWith("created=")) {
-                    created = Instant.parse(line.substring(8));
-                } else if (line.startsWith("lastActivity=")) {
-                    lastActivity = Instant.parse(line.substring(13));
-                } else if (line.startsWith("activeTodo=")) {
-                    activeTodo = line.substring(11);
-                }
+        if (Files.exists(journalFile)) {
+            try {
+                JsonNode root = JOURNAL_MAPPER.readTree(journalFile.toFile());
+                Instant created = root.has("createdAt") ? Instant.parse(root.get("createdAt").asText()) : null;
+                Instant lastActivity = root.has("lastActivity") ? Instant.parse(root.get("lastActivity").asText()) : null;
+                String activeTodo = root.has("activeTodo") ? root.get("activeTodo").asText() : null;
+                String workDir = root.has("workingDirectory") ? root.get("workingDirectory").asText() : null;
+                return new SessionMetadata(sessionId, created, lastActivity, activeTodo, workDir);
+            } catch (Exception e) {
+                return null;
             }
-
-            return new SessionMetadata(sessionId, created, lastActivity, activeTodo);
-        } catch (Exception e) {
-            return null;
         }
+
+        // Legacy format: session.meta (key=value)
+        Path legacyMeta = sessionDir.resolve("session.meta");
+        if (Files.exists(legacyMeta)) {
+            try {
+                String content = Files.readString(legacyMeta);
+                String[] lines = content.split("\n");
+                Instant created = null;
+                Instant lastActivity = null;
+                String activeTodo = null;
+
+                for (String line : lines) {
+                    if (line.startsWith("created=")) {
+                        created = Instant.parse(line.substring(8));
+                    } else if (line.startsWith("lastActivity=")) {
+                        lastActivity = Instant.parse(line.substring(13));
+                    } else if (line.startsWith("activeTodo=")) {
+                        activeTodo = line.substring(11);
+                    }
+                }
+
+                return new SessionMetadata(sessionId, created, lastActivity, activeTodo, null);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -265,15 +303,20 @@ public class SessionContext {
         }
 
         // Создаём контекст с восстановленным временем создания
-        SessionContext ctx = new SessionContext(sessionId, meta.createdAt());
+        SessionContext ctx = new SessionContext(sessionId, meta.createdAt() != null ? meta.createdAt() : Instant.now());
         sessions.put(sessionId, ctx);
 
-        // Восстанавливаем журнал транзакций (undo/redo стеки)
-        ctx.transactionManager.loadJournal();
+        // Восстанавливаем workingDirectory
+        if (meta.workingDirectory() != null) {
+            ctx.workingDirectory = Path.of(meta.workingDirectory());
+        }
+
+        // Загружаем журнал (транзакции + метаданные)
+        ctx.loadJournal();
 
         // Восстанавливаем активный TODO
         if (meta.activeTodoFile() != null) {
-            ctx.setActiveTodoFile(meta.activeTodoFile());
+            ctx.activeTodoFile = meta.activeTodoFile();
         }
 
         return ctx;
@@ -289,7 +332,8 @@ public class SessionContext {
     /**
      * Метаданные сессии для хранения на диске.
      */
-    public record SessionMetadata(String sessionId, Instant createdAt, Instant lastActivityAt, String activeTodoFile) {}
+    public record SessionMetadata(String sessionId, Instant createdAt, Instant lastActivityAt,
+                                     String activeTodoFile, String workingDirectory) {}
 
     // ==================== Instance API ====================
 
@@ -343,10 +387,49 @@ public class SessionContext {
 
     /**
      * Возвращает путь к директории сессии.
-     * Структура: .nts/sessions/{sessionId}/
+     * Структура: ~/.nts/sessions/{sessionId}/
      */
     public java.nio.file.Path getSessionDir() {
-        return PathSanitizer.getRoot().resolve(".nts/sessions/" + sessionId);
+        return PathSanitizer.getSessionRoot().resolve("sessions/" + sessionId);
+    }
+
+    /**
+     * Возвращает рабочую директорию проекта для этой сессии.
+     */
+    public Path getWorkingDirectory() {
+        return workingDirectory;
+    }
+
+    /**
+     * Устанавливает рабочую директорию проекта.
+     */
+    public void setWorkingDirectory(Path dir) {
+        this.workingDirectory = dir;
+    }
+
+    /**
+     * Устанавливает произвольные метаданные (от CLI или внешних инструментов).
+     */
+    public void setMetadata(String key, String value) {
+        if (value != null) {
+            metadata.put(key, value);
+        } else {
+            metadata.remove(key);
+        }
+    }
+
+    /**
+     * Возвращает значение метаданных по ключу.
+     */
+    public String getMetadata(String key) {
+        return metadata.get(key);
+    }
+
+    /**
+     * Возвращает все метаданные.
+     */
+    public Map<String, String> getAllMetadata() {
+        return Map.copyOf(metadata);
     }
 
     /**
@@ -388,29 +471,99 @@ public class SessionContext {
     }
 
     /**
-     * Сохраняет метаданные сессии на диск.
-     * Вызывается при создании сессии и при обновлении активности.
+     * Сохраняет полный журнал сессии на диск (journal.json).
+     * Единый мастер-файл: метаданные + транзакции + статистика.
+     * Вызывается при создании сессии, обновлении активности, commit/undo/redo.
      */
-    public void saveMetadata() {
+    public void saveJournal() {
         if ("default".equals(sessionId)) {
-            return; // default сессия не сохраняется
+            return;
         }
 
-        Path metaFile = getSessionDir().resolve(SESSION_METADATA_FILE);
-        try {
-            Files.createDirectories(metaFile.getParent());
-            StringBuilder content = new StringBuilder();
-            content.append("sessionId=").append(sessionId).append("\n");
-            content.append("created=").append(createdAt).append("\n");
-            content.append("lastActivity=").append(lastActivityAt).append("\n");
-            if (activeTodoFile != null) {
-                content.append("activeTodo=").append(activeTodoFile).append("\n");
+        synchronized (journalLock) {
+            Path journalFile = getSessionDir().resolve(JOURNAL_FILE);
+            try {
+                Files.createDirectories(journalFile.getParent());
+
+                ObjectNode root = JOURNAL_MAPPER.createObjectNode();
+                root.put("version", JOURNAL_VERSION);
+                root.put("sessionId", sessionId);
+                root.put("workingDirectory", workingDirectory != null ? workingDirectory.toString() : "");
+                root.put("createdAt", createdAt.toString());
+                root.put("lastActivity", lastActivityAt.toString());
+                if (activeTodoFile != null) {
+                    root.put("activeTodo", activeTodoFile);
+                }
+
+                // Metadata map
+                if (!metadata.isEmpty()) {
+                    ObjectNode metaNode = root.putObject("metadata");
+                    for (var entry : metadata.entrySet()) {
+                        metaNode.put(entry.getKey(), entry.getValue());
+                    }
+                }
+
+                // Delegate transaction data to SessionTransactionManager
+                transactionManager.writeTransactionsTo(root);
+
+                JOURNAL_MAPPER.writeValue(journalFile.toFile(), root);
+            } catch (IOException e) {
+                System.err.println("Warning: Failed to save session journal: " + e.getMessage());
             }
-            Files.writeString(metaFile, content.toString());
-        } catch (IOException e) {
-            // Логируем, но не прерываем операцию
-            System.err.println("Warning: Failed to save session metadata: " + e.getMessage());
         }
+    }
+
+    /**
+     * Загружает журнал сессии с диска.
+     * Восстанавливает метаданные и делегирует транзакции в SessionTransactionManager.
+     */
+    public void loadJournal() {
+        Path journalFile = getSessionDir().resolve(JOURNAL_FILE);
+        if (!Files.exists(journalFile)) {
+            // Try loading transactions from legacy journal.json (v1 format)
+            transactionManager.loadJournal();
+            return;
+        }
+
+        try {
+            JsonNode root = JOURNAL_MAPPER.readTree(journalFile.toFile());
+
+            // Restore metadata
+            if (root.has("workingDirectory")) {
+                String wd = root.get("workingDirectory").asText();
+                if (!wd.isEmpty()) {
+                    this.workingDirectory = Path.of(wd);
+                }
+            }
+            if (root.has("activeTodo")) {
+                this.activeTodoFile = root.get("activeTodo").asText();
+            }
+            if (root.has("metadata") && root.get("metadata").isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> fields = root.get("metadata").fields();
+                while (fields.hasNext()) {
+                    var field = fields.next();
+                    metadata.put(field.getKey(), field.getValue().asText());
+                }
+            }
+
+            // Delegate transaction loading
+            int version = root.path("version").asInt(1);
+            if (version >= 2) {
+                transactionManager.loadTransactionsFrom(root);
+            } else {
+                // v1 format: transactions at top level (backward compatibility)
+                transactionManager.loadTransactionsFrom(root);
+            }
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to load session journal: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Backward compatibility: delegates to saveJournal().
+     */
+    public void saveMetadata() {
+        saveJournal();
     }
 
     /**

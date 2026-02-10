@@ -104,6 +104,9 @@ public class BatchToolsTool implements McpTool {
               {tool: 'nts_edit_file', params: {path: '{{ref.affectedFiles[0].path}}', startLine: 1, operation: 'insert_after', content: '// Renamed method', accessToken: '{{ref.affectedFiles[0].accessToken}}'}}
             ]
 
+            IMPORTANT: Interpolation variables ({{...}}) exist ONLY within the current nts_batch_tools call.
+            They do NOT persist between separate batch invocations.
+
             LIMITATION: Only NTS MCP tools tracked in rollback.
             """;
     }

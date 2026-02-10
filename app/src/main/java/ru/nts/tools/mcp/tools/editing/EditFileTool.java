@@ -81,14 +81,22 @@ public class EditFileTool implements McpTool {
             2. nts_edit_file(path, startLine, content, accessToken=TOKEN) -> get NEW_TOKEN
             3. Use NEW_TOKEN for subsequent edits
 
-            FEATURES:
-            - Single edit: path + startLine + content + accessToken
-            - Batch edit: path + operations[] + accessToken (bottom-up processing)
-            - Multi-file: edits[] array (atomic transaction - all succeed or all rollback)
-            - Safety: expectedContent validates current state before edit
-            - Preview: dryRun=true shows diff without writing
+            MODES:
+            1. Single edit:  path + startLine + content + accessToken
+               One edit to one file.
+            2. Multi-op (operations[]):  path + operations[] + accessToken
+               Multiple edits to SAME file. Auto-sorted bottom-up (safe line numbering).
+               Each: {operation, startLine, [endLine], [content]}
+            3. Multi-file (edits[]):  edits[] array (NO path/accessToken at top level!)
+               Atomic transaction across DIFFERENT files - all succeed or all rollback.
+               Each: {path, accessToken, startLine, [endLine], content, [operation]}
+
+            WARNING: operations[] = many edits, ONE file.  edits[] = one edit per file, MANY files.
+            Do NOT nest operations[] inside edits[]. Use nts_batch_tools for complex multi-file multi-op scenarios.
 
             OPERATIONS: replace (default), insert_before, insert_after, delete
+            SAFETY: expectedContent validates current state before edit
+            PREVIEW: dryRun=true shows diff without writing
 
             RECOVERY TIP:
             If your edit causes problems or produces unexpected results,

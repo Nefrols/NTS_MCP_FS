@@ -62,6 +62,10 @@ public class TransactionManager {
         return ctx().rollbackToCheckpoint(name);
     }
 
+    public static String diffBetweenCheckpoints(String fromName, String toName) {
+        return ctx().diffBetweenCheckpoints(fromName, toName);
+    }
+
     public static String undo() throws IOException {
         return ctx().undo();
     }
