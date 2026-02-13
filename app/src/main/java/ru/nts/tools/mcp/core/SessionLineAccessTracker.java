@@ -29,6 +29,9 @@ public class SessionLineAccessTracker {
     // Per-session хранилище токенов (Path -> TreeMap<startLine, Token>)
     private final Map<Path, TreeMap<Integer, LineAccessToken>> tokens = new HashMap<>();
 
+    // Per-file CRC кэш для инвалидации покрывающих токенов при изменении файла
+    private final Map<Path, Long> fileCrcCache = new HashMap<>();
+
     // Path aliasing: отслеживает перемещения файлов (oldPath -> currentPath)
     // Позволяет использовать старые токены после move/rename вне батча
     private final Map<Path, Path> pathAliases = new HashMap<>();
@@ -64,11 +67,35 @@ public class SessionLineAccessTracker {
      * @return Токен доступа к диапазону (может быть шире запрошенного!)
      */
     public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
+        return registerAccess(path, startLine, endLine, rangeContent, lineCount, 0L);
+    }
+
+    /**
+     * Регистрирует доступ к диапазону строк с CRC всего файла для инвалидации.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона строк (для вычисления CRC)
+     * @param lineCount Общее количество строк в файле
+     * @param fileCrc CRC32C всего файла (0 для пропуска проверки)
+     * @return Токен доступа к диапазону (может быть шире запрошенного!)
+     */
+    public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount, long fileCrc) {
         Path absPath = path.toAbsolutePath().normalize();
         long rangeCrc = LineAccessToken.computeRangeCrc(rangeContent);
 
         synchronized (lock) {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.computeIfAbsent(absPath, k -> new TreeMap<>());
+
+            // 0. Инвалидация: если CRC файла изменился, все токены этого файла протухли
+            if (fileCrc != 0) {
+                Long cachedCrc = fileCrcCache.get(absPath);
+                if (cachedCrc != null && cachedCrc != fileCrc) {
+                    fileTokens.clear();
+                }
+                fileCrcCache.put(absPath, fileCrc);
+            }
 
             // 1. Проверяем точное совпадение диапазона
             LineAccessToken exactMatch = fileTokens.get(startLine);
@@ -598,6 +625,7 @@ public class SessionLineAccessTracker {
     public void reset() {
         synchronized (lock) {
             tokens.clear();
+            fileCrcCache.clear();
             pathAliases.clear();
             reverseAliases.clear();
         }

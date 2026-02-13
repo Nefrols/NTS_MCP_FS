@@ -48,6 +48,21 @@ public class LineAccessTracker {
     }
 
     /**
+     * Регистрирует доступ к диапазону строк с CRC всего файла.
+     *
+     * @param path Путь к файлу
+     * @param startLine Начало диапазона (1-based)
+     * @param endLine Конец диапазона (1-based)
+     * @param rangeContent Содержимое диапазона (для вычисления CRC)
+     * @param lineCount Общее количество строк в файле
+     * @param fileCrc CRC32C всего файла (для инвалидации покрывающих токенов)
+     * @return Токен доступа к диапазону
+     */
+    public static LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount, long fileCrc) {
+        return ctx().registerAccess(path, startLine, endLine, rangeContent, lineCount, fileCrc);
+    }
+
+    /**
      * Валидирует токен против текущего содержимого диапазона.
      *
      * @param token Токен для валидации
