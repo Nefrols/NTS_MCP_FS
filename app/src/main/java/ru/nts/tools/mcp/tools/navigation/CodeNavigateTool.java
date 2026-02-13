@@ -391,15 +391,9 @@ public class CodeNavigateTool implements McpTool {
             return createTextResponse("No symbols found in " + path.getFileName());
         }
 
-        // Регистрируем доступ ко всему файлу
-        String content = Files.readString(path);
-        int lineCount = (int) content.lines().count();
-        String token = registerAccessForRange(path, 1, lineCount);
-
         StringBuilder sb = new StringBuilder();
         sb.append("**Symbols in ").append(path.getFileName()).append("** (")
-                .append(symbols.size()).append(" total)\n");
-        sb.append("TOKEN: `").append(token).append("`\n\n");
+                .append(symbols.size()).append(" total)\n\n");
 
         // Группируем по типу
         Map<SymbolKind, List<SymbolInfo>> byKind = symbols.stream()
@@ -412,12 +406,19 @@ public class CodeNavigateTool implements McpTool {
             sb.append("**").append(kind).append("** (").append(syms.size()).append("):\n");
 
             for (SymbolInfo sym : syms) {
+                Location loc = sym.location();
+                // Регистрируем токен ТОЛЬКО для строки сигнатуры (не для всего файла)
+                String token = registerAccessForRange(path, loc.startLine(), loc.startLine());
+
                 String indent = sym.parentName() != null ? "  " : "";
                 sb.append(indent).append("- `").append(sym.name()).append("`");
-                if (sym.type() != null) {
+                if (sym.signature() != null) {
+                    sb.append(" — `").append(sym.signature()).append("`");
+                } else if (sym.type() != null) {
                     sb.append(": ").append(sym.type());
                 }
-                sb.append(" (line ").append(sym.location().startLine()).append(")\n");
+                sb.append(" (line ").append(loc.startLine());
+                sb.append(" | TOKEN: `").append(token).append("`)\n");
             }
             sb.append("\n");
         }
@@ -448,8 +449,9 @@ public class CodeNavigateTool implements McpTool {
         // Extract range content for rangeCrc computation
         String rangeContent = buildRangeContent(lines, startLine, endLine);
 
+        long fileCrc = LineAccessToken.computeRangeCrc(content);
         LineAccessToken token = LineAccessTracker.registerAccess(
-                path, startLine, endLine, rangeContent, lineCount);
+                path, startLine, endLine, rangeContent, lineCount, fileCrc);
 
         return token.encode();
     }
