@@ -5,7 +5,7 @@
 guava = "33.4.6-jre"
 junit-jupiter = "5.12.1"
 jackson = "2.18.2"
-juniversalchardet = "2.5.0"
+icu4j = "76.1"
 tree-sitter = "0.25.3"
 tree-sitter-java = "0.23.4"
 tree-sitter-kotlin = "0.3.8.1"
@@ -26,7 +26,7 @@ h2 = "2.4.240"
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit-jupiter" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
-juniversalchardet = { module = "com.github.albfernandez:juniversalchardet", version.ref = "juniversalchardet" }
+icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
 tree-sitter = { module = "io.github.bonede:tree-sitter", version.ref = "tree-sitter" }
 tree-sitter-java = { module = "io.github.bonede:tree-sitter-java", version.ref = "tree-sitter-java" }
 tree-sitter-kotlin = { module = "io.github.bonede:tree-sitter-kotlin", version.ref = "tree-sitter-kotlin" }

@@ -59,11 +59,12 @@ class EncodingRobustnessTest {
         Files.write(file, malformedUtf8);
 
         // Должно прочитаться без исключений (благодаря new String(bytes, charset) в EncodingUtils)
-        // Но кодировка должна определиться как windows-1251, так как это не валидный UTF-8
+        // Кодировка не должна быть UTF-8, т.к. 0xFF — невалидный UTF-8 байт
         EncodingUtils.TextFileContent content = EncodingUtils.readTextFile(file);
-        
+
         assertNotNull(content.content());
-        assertEquals(Charset.forName("windows-1251"), content.charset());
+        assertNotEquals(StandardCharsets.UTF_8, content.charset(),
+                "Malformed UTF-8 bytes should not be detected as UTF-8");
     }
         @Test
         void testReadWithForcedEncoding() throws IOException {
