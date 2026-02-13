@@ -27,7 +27,9 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -63,6 +65,8 @@ public class TodoTool implements McpTool {
             - close   - Archive completed plan (removes from HUD)
             - list    - Show all plans (active and archived)
             - reopen  - Reactivate an archived plan
+            - items   - Get active TODO as structured JSON (for integrations)
+            - all_items - Get ALL active TODOs as structured JSON
 
             TASK FORMAT (Markdown checklist):
             - [ ] Pending task
@@ -110,7 +114,7 @@ public class TodoTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("action").put("type", "string").put("description",
-                "Operation: 'create', 'read' (or 'status'), 'update', 'add', 'close', 'list', 'reopen'. Required.");
+                "Operation: 'create', 'read' (or 'status'), 'update', 'add', 'close', 'list', 'reopen', 'items', 'all_items'. Required.");
 
         props.putObject("title").put("type", "string").put("description",
                 "For 'create': plan name shown in HUD. Example: 'Refactor auth module'.");
@@ -158,6 +162,8 @@ public class TodoTool implements McpTool {
             case "add" -> executeAdd(params);
             case "close" -> executeClose(params);
             case "list" -> executeList();
+            case "items" -> executeItems();
+            case "all_items" -> executeAllItems();
             case "reopen" -> executeReopen(params);
             default -> throw new IllegalArgumentException("Unknown action: " + action +
                 ". Valid actions: create, read, update, add, close, list, reopen");
@@ -411,6 +417,101 @@ public class TodoTool implements McpTool {
         sb.append("\nUse 'reopen' with fileName to reactivate an archived plan.");
 
         return createResponse(sb.toString());
+    }
+
+    /**
+     * Returns active TODO as structured JSON for integrations.
+     * Format: { todoId, title, items: [{ id, text, done, failed, completed }], fileName }
+     */
+    private JsonNode executeItems() throws IOException {
+        String fileName = TodoManager.getSessionTodo();
+        if (fileName == null) {
+            return createResponse("{\"items\":[]}");
+        }
+
+        Path todoFile = getTodosDir().resolve(fileName);
+        if (!Files.exists(todoFile)) {
+            return createResponse("{\"items\":[]}");
+        }
+
+        String content = EncodingUtils.readTextFile(todoFile).content();
+        Map<String, Object> result = parseTodoFile(fileName, content);
+        return createResponse(mapper.writeValueAsString(result));
+    }
+
+    /**
+     * Returns ALL active (non-archived) TODO files as structured JSON.
+     * Format: { todos: [{ todoId, title, items: [...], fileName }] }
+     */
+    private JsonNode executeAllItems() throws IOException {
+        Path todoDir = getTodosDir();
+        if (!Files.exists(todoDir)) {
+            return createResponse("{\"todos\":[]}");
+        }
+
+        List<Path> files;
+        try (var stream = Files.list(todoDir)) {
+            files = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> !p.getFileName().toString().startsWith("DONE_"))
+                    .sorted()
+                    .toList();
+        }
+
+        List<Map<String, Object>> todos = new ArrayList<>();
+        for (Path file : files) {
+            String content = EncodingUtils.readTextFile(file).content();
+            Map<String, Object> todo = parseTodoFile(file.getFileName().toString(), content);
+            if (!((List<?>) todo.get("items")).isEmpty()) {
+                todos.add(todo);
+            }
+        }
+
+        return createResponse(mapper.writeValueAsString(Map.of("todos", todos)));
+    }
+
+    /**
+     * Parses a TODO markdown file into structured data.
+     */
+    private Map<String, Object> parseTodoFile(String fileName, String content) {
+        String[] lines = content.split("\n", -1);
+
+        String title = "Untitled";
+        for (String line : lines) {
+            if (line.startsWith("# ")) {
+                title = line.substring(2).trim();
+                if (title.startsWith("TODO: ")) title = title.substring(6);
+                break;
+            }
+        }
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        int id = 0;
+        for (String line : lines) {
+            Matcher m = TODO_ITEM_PATTERN.matcher(line);
+            if (m.find()) {
+                id++;
+                String marker = m.group(2);
+                boolean done = "x".equals(marker);
+                boolean failed = "X".equals(marker);
+                String text = m.group(3).trim();
+
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", id);
+                item.put("text", text);
+                item.put("done", done);
+                item.put("failed", failed);
+                item.put("completed", done || failed);
+                items.add(item);
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("todoId", fileName);
+        result.put("title", title);
+        result.put("items", items);
+        result.put("fileName", fileName);
+        return result;
     }
 
     private JsonNode executeReopen(JsonNode params) throws IOException {
