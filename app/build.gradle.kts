@@ -36,6 +36,7 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.jackson.databind)
     implementation(libs.juniversalchardet)
+    implementation(libs.h2)
 
     // Tree-sitter for LSP-like code navigation
     implementation(libs.tree.sitter)
