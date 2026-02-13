@@ -68,13 +68,15 @@ public enum NtsErrorCode {
             "Token is corrupted or malformed. Re-read the file to get a fresh token."),
 
     TOKEN_EXPIRED("Token expired (content changed)",
-            "File content changed since token was issued. Re-read with nts_file_read."),
+            "File content changed since token was issued. " +
+            "ACTION: nts_file_read(path='%path%', startLine=%start%, endLine=%end%) to get fresh token."),
 
     TOKEN_PATH_MISMATCH("Token path mismatch",
             "Token was issued for a different file. Use correct token for this file."),
 
     TOKEN_RANGE_MISMATCH("Token range insufficient",
-            "Token doesn't cover the requested edit range. Read a larger range."),
+            "Token covers lines %tokenStart%-%tokenEnd%, but edit targets lines %editStart%-%editEnd%. " +
+            "ACTION: nts_file_read(path='%path%', startLine=%editStart%, endLine=%editEnd%) to get covering token."),
 
     TOKEN_EXTERNAL_CHANGE("Token invalidated by external change",
             "File was modified outside NTS. Re-read file to get fresh token."),
@@ -91,7 +93,8 @@ public enum NtsErrorCode {
             "Check parameter bounds. Value exceeds allowed limits."),
 
     PARAM_LINE_EXCEEDS("Line number exceeds file",
-            "File has fewer lines than specified. Use action='info' to check line count."),
+            "File has %totalLines% lines, requested line %line%. " +
+            "ACTION: nts_file_read(path='%path%', action='info') to see actual line count."),
 
     PARAM_CONFLICT("Conflicting parameters",
             "Cannot use these parameters together. Check tool documentation."),
@@ -99,13 +102,15 @@ public enum NtsErrorCode {
     // ============ Symbol Errors ============
 
     SYMBOL_NOT_FOUND("Symbol not found",
-            "Check symbol name and spelling. Use symbolKind to filter by type."),
+            "Symbol '%symbol%' not found in %path%. " +
+            "ACTION: nts_code_navigate(action='symbols', path='%path%') to see available symbols."),
 
     SYMBOL_AMBIGUOUS("Multiple symbols found",
             "Specify symbolKind (class, method, function, field) to disambiguate."),
 
     PATTERN_NOT_FOUND("Pattern not found in file",
-            "Check regex pattern syntax. Pattern must match file content."),
+            "Regex '%pattern%' not found in %path%. " +
+            "ACTION: nts_file_search(action='grep', pattern='%pattern%') to search across files. Check regex syntax."),
 
     // ============ Change Errors ============
 
@@ -171,7 +176,18 @@ public enum NtsErrorCode {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("[ERROR: %s]\n", this.name()));
         sb.append(String.format("Message: %s\n", message));
-        sb.append(String.format("Solution: %s", solution));
+
+        // Интерполяция %placeholder% в solution
+        String resolvedSolution = solution;
+        if (context != null) {
+            for (Map.Entry<String, Object> entry : context.entrySet()) {
+                resolvedSolution = resolvedSolution.replace(
+                        "%" + entry.getKey() + "%", String.valueOf(entry.getValue()));
+            }
+        }
+        // Очищаем неиспользованные плейсхолдеры
+        resolvedSolution = resolvedSolution.replaceAll("%\\w+%", "...");
+        sb.append(String.format("Solution: %s", resolvedSolution));
 
         if (context != null && !context.isEmpty()) {
             sb.append("\nContext: ");
