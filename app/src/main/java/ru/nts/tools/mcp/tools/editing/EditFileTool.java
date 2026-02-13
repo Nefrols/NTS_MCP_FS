@@ -276,6 +276,27 @@ public class EditFileTool implements McpTool {
             }
             if (!dryRun) {
                 TransactionManager.commit();
+
+                // Auto-syntax check после коммита
+                StringBuilder syntaxWarnings = new StringBuilder();
+                for (int i = 0; i < editsArray.size(); i++) {
+                    JsonNode editNode = editsArray.get(i);
+                    String editPath = editNode.get("path").asText();
+                    Path filePath = PathSanitizer.sanitize(editPath, false);
+                    var syntaxResult = ru.nts.tools.mcp.core.treesitter.SyntaxChecker.check(filePath);
+                    if (syntaxResult.hasErrors()) {
+                        syntaxWarnings.append("\n[SYNTAX WARNING: ").append(filePath.getFileName())
+                                .append(" — ").append(syntaxResult.errorCount()).append(" error(s)]");
+                        for (var error : syntaxResult.errors()) {
+                            syntaxWarnings.append("\n  Line ").append(error.line())
+                                    .append(": ").append(error.message());
+                        }
+                    }
+                }
+                if (!syntaxWarnings.isEmpty()) {
+                    statusMsg.append(syntaxWarnings);
+                    statusMsg.append("\n[ACTION: Review changes. Use nts_session(action='undo') to revert if needed.]");
+                }
             } else {
                 statusMsg.append("[DRY RUN] No changes were applied.");
             }
@@ -344,6 +365,23 @@ public class EditFileTool implements McpTool {
                 sb.append("\n");
                 for (String tip : stats.tips) {
                     sb.append("\n[TIP: ").append(tip).append("]");
+                }
+            }
+
+            // Auto-syntax check после коммита
+            if (!dryRun) {
+                var syntaxResult = ru.nts.tools.mcp.core.treesitter.SyntaxChecker.check(stats.path);
+                if (syntaxResult.hasErrors()) {
+                    sb.append("\n\n[SYNTAX WARNING: ").append(syntaxResult.errorCount())
+                            .append(" error(s) detected after edit]");
+                    for (var error : syntaxResult.errors()) {
+                        sb.append("\n  Line ").append(error.line())
+                                .append(": ").append(error.message());
+                        if (!error.context().isEmpty()) {
+                            sb.append(" \u2192 `").append(error.context()).append("`");
+                        }
+                    }
+                    sb.append("\n[ACTION: Review changes. Use nts_session(action='undo') to revert if needed.]");
                 }
             }
 
