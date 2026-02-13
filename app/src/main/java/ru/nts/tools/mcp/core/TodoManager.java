@@ -74,8 +74,9 @@ public class TodoManager {
 
             if (title == null) {
                 sb.append(stats);
-                // Напоминание об undo даже без TODO плана
+                // Напоминание об undo даже без TODO плана — role-aware
                 appendUndoReminder(sb, edits, undos);
+                appendVerifyReminder(sb);
                 return sb.toString();
             }
 
@@ -106,12 +107,22 @@ public class TodoManager {
 
             // Напоминание об отметке задач (если есть pending)
             if (nextTask != null) {
-                sb.append("\n[REMINDER: Mark task done after completion: nts_todo(action='update', id=")
+                sb.append("\n[REMINDER: Mark task done: update(id=")
                   .append(nextId).append(", status='done')]");
             }
 
-            // Напоминание об undo (если много правок без отмен)
+            // FOCUS hint: напоминание о текущей задаче
+            if (nextTask != null && nextId > 0) {
+                String shortTask = nextTask.length() > 50 ? nextTask.substring(0, 47) + "..." : nextTask;
+                sb.append("\n[FOCUS: Current task #").append(nextId).append(": ").append(shortTask)
+                  .append(". Complete it before moving on.]");
+            }
+
+            // Напоминание об undo (если много правок без отмен) — role-aware
             appendUndoReminder(sb, edits, undos);
+
+            // Напоминание о верификации — role-aware
+            appendVerifyReminder(sb);
 
             return sb.toString();
         }
@@ -119,12 +130,27 @@ public class TodoManager {
         /**
          * Добавляет напоминание об undo, если много правок без использования отмены.
          * Показывается когда edits >= 4 и undos == 0.
+         * Role-aware: показывает nts_session hint только если инструмент доступен.
          */
         private void appendUndoReminder(StringBuilder sb, int edits, int undos) {
             if (edits >= 4 && undos == 0) {
-                sb.append("\n[TIP: ").append(edits).append(" edits without undo. ")
-                  .append("If something went wrong, use nts_session(action='undo') to rollback ")
-                  .append("instead of multiple fix edits. View history: nts_session(action='journal')]");
+                if (TipFilter.canMention("nts_session")) {
+                    sb.append("\n[TIP: ").append(edits).append(" edits without undo. ")
+                      .append("If something went wrong, use nts_session(action='undo') to rollback ")
+                      .append("instead of multiple fix edits. View history: nts_session(action='journal')]");
+                }
+            }
+        }
+
+        /**
+         * Добавляет напоминание о верификации если много правок без проверки.
+         * Role-aware: показывает nts_verify hint только если инструмент доступен.
+         */
+        private void appendVerifyReminder(StringBuilder sb) {
+            int editsSinceVerify = TransactionManager.getEditsSinceLastVerify();
+            if (editsSinceVerify >= 3 && TipFilter.canMention("nts_verify")) {
+                sb.append("\n[TIP: ").append(editsSinceVerify)
+                  .append(" edits without verification. Consider nts_verify(action='syntax') to check for errors.]");
             }
         }
     }
