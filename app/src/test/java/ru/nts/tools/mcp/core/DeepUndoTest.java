@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -44,7 +45,7 @@ class DeepUndoTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
+        TaskContext.resetAll();
         lineageTracker = new FileLineageTracker();
         undoEngine = new SmartUndoEngine(lineageTracker, tempDir);
     }
@@ -151,14 +152,13 @@ class DeepUndoTest {
 
     @Test
     void testSmartUndoSuccess() throws IOException {
-        // Создаём файл и бекап
+        // Создаём файл и бекап как байты
         Path file = tempDir.resolve("test.txt");
-        Path backup = tempDir.resolve("backup.bak");
         Files.writeString(file, "modified");
-        Files.writeString(backup, "original");
+        byte[] backupContent = "original".getBytes(StandardCharsets.UTF_8);
 
-        Map<Path, Path> snapshots = new HashMap<>();
-        snapshots.put(file.toAbsolutePath().normalize(), backup);
+        Map<Path, byte[]> snapshots = new HashMap<>();
+        snapshots.put(file.toAbsolutePath().normalize(), backupContent);
 
         UndoResult result = undoEngine.smartUndo(snapshots, "Test undo");
 
@@ -171,12 +171,11 @@ class DeepUndoTest {
     void testSmartUndoRestoreDeleted() throws IOException {
         // Тест восстановления удалённого файла
         Path file = tempDir.resolve("deleted.txt");
-        Path backup = tempDir.resolve("backup.bak");
-        Files.writeString(backup, "original content");
+        byte[] backupContent = "original content".getBytes(StandardCharsets.UTF_8);
         // file не существует
 
-        Map<Path, Path> snapshots = new HashMap<>();
-        snapshots.put(file.toAbsolutePath().normalize(), backup);
+        Map<Path, byte[]> snapshots = new HashMap<>();
+        snapshots.put(file.toAbsolutePath().normalize(), backupContent);
 
         UndoResult result = undoEngine.smartUndo(snapshots, "Restore deleted");
 
@@ -191,7 +190,7 @@ class DeepUndoTest {
         Path file = tempDir.resolve("created.txt");
         Files.writeString(file, "should be deleted");
 
-        Map<Path, Path> snapshots = new HashMap<>();
+        Map<Path, byte[]> snapshots = new HashMap<>();
         snapshots.put(file.toAbsolutePath().normalize(), null); // null = файл не существовал
 
         UndoResult result = undoEngine.smartUndo(snapshots, "Delete created");
@@ -205,19 +204,18 @@ class DeepUndoTest {
         // Тест отката для перемещённого файла
         Path originalPath = tempDir.resolve("original.txt");
         Path movedPath = tempDir.resolve("subdir/moved.txt");
-        Path backup = tempDir.resolve("backup.bak");
 
         Files.createDirectories(movedPath.getParent());
         Files.writeString(movedPath, "modified after move");
-        Files.writeString(backup, "original content");
+        byte[] backupContent = "original content".getBytes(StandardCharsets.UTF_8);
 
         // Регистрируем файл и записываем перемещение
         lineageTracker.registerFile(originalPath);
         String fileId = lineageTracker.getFileId(originalPath);
         lineageTracker.recordMove(originalPath, movedPath);
 
-        Map<Path, Path> snapshots = new HashMap<>();
-        snapshots.put(originalPath.toAbsolutePath().normalize(), backup);
+        Map<Path, byte[]> snapshots = new HashMap<>();
+        snapshots.put(originalPath.toAbsolutePath().normalize(), backupContent);
 
         UndoResult result = undoEngine.smartUndo(snapshots, "Undo with relocated file");
 
@@ -235,7 +233,7 @@ class DeepUndoTest {
         Path dirtyFile = dir.resolve("external.txt");
         Files.writeString(dirtyFile, "added externally");
 
-        Map<Path, Path> snapshots = new HashMap<>();
+        Map<Path, byte[]> snapshots = new HashMap<>();
         snapshots.put(dir.toAbsolutePath().normalize(), null); // Директория была создана
 
         UndoResult result = undoEngine.smartUndo(snapshots, "Undo with dirty dir");
@@ -316,27 +314,25 @@ class DeepUndoTest {
     void testFullUndoWorkflow() throws IOException {
         // Полный workflow: create -> edit -> move -> undo
         Path file = tempDir.resolve("workflow.txt");
-        Path backup1 = tempDir.resolve("backup1.bak");
-        Path backup2 = tempDir.resolve("backup2.bak");
 
         // Шаг 1: Создание файла
         Files.writeString(file, "initial");
         lineageTracker.registerFile(file);
 
         // Шаг 2: Редактирование
-        Files.writeString(backup1, "initial");
+        byte[] backupBeforeEdit = "initial".getBytes(StandardCharsets.UTF_8);
         Files.writeString(file, "edited");
 
         // Шаг 3: Перемещение
         Path movedFile = tempDir.resolve("moved/workflow.txt");
         Files.createDirectories(movedFile.getParent());
-        Files.writeString(backup2, "edited");
+        byte[] backupBeforeMove = "edited".getBytes(StandardCharsets.UTF_8);
         Files.move(file, movedFile);
         lineageTracker.recordMove(file, movedFile);
 
         // Шаг 4: Undo перемещения
-        Map<Path, Path> moveSnapshots = new HashMap<>();
-        moveSnapshots.put(file.toAbsolutePath().normalize(), backup2);
+        Map<Path, byte[]> moveSnapshots = new HashMap<>();
+        moveSnapshots.put(file.toAbsolutePath().normalize(), backupBeforeMove);
 
         UndoResult result = undoEngine.smartUndo(moveSnapshots, "Undo move");
 

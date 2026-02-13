@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
 
 import java.io.IOException;
@@ -48,9 +48,10 @@ class SymbolResolverCrossFileTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext ctx = SessionContext.getOrCreate("test");
-        SessionContext.setCurrent(ctx);
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test");
+        TaskContext.setCurrent(ctx);
         resolver = SymbolResolver.getInstance();
     }
 

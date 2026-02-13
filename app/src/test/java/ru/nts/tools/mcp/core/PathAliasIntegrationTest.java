@@ -36,9 +36,10 @@ class PathAliasIntegrationTest {
         readTool = new FileReadTool();
         manageTool = new FileManageTool();
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext ctx = SessionContext.getOrCreate("test");
-        SessionContext.setCurrent(ctx);
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test");
+        TaskContext.setCurrent(ctx);
     }
 
     @Test

@@ -30,7 +30,7 @@ import java.util.zip.CRC32C;
  * Решает проблему "Path Lineage": когда файл перемещается A→B→C,
  * система может найти его текущее местоположение по ID, а не по устаревшему пути.
  *
- * Каждая сессия имеет свой экземпляр (per-session isolation).
+ * Каждая задача имеет свой экземпляр (per-task isolation).
  */
 public class FileLineageTracker {
 

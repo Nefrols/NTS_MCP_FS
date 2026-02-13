@@ -19,14 +19,14 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Per-session трекер токенов доступа к строкам файлов.
- * Обеспечивает изоляцию токенов между сессиями.
+ * Per-task трекер токенов доступа к строкам файлов.
+ * Обеспечивает изоляцию токенов между задачами.
  *
- * Каждая сессия имеет собственный экземпляр этого класса.
+ * Каждая задача имеет собственный экземпляр этого класса.
  */
-public class SessionLineAccessTracker {
+public class TaskLineAccessTracker {
 
-    // Per-session хранилище токенов (Path -> TreeMap<startLine, Token>)
+    // Per-task хранилище токенов (Path -> TreeMap<startLine, Token>)
     private final Map<Path, TreeMap<Integer, LineAccessToken>> tokens = new HashMap<>();
 
     // Per-file CRC кэш для инвалидации покрывающих токенов при изменении файла
@@ -40,17 +40,17 @@ public class SessionLineAccessTracker {
     // Для проверки токенов с хешем старого пути против нового пути
     private final Map<Path, Set<Path>> reverseAliases = new HashMap<>();
 
-    // Синхронизация для потокобезопасности внутри сессии
+    // Синхронизация для потокобезопасности внутри задачи
     private final Object lock = new Object();
 
     /**
      * Регистрирует доступ к диапазону строк и возвращает токен.
      *
      * Логика регистрации:
-     * 1. Точное совпадение диапазона + CRC совпадает → возвращаем существующий токен
-     * 2. Точное совпадение диапазона + CRC изменился → создаём новый (файл изменился)
-     * 3. Существующий токен ПОКРЫВАЕТ запрос → возвращаем покрывающий токен
-     * 4. Иначе → создаём новый токен
+     * 1. Точное совпадение диапазона + CRC совпадает -> возвращаем существующий токен
+     * 2. Точное совпадение диапазона + CRC изменился -> создаём новый (файл изменился)
+     * 3. Существующий токен ПОКРЫВАЕТ запрос -> возвращаем покрывающий токен
+     * 4. Иначе -> создаём новый токен
      *
      * ВАЖНО про CRC:
      * - CRC вычисляется для конкретного диапазона строк
@@ -66,21 +66,6 @@ public class SessionLineAccessTracker {
      * @param lineCount Общее количество строк в файле
      * @return Токен доступа к диапазону (может быть шире запрошенного!)
      */
-    public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
-        return registerAccess(path, startLine, endLine, rangeContent, lineCount, 0L);
-    }
-
-    /**
-     * Регистрирует доступ к диапазону строк с CRC всего файла для инвалидации.
-     *
-     * @param path Путь к файлу
-     * @param startLine Начало диапазона (1-based)
-     * @param endLine Конец диапазона (1-based)
-     * @param rangeContent Содержимое диапазона строк (для вычисления CRC)
-     * @param lineCount Общее количество строк в файле
-     * @param fileCrc CRC32C всего файла (0 для пропуска проверки)
-     * @return Токен доступа к диапазону (может быть шире запрошенного!)
-     */
     public LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount, long fileCrc) {
         Path absPath = path.toAbsolutePath().normalize();
         long rangeCrc = LineAccessToken.computeRangeCrc(rangeContent);
@@ -89,13 +74,11 @@ public class SessionLineAccessTracker {
             TreeMap<Integer, LineAccessToken> fileTokens = tokens.computeIfAbsent(absPath, k -> new TreeMap<>());
 
             // 0. Инвалидация: если CRC файла изменился, все токены этого файла протухли
-            if (fileCrc != 0) {
-                Long cachedCrc = fileCrcCache.get(absPath);
-                if (cachedCrc != null && cachedCrc != fileCrc) {
-                    fileTokens.clear();
-                }
-                fileCrcCache.put(absPath, fileCrc);
+            Long cachedCrc = fileCrcCache.get(absPath);
+            if (cachedCrc != null && cachedCrc != fileCrc) {
+                fileTokens.clear();
             }
+            fileCrcCache.put(absPath, fileCrc);
 
             // 1. Проверяем точное совпадение диапазона
             LineAccessToken exactMatch = fileTokens.get(startLine);
@@ -145,7 +128,7 @@ public class SessionLineAccessTracker {
     /**
      * Валидирует токен против текущего состояния диапазона.
      *
-     * Session Tokens: Если файл был разблокирован в текущей транзакции,
+     * Task Tokens: Если файл был разблокирован в текущей транзакции,
      * CRC-проверка пропускается и токен автоматически валиден (все изменения контролируемы).
      *
      * InfinityRange: Если файл создан в текущей транзакции,
@@ -159,13 +142,13 @@ public class SessionLineAccessTracker {
     public LineAccessToken.ValidationResult validateToken(LineAccessToken token, String currentRangeContent, int currentLineCount) {
         Path path = token.path();
 
-        // Session Tokens + InfinityRange: внутри транзакции токен автоматически валиден
+        // Task Tokens + InfinityRange: внутри транзакции токен автоматически валиден
         // для файлов с зарегистрированным доступом или созданных в транзакции
-        boolean sessionUnlocked = TransactionManager.isInTransaction() &&
+        boolean taskUnlocked = TransactionManager.isInTransaction() &&
                 (TransactionManager.isFileAccessedInTransaction(path) ||
                  TransactionManager.isFileCreatedInTransaction(path));
 
-        if (sessionUnlocked) {
+        if (taskUnlocked) {
             // Внутри транзакции токен для разблокированного файла всегда валиден
             return LineAccessToken.ValidationResult.VALID;
         }
@@ -235,6 +218,7 @@ public class SessionLineAccessTracker {
         Path absPath = path.toAbsolutePath().normalize();
         synchronized (lock) {
             tokens.remove(absPath);
+            fileCrcCache.remove(absPath);
         }
     }
 
@@ -560,8 +544,8 @@ public class SessionLineAccessTracker {
      *
      * Формат:
      * [YOUR ACCESS: filename.java]
-     *   • lines 1-50: token_short_id (covers requested range)
-     *   • lines 100-150: token_short_id
+     *   * lines 1-50: token_short_id (covers requested range)
+     *   * lines 100-150: token_short_id
      *
      * @param path Путь к файлу
      * @param requestedStart Начало запрошенного диапазона (для пометки покрывающего токена), 0 если не нужно
@@ -579,7 +563,7 @@ public class SessionLineAccessTracker {
         sb.append("[YOUR ACCESS: ").append(fileName).append("]\n");
 
         for (LineAccessToken t : fileTokens) {
-            sb.append("  • lines ").append(t.startLine()).append("-").append(t.endLine());
+            sb.append("  \u2022 lines ").append(t.startLine()).append("-").append(t.endLine());
 
             // Показываем ПОЛНЫЙ токен - LLM нужен полный токен для использования!
             String encoded = t.encode();
@@ -588,7 +572,7 @@ public class SessionLineAccessTracker {
             // Пометка если этот токен покрывает запрошенный диапазон
             if (requestedStart > 0 && requestedEnd > 0 && t.covers(requestedStart, requestedEnd)) {
                 if (t.startLine() != requestedStart || t.endLine() != requestedEnd) {
-                    sb.append(" ← covers your request [").append(requestedStart).append("-").append(requestedEnd).append("]");
+                    sb.append(" \u2190 covers your request [").append(requestedStart).append("-").append(requestedEnd).append("]");
                 }
             }
             sb.append("\n");

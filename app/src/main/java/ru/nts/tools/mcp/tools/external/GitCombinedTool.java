@@ -49,7 +49,7 @@ public class GitCombinedTool implements McpTool {
                     Only safe, local operations allowed. No push/pull/fetch.
             - diff - View changes in unified diff format
                     Use staged=true for indexed changes only
-            - commit_session - Auto-generate commit from session activity
+            - commit_task - Auto-generate commit from task activity
                     Includes completed TODO tasks and technical changes
 
             WORKFLOW EXAMPLES:
@@ -57,7 +57,7 @@ public class GitCombinedTool implements McpTool {
             2. View changes: diff (shows both staged and unstaged)
             3. Stage files: cmd + command='add' + args='.'
             4. Commit: cmd + command='commit' + args='-m "message"'
-            5. Auto-commit: commit_session + header='Feature: search'
+            5. Auto-commit: commit_task + header='Feature: search'
 
             SECURITY: Push/pull/fetch/remote operations blocked.
             """;
@@ -75,7 +75,7 @@ public class GitCombinedTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("action").put("type", "string").put("description",
-                "Operation: 'cmd' (run git command), 'diff' (show changes), 'commit_session' (auto-commit). Required.");
+                "Operation: 'cmd' (run git command), 'diff' (show changes), 'commit_task' (auto-commit). Required.");
 
         props.putObject("command").put("type", "string").put("description",
                 "For 'cmd': Git subcommand. Allowed: status, diff, log, add, commit, rev-parse, branch. " +
@@ -96,8 +96,8 @@ public class GitCombinedTool implements McpTool {
                 "false/omit = show both staged and unstaged.");
 
         props.putObject("header").put("type", "string").put("description",
-                "For 'commit_session': commit message header. Body auto-generated from: " +
-                "completed TODO tasks + session change instructions. Required for commit_session.");
+                "For 'commit_task': commit message header. Body auto-generated from: " +
+                "completed TODO tasks + task change instructions. Required for commit_task.");
 
         schema.putArray("required").add("action");
         return schema;
@@ -110,7 +110,7 @@ public class GitCombinedTool implements McpTool {
         return switch (action) {
             case "cmd" -> executeCmd(params);
             case "diff" -> executeDiff(params);
-            case "commit_session" -> executeCommitSession(params);
+            case "commit_task" -> executeCommitTask(params);
             default -> throw new IllegalArgumentException("Unknown action: " + action);
         };
     }
@@ -185,11 +185,11 @@ public class GitCombinedTool implements McpTool {
         return createResponse(sb.toString().trim());
     }
 
-    private JsonNode executeCommitSession(JsonNode params) throws Exception {
+    private JsonNode executeCommitTask(JsonNode params) throws Exception {
         checkGitRepository();
 
         String header = params.get("header").asText();
-        List<String> instructions = TransactionManager.getSessionInstructions();
+        List<String> instructions = TransactionManager.getTaskInstructions();
         List<String> completedTasks = TodoManager.getCompletedTasks();
 
         StringBuilder body = new StringBuilder();

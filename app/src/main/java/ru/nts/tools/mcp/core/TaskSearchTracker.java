@@ -20,17 +20,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Per-session трекер результатов поиска.
- * Обеспечивает изоляцию кеша поиска между сессиями.
+ * Per-task трекер результатов поиска.
+ * Обеспечивает изоляцию кеша поиска между задачами.
  *
- * Каждая сессия имеет собственный экземпляр этого класса.
+ * Каждая задача имеет собственный экземпляр этого класса.
  */
-public class SessionSearchTracker {
+public class TaskSearchTracker {
 
-    // Per-session кеш результатов поиска
+    // Per-task кеш результатов поиска
     private final Map<Path, Integer> matchCache = new HashMap<>();
 
-    // Синхронизация для потокобезопасности внутри сессии
+    // Синхронизация для потокобезопасности внутри задачи
     private final Object lock = new Object();
 
     /**

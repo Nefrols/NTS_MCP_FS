@@ -64,7 +64,8 @@ class EditFileToolTest {
         String content = Files.readString(file);
         int lineCount = content.split("\n", -1).length;
         String rangeContent = buildRangeContent(content, startLine, endLine);
-        LineAccessToken token = LineAccessTracker.registerAccess(file, startLine, endLine, rangeContent, lineCount);
+        long fileCrc = LineAccessToken.computeRangeCrc(content);
+        LineAccessToken token = LineAccessTracker.registerAccess(file, startLine, endLine, rangeContent, lineCount, fileCrc);
         return token.encode();
     }
 

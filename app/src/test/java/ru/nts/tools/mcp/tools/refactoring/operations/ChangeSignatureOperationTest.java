@@ -22,7 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.tools.refactoring.RefactoringContext;
 import ru.nts.tools.mcp.tools.refactoring.RefactoringException;
 import ru.nts.tools.mcp.tools.refactoring.RefactoringResult;
@@ -52,9 +52,10 @@ class ChangeSignatureOperationTest {
         mapper = new ObjectMapper();
         operation = new ChangeSignatureOperation();
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext ctx = SessionContext.getOrCreate("test");
-        SessionContext.setCurrent(ctx);
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test");
+        TaskContext.setCurrent(ctx);
     }
 
     @Test

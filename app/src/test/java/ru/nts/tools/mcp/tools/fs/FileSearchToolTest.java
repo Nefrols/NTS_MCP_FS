@@ -22,7 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.tools.fs.FileSearchTool;
 
 import java.nio.file.Files;
@@ -44,8 +44,9 @@ class FileSearchToolTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
-        SessionContext ctx = SessionContext.getOrCreate("test-search-" + System.nanoTime());
-        SessionContext.setCurrent(ctx);
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test-search-" + System.nanoTime());
+        TaskContext.setCurrent(ctx);
     }
 
     // ==================== Базовые операции ====================

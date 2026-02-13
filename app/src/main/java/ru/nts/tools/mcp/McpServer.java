@@ -19,10 +19,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nts.tools.mcp.core.McpRouter;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.tools.fs.*;
 import ru.nts.tools.mcp.tools.editing.*;
-import ru.nts.tools.mcp.tools.session.*;
+import ru.nts.tools.mcp.tools.task.*;
 import ru.nts.tools.mcp.tools.external.*;
 import ru.nts.tools.mcp.tools.planning.*;
 import ru.nts.tools.mcp.tools.system.*;
@@ -52,10 +52,10 @@ import java.nio.charset.StandardCharsets;
  * Реализует протокол Model Context Protocol через стандартные потоки ввода-вывода (stdio).
  * Обеспечивает параллельную обработку запросов от LLM с поддержкой транзакционности.
  *
- * Session Isolation:
- * Каждый LLM-клиент может использовать независимый контекст сессии.
- * Для указания сессии клиент передает _meta.sessionId в параметрах запроса.
- * Если sessionId не указан, используется default-сессия (для обратной совместимости).
+ * Task Isolation:
+ * Каждый LLM-клиент может использовать независимый контекст задачи.
+ * Для указания задачи клиент передает arguments.taskId или _meta.sessionId в параметрах запроса.
+ * Если taskId не указан, используется default-задача (для обратной совместимости).
  */
 public class McpServer {
 
@@ -107,10 +107,10 @@ public class McpServer {
     }
 
     /**
-     * Множество известных валидных sessionId (для проверки).
-     * Сессии создаются через nts_init и добавляются сюда.
+     * Множество известных валидных taskId (для проверки).
+     * Задачи создаются через nts_init и добавляются сюда.
      */
-    private static final Set<String> validSessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Set<String> validTasks = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * Счетчик для генерации уникальных ID исходящих запросов к клиенту.
@@ -146,7 +146,7 @@ public class McpServer {
 
     static {
         // Регистрация всех доступных инструментов сервера
-        router.registerTool(new InitTool());  // MUST be first - creates sessions
+        router.registerTool(new InitTool());  // MUST be first - creates tasks
 
         router.registerTool(new FileReadTool());
         router.registerTool(new FileManageTool());
@@ -154,15 +154,15 @@ public class McpServer {
         router.registerTool(new EditFileTool());
         router.registerTool(new CompareFilesTool());
 
-        router.registerTool(new SessionTool());
+        router.registerTool(new TaskTool());
         router.registerTool(new WorkspaceStatusTool());
 
         router.registerTool(new GradleTool());
-        router.registerTool(new GitCombinedTool());
         router.registerTool(new VerifyTool());
+        router.registerTool(new GitCombinedTool());
 
         router.registerTool(new BatchToolsTool(router));
-        router.registerTool(new TaskTool());
+        router.registerTool(new ProcessTool());
 
         router.registerTool(new ProjectReplaceTool());
         router.registerTool(new TodoTool());
@@ -175,18 +175,18 @@ public class McpServer {
     }
 
     /**
-     * Регистрирует новую валидную сессию.
-     * Вызывается из InitTool после создания сессии.
+     * Регистрирует новую валидную задачу.
+     * Вызывается из InitTool после создания задачи.
      */
-    public static void registerValidSession(String sessionId) {
-        validSessions.add(sessionId);
+    public static void registerValidTask(String taskId) {
+        validTasks.add(taskId);
     }
 
     /**
-     * Проверяет, является ли sessionId валидным.
+     * Проверяет, является ли taskId валидным.
      */
-    public static boolean isValidSession(String sessionId) {
-        return sessionId != null && validSessions.contains(sessionId);
+    public static boolean isValidTask(String taskId) {
+        return taskId != null && validTasks.contains(taskId);
     }
 
     /**
@@ -357,6 +357,28 @@ public class McpServer {
             }
         }
 
+        // Ленивое обновление roots: перезапрашиваем у клиента когда PathSanitizer
+        // отказывает в доступе к пути. Покрывает клиентов, не отправляющих
+        // notifications/roots/list_changed (например, Claude Code при /add-dir).
+        ru.nts.tools.mcp.core.PathSanitizer.setRootRefreshCallback(() -> {
+            if (!clientSupportsRoots) return false;
+            try {
+                List<Path> oldRoots = ru.nts.tools.mcp.core.PathSanitizer.getRoots();
+                JsonNode result = sendClientRequest("roots/list", null)
+                        .get(5, java.util.concurrent.TimeUnit.SECONDS);
+                if (result != null && result.has("roots")) {
+                    processRootsResponse(result.get("roots"));
+                } else if (result != null) {
+                    processRootsResponse(result);
+                }
+                List<Path> newRoots = ru.nts.tools.mcp.core.PathSanitizer.getRoots();
+                return !oldRoots.equals(newRoots);
+            } catch (Exception e) {
+                log("Lazy root refresh failed: " + e.getMessage());
+                return false;
+            }
+        });
+
         log("MCP Server starting...");
 
         // Используем ExecutorService with virtual threads for processing each request.
@@ -381,52 +403,52 @@ public class McpServer {
      * Обрабатывает одиночное JSON-RPC сообщение.
      * Выполняет парсинг, маршрутизацию к соответствующему методу и формирование ответа.
      *
-     * Устанавливает SessionContext для изоляции состояния между сессиями.
+     * Устанавливает TaskContext для изоляции состояния между задачами.
      *
      * @param message Строка, содержащая JSON-RPC запрос.
      */
     private static void processMessage(String message) {
-        // Извлекаем sessionId из параметров запроса
+        // Извлекаем taskId из параметров запроса
         // Поддерживаем два способа передачи:
-        // 1. arguments.sessionId - для агентов, которые не могут передавать _meta
-        // 2. _meta.sessionId - для клиентов, поддерживающих метаданные MCP
-        String sessionId = null;
+        // 1. arguments.taskId - для агентов (приоритет)
+        // 2. _meta.sessionId - для MCP-клиентов (fallback, протокольный путь)
+        String taskId = null;
         try {
             JsonNode request = mapper.readTree(message);
-            sessionId = extractSessionId(request);
+            taskId = extractTaskId(request);
         } catch (Exception ignored) {
-            // Если не удалось извлечь sessionId - будет использована default сессия
+            // Если не удалось извлечь taskId - будет использована default задача
         }
 
-        // Устанавливаем контекст сессии для текущего потока
-        SessionContext ctx = SessionContext.getOrCreate(sessionId);
-        SessionContext.setCurrent(ctx);
+        // Устанавливаем контекст задачи для текущего потока
+        TaskContext ctx = TaskContext.getOrCreate(taskId);
+        TaskContext.setCurrent(ctx);
 
         try {
             processMessageInternal(message);
         } finally {
-            // Очищаем контекст потока (но сессия остается в реестре)
-            SessionContext.clearCurrent();
+            // Очищаем контекст потока (но задача остается в реестре)
+            TaskContext.clearCurrent();
         }
     }
 
     /**
-     * Извлекает sessionId из JSON-RPC запроса.
-     * Проверяет два возможных местоположения:
-     * 1. params.arguments.sessionId - явный параметр в аргументах инструмента
-     * 2. params._meta.sessionId - метаданные MCP протокола
+     * Извлекает taskId из JSON-RPC запроса.
+     * Проверяет три возможных местоположения (в порядке приоритета):
+     * 1. params.arguments.taskId - явный параметр в аргументах инструмента (приоритет)
+     * 2. params._meta.sessionId - метаданные MCP протокола (fallback для совместимости)
      *
      * @param request JSON-RPC запрос
-     * @return sessionId или null, если не найден
+     * @return taskId или null, если не найден
      */
-    private static String extractSessionId(JsonNode request) {
-        // Сначала проверяем arguments.sessionId (приоритет для агентов)
-        String fromArgs = request.path("params").path("arguments").path("sessionId").asText(null);
+    private static String extractTaskId(JsonNode request) {
+        // Сначала проверяем arguments.taskId (приоритет для агентов)
+        String fromArgs = request.path("params").path("arguments").path("taskId").asText(null);
         if (fromArgs != null && !fromArgs.isBlank()) {
             return fromArgs;
         }
 
-        // Затем проверяем _meta.sessionId (для MCP-клиентов)
+        // Затем проверяем _meta.sessionId (MCP protocol fallback)
         String fromMeta = request.path("params").path("_meta").path("sessionId").asText(null);
         if (fromMeta != null && !fromMeta.isBlank()) {
             return fromMeta;
@@ -436,7 +458,7 @@ public class McpServer {
     }
 
     /**
-     * Внутренняя обработка сообщения после установки контекста сессии.
+     * Внутренняя обработка сообщения после установки контекста задачи.
      */
     private static void processMessageInternal(String message) {
         try {
@@ -470,9 +492,9 @@ public class McpServer {
             }
 
             if (DEBUG) {
-                SessionContext ctx = SessionContext.current();
-                String sid = ctx != null ? ctx.getSessionId() : "none";
-                System.err.println("[" + Thread.currentThread() + "] [Session: " + sid + "] Received method: " + method);
+                TaskContext ctx = TaskContext.current();
+                String tid = ctx != null ? ctx.getTaskId() : "none";
+                System.err.println("[" + Thread.currentThread() + "] [Task: " + tid + "] Received method: " + method);
             }
 
             // Подготовка базового каркаса ответа
@@ -562,49 +584,53 @@ public class McpServer {
                         res.putArray("prompts");
                         response.set("result", res);
                     }
-                    case "tools/list" -> response.set("result", router.listTools());
+                    case "tools/list" -> {
+                        boolean includeInternal = request.path("params")
+                                .path("includeInternal").asBoolean(false);
+                        response.set("result", router.listTools(includeInternal));
+                    }
                     case "tools/call" -> {
                         String toolName = request.path("params").path("name").asText();
                         JsonNode params = request.path("params").path("arguments");
-                        // Извлекаем sessionId из arguments или _meta
-                        String sessionId = extractSessionId(request);
+                        // Извлекаем taskId из arguments или _meta
+                        String taskId = extractTaskId(request);
 
-                        // Проверяем, требует ли инструмент сессию
-                        boolean requiresSession = router.toolRequiresSession(toolName);
+                        // Проверяем, требует ли инструмент задачу
+                        boolean requiresTask = router.toolRequiresTask(toolName);
 
-                        if (requiresSession) {
-                            // Проверяем наличие и валидность sessionId
-                            if (sessionId == null || sessionId.isBlank()) {
+                        if (requiresTask) {
+                            // Проверяем наличие и валидность taskId
+                            if (taskId == null || taskId.isBlank()) {
                                 throw new IllegalStateException(
-                                    "NO_SESSION: This tool requires a valid session ID. " +
-                                    "Call nts_init first to create a session, then pass the returned sessionId " +
-                                    "in the 'sessionId' parameter for all subsequent requests.");
+                                    "NO_TASK: This tool requires a valid task ID. " +
+                                    "Call nts_init first to create a task, then pass the returned taskId " +
+                                    "in the 'taskId' parameter for all subsequent requests.");
                             }
-                            if (!isValidSession(sessionId)) {
-                                // Проверяем, существует ли сессия на диске (может быть реактивирована)
-                                if (SessionContext.existsOnDisk(sessionId)) {
-                                    SessionContext.SessionMetadata meta = SessionContext.getSessionMetadata(sessionId);
+                            if (!isValidTask(taskId)) {
+                                // Проверяем, существует ли задача на диске (может быть реактивирована)
+                                if (TaskContext.existsOnDisk(taskId)) {
+                                    TaskContext.TaskMetadata meta = TaskContext.getTaskMetadata(taskId);
                                     String createdInfo = meta != null && meta.createdAt() != null
                                         ? " (created: " + meta.createdAt() + ")"
                                         : "";
                                     throw new IllegalStateException(
-                                        "SESSION_INACTIVE: Session '" + sessionId + "' exists but is not active" + createdInfo + ".\n" +
+                                        "TASK_INACTIVE: Task '" + taskId + "' exists but is not active" + createdInfo + ".\n" +
                                         "The server may have restarted since your last interaction.\n\n" +
-                                        "[ACTION REQUIRED: Reactivate the session by calling:]\n" +
-                                        "nts_init(sessionId=\"" + sessionId + "\")\n\n" +
-                                        "This will restore your session with preserved todos and file history.\n" +
+                                        "[ACTION REQUIRED: Reactivate the task by calling:]\n" +
+                                        "nts_init(taskId=\"" + taskId + "\")\n\n" +
+                                        "This will restore your task with preserved todos and file history.\n" +
                                         "Note: In-memory state (access tokens, undo stack) will start fresh.");
                                 } else {
                                     throw new IllegalStateException(
-                                        "INVALID_SESSION: Session ID '" + sessionId + "' is not recognized. " +
-                                        "The session may have been deleted or the ID is incorrect. " +
-                                        "Call nts_init() to create a new session.");
+                                        "INVALID_TASK: Task ID '" + taskId + "' is not recognized. " +
+                                        "The task may have been deleted or the ID is incorrect. " +
+                                        "Call nts_init() to create a new task.");
                                 }
                             }
                         }
 
-                        // Устанавливаем контекст сессии (для nts_init будет создан новый)
-                        SessionContext ctx = SessionContext.current();
+                        // Устанавливаем контекст задачи (для nts_init будет создан новый)
+                        TaskContext ctx = TaskContext.current();
                         if (ctx != null) {
                             ctx.setCurrentToolName(toolName);
                         }
@@ -612,8 +638,8 @@ public class McpServer {
                             JsonNode toolResult = router.callTool(toolName, params);
                             response.set("result", toolResult);
 
-                            // Обновляем активность сессии после успешного вызова
-                            if (ctx != null && !"default".equals(ctx.getSessionId())) {
+                            // Обновляем активность задачи после успешного вызова
+                            if (ctx != null && !"default".equals(ctx.getTaskId())) {
                                 ctx.touchActivity();
                             }
                         } finally {

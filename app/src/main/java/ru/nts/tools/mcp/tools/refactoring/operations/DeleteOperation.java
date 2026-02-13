@@ -20,7 +20,7 @@ import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo.Location;
 import ru.nts.tools.mcp.tools.refactoring.*;
@@ -311,10 +311,10 @@ public class DeleteOperation implements RefactoringOperation {
             long crc32c = LineAccessToken.computeRangeCrc(newContent);
 
             // Обновляем снапшот сессии для синхронизации с batch tools
-            SessionContext.currentOrDefault().externalChanges()
+            TaskContext.currentOrDefault().externalChanges()
                 .updateSnapshot(filePath, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
 
-            LineAccessToken token = LineAccessTracker.registerAccess(filePath, 1, lineCount, newContent, lineCount);
+            LineAccessToken token = LineAccessTracker.registerAccess(filePath, 1, lineCount, newContent, lineCount, crc32c);
 
             changes.add(new RefactoringResult.FileChange(
                     filePath, fileRefs.size(), details, token.encode(), null, crc32c, lineCount));
@@ -358,10 +358,10 @@ public class DeleteOperation implements RefactoringOperation {
         long crc32c = LineAccessToken.computeRangeCrc(newContent);
 
         // Обновляем снапшот сессии для синхронизации с batch tools
-        SessionContext.currentOrDefault().externalChanges()
+        TaskContext.currentOrDefault().externalChanges()
             .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
 
-        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, newContent, lineCount, crc32c);
 
         return new RefactoringResult.FileChange(
                 path, 1,

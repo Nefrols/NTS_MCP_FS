@@ -90,10 +90,10 @@ public class PathSanitizer {
     }
 
     /**
-     * Корневая директория для хранения сессий (~/.nts/).
+     * Корневая директория для хранения задач (~/.nts/).
      * Находится в домашней директории пользователя, аналогично ~/.claude/ или ~/.gemini/.
      */
-    private static volatile Path sessionRoot = Paths.get(System.getProperty("user.home"), ".nts").toAbsolutePath().normalize();
+    private static volatile Path taskRoot = Paths.get(System.getProperty("user.home"), ".nts").toAbsolutePath().normalize();
 
     /**
      * Переопределяет корень проекта (единственный root).
@@ -284,17 +284,17 @@ public class PathSanitizer {
     }
 
     /**
-     * Возвращает корень для хранения сессий (~/.nts/).
-     * Сессии хранятся отдельно от рабочей директории проекта.
+     * Возвращает корень для хранения задач (~/.nts/).
+     * Задачи хранятся отдельно от рабочей директории проекта.
      */
-    public static Path getSessionRoot() {
-        return sessionRoot;
+    public static Path getTaskRoot() {
+        return taskRoot;
     }
 
     /**
-     * Переопределяет корень хранения сессий (для тестов).
+     * Переопределяет корень хранения задач (для тестов).
      */
-    public static void setSessionRoot(Path newRoot) {
-        sessionRoot = newRoot.toAbsolutePath().normalize();
+    public static void setTaskRoot(Path newRoot) {
+        taskRoot = newRoot.toAbsolutePath().normalize();
     }
 }

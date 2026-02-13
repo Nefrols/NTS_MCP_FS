@@ -25,16 +25,16 @@ import java.sql.Statement;
 import java.util.UUID;
 
 /**
- * Управление жизненным циклом embedded H2 базы данных для журнала сессии.
+ * Управление жизненным циклом embedded H2 базы данных для журнала задачи.
  *
- * Каждая сессия получает собственную H2 базу по пути:
- *   ~/.nts/sessions/{sessionId}/journal  (.mv.db файл создается H2 автоматически)
+ * Каждая задача получает собственную H2 базу по пути:
+ *   ~/.nts/tasks/{taskId}/journal  (.mv.db файл создается H2 автоматически)
  *
  * Поддерживает:
  * - Ленивую инициализацию (база создается при первом обращении)
  * - Миграцию схемы через version check
  * - Thread-safe доступ через H2 embedded URL mode
- * - Корректное закрытие при завершении сессии
+ * - Корректное закрытие при завершении задачи
  */
 public class JournalDatabase implements AutoCloseable {
 
@@ -46,12 +46,12 @@ public class JournalDatabase implements AutoCloseable {
     private volatile boolean closed;
 
     /**
-     * Создает экземпляр JournalDatabase для указанной директории сессии.
+     * Создает экземпляр JournalDatabase для указанной директории задачи.
      *
-     * @param sessionDir директория сессии (~/.nts/sessions/{sessionId}/)
+     * @param taskDir директория задачи (~/.nts/tasks/{taskId}/)
      */
-    public JournalDatabase(Path sessionDir) {
-        this.dbPath = sessionDir.resolve("journal");
+    public JournalDatabase(Path taskDir) {
+        this.dbPath = taskDir.resolve("journal");
         // H2 embedded URL: FILE_LOCK=FS для одного процесса, AUTO_SERVER=FALSE
         // DB_CLOSE_DELAY=0 — закрывать сразу при последнем disconnect
         this.jdbcUrl = "jdbc:h2:" + dbPath.toAbsolutePath().toString().replace('\\', '/')
@@ -64,7 +64,7 @@ public class JournalDatabase implements AutoCloseable {
     }
 
     /**
-     * Создает in-memory JournalDatabase (для default сессии / тестов).
+     * Создает in-memory JournalDatabase (для default task / тестов).
      * Данные автоматически удаляются при close().
      */
     public static JournalDatabase inMemory() {
@@ -84,7 +84,7 @@ public class JournalDatabase implements AutoCloseable {
             try {
                 Files.createDirectories(dbPath.getParent());
             } catch (IOException e) {
-                throw new SQLException("Cannot create session directory: " + e.getMessage(), e);
+                throw new SQLException("Cannot create task directory: " + e.getMessage(), e);
             }
         }
 
@@ -104,7 +104,7 @@ public class JournalDatabase implements AutoCloseable {
     }
 
     /**
-     * Возвращает JDBC-соединение к базе сессии.
+     * Возвращает JDBC-соединение к базе задачи.
      * При первом вызове автоматически инициализирует схему.
      */
     public Connection getConnection() throws SQLException {

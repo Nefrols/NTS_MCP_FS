@@ -36,9 +36,10 @@ class LineAccessTokenPathAliasTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext ctx = SessionContext.getOrCreate("test");
-        SessionContext.setCurrent(ctx);
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test");
+        TaskContext.setCurrent(ctx);
     }
 
     @Test
@@ -49,7 +50,8 @@ class LineAccessTokenPathAliasTest {
 
         // Register token for original path
         String content = "line1\nline2";
-        LineAccessToken token = LineAccessTracker.registerAccess(oldPath, 1, 2, content, 3);
+        long fileCrc = LineAccessToken.computeRangeCrc("line1\nline2\nline3\n");
+        LineAccessToken token = LineAccessTracker.registerAccess(oldPath, 1, 2, content, 3, fileCrc);
         String encodedToken = token.encode();
 
         // Move file (outside batch - no transaction)
@@ -74,7 +76,7 @@ class LineAccessTokenPathAliasTest {
 
         // Register token for original path
         String content = "content\n";
-        LineAccessToken token = LineAccessTracker.registerAccess(path1, 1, 1, content, 1);
+        LineAccessToken token = LineAccessTracker.registerAccess(path1, 1, 1, content, 1, LineAccessToken.computeRangeCrc(content));
         String encodedToken = token.encode();
 
         // Move file twice (outside batch)
@@ -101,7 +103,7 @@ class LineAccessTokenPathAliasTest {
 
         // Register token
         String content = "content\n";
-        LineAccessToken token = LineAccessTracker.registerAccess(originalPath, 1, 1, content, 1);
+        LineAccessToken token = LineAccessTracker.registerAccess(originalPath, 1, 1, content, 1, LineAccessToken.computeRangeCrc(content));
         String encodedToken = token.encode();
 
         // Try to use token with unrelated path
@@ -190,7 +192,7 @@ class LineAccessTokenPathAliasTest {
         Files.writeString(oldPath, "test\n");
 
         // Register token and move
-        LineAccessTracker.registerAccess(oldPath, 1, 1, "test\n", 1);
+        LineAccessTracker.registerAccess(oldPath, 1, 1, "test\n", 1, LineAccessToken.computeRangeCrc("test\n"));
         LineAccessTracker.moveTokens(oldPath, newPath);
 
         // moveTokens should have created an alias

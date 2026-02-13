@@ -35,8 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 3. Стабильность: Жесткие лимиты на время выполнения (timeout) и объем возвращаемых данных.
  * 4. Управление задачами: Каждая команда получает уникальный идентификатор для отслеживания.
  *
- * Thread-safety: Все операции потокобезопасны для многосессионной работы.
- * Session-scoped: TaskId включает идентификатор сессии для предотвращения коллизий.
+ * Thread-safety: Все операции потокобезопасны для многозадачной работы.
+ * Task-scoped: TaskId включает идентификатор задачи для предотвращения коллизий.
  */
 public class ProcessExecutor {
 
@@ -53,20 +53,20 @@ public class ProcessExecutor {
     private static final Map<String, TaskInfo> taskRegistry = new ConcurrentHashMap<>();
 
     /**
-     * Счетчик для генерации уникальных taskId внутри сессии.
+     * Счетчик для генерации уникальных taskId внутри задачи.
      */
     private static final AtomicLong taskCounter = new AtomicLong(0);
 
     /**
-     * Генерирует уникальный taskId с привязкой к сессии.
-     * Формат: {sessionId_prefix}-{counter}-{uuid_suffix}
+     * Генерирует уникальный taskId с привязкой к задаче.
+     * Формат: {taskId_prefix}-{counter}-{uuid_suffix}
      */
     private static String generateTaskId() {
-        SessionContext ctx = SessionContext.current();
-        String sessionPrefix = ctx != null ? ctx.getSessionId().substring(0, Math.min(8, ctx.getSessionId().length())) : "default";
+        TaskContext ctx = TaskContext.current();
+        String taskPrefix = ctx != null ? ctx.getTaskId().substring(0, Math.min(8, ctx.getTaskId().length())) : "default";
         long counter = taskCounter.incrementAndGet();
         String uuidSuffix = UUID.randomUUID().toString().substring(0, 8);
-        return String.format("%s-%d-%s", sessionPrefix, counter, uuidSuffix);
+        return String.format("%s-%d-%s", taskPrefix, counter, uuidSuffix);
     }
 
     /**
@@ -83,7 +83,7 @@ public class ProcessExecutor {
      */
     public static ExecutionResult execute(List<String> command, long timeoutSeconds) throws Exception {
         Path root = PathSanitizer.getRoot();
-        // Генерация уникального идентификатора с привязкой к сессии
+        // Генерация уникального идентификатора с привязкой к задаче
         String taskId = generateTaskId();
 
         ProcessBuilder pb = new ProcessBuilder(command);
@@ -185,7 +185,7 @@ public class ProcessExecutor {
      *
      * @param exitCode  Код выхода процесса (0 - успех, -1 - таймаут).
      * @param output    Текстовый вывод (stdout + stderr).
-     * @param taskId    Уникальный идентификатор сессии выполнения.
+     * @param taskId    Уникальный идентификатор задачи выполнения.
      * @param isRunning true, если задача не успела завершиться и работает в фоне.
      */
     public record ExecutionResult(int exitCode, String output, String taskId, boolean isRunning) {

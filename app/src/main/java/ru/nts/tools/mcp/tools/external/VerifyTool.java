@@ -83,7 +83,7 @@ public class VerifyTool implements McpTool {
         actionNode.putArray("enum").add("syntax").add("compile").add("test");
 
         props.putObject("path").put("type", "string").put("description",
-                "File path for syntax check. If omitted with action='syntax', checks all modified files in current session.");
+                "File path for syntax check. If omitted with action='syntax', checks all modified files in current transaction.");
 
         props.putObject("timeout").put("type", "integer").put("description",
                 "Timeout in seconds for compile/test. Default: 120.");
@@ -117,7 +117,7 @@ public class VerifyTool implements McpTool {
             return formatSyntaxResult(List.of(new FileCheckResult(path, result)));
         }
 
-        // Check all modified files in current session
+        // Check all modified files in current transaction
         List<String> affectedPaths = TransactionManager.getAffectedPaths();
         if (affectedPaths.isEmpty()) {
             return createTextResponse("[VERIFY: syntax | STATUS: OK]\nNo modified files to check.");
@@ -141,6 +141,7 @@ public class VerifyTool implements McpTool {
 
         if (totalErrors == 0) {
             sb.append("\nAll ").append(results.size()).append(" file(s) passed syntax check.");
+            // Reset verify counter
             TransactionManager.resetVerifyCounter();
             return createTextResponse(sb.toString());
         }

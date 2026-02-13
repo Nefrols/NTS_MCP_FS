@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ru.nts.tools.mcp.tools.session;
+package ru.nts.tools.mcp.tools.task;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,7 +24,7 @@ import java.util.List;
 
 /**
  * Workspace status tool for context recovery.
- * Returns compact summary of current session state: TODO progress, affected files,
+ * Returns compact summary of current task state: TODO progress, affected files,
  * recent journal entries, and suggested next action.
  *
  * LLMs call this to regain orientation after prompt compression or when confused.
@@ -44,7 +44,7 @@ public class WorkspaceStatusTool implements McpTool {
             Get current workspace status for context recovery.
 
             Returns compact summary:
-            - Current session ID and stats
+            - Current task ID and stats
             - TODO progress (if active)
             - Recently modified files
             - Recent journal entries (last 5 operations)
@@ -59,7 +59,7 @@ public class WorkspaceStatusTool implements McpTool {
 
     @Override
     public String getCategory() {
-        return "session";
+        return "task";
     }
 
     @Override
@@ -67,6 +67,7 @@ public class WorkspaceStatusTool implements McpTool {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
         schema.putObject("properties");
+        // No parameters needed
         return schema;
     }
 
@@ -74,13 +75,13 @@ public class WorkspaceStatusTool implements McpTool {
     public JsonNode execute(JsonNode params) throws Exception {
         StringBuilder sb = new StringBuilder();
 
-        // 1. Session info
-        SessionContext ctx = SessionContext.current();
-        String sessionId = ctx != null ? ctx.getSessionId() : "default";
-        sb.append("[SESSION: ").append(sessionId).append("]\n");
+        // 1. Task info
+        TaskContext ctx = TaskContext.current();
+        String taskId = ctx != null ? ctx.getTaskId() : "default";
+        sb.append("[TASK: ").append(taskId).append("]\n");
 
-        // 2. Session stats
-        String stats = TransactionManager.getSessionStats();
+        // 2. Task stats
+        String stats = TransactionManager.getTaskStats();
         sb.append("[STATS: ").append(stats).append("]\n");
 
         // 3. TODO progress
@@ -97,7 +98,7 @@ public class WorkspaceStatusTool implements McpTool {
             sb.append("]\n");
         }
 
-        // 4. Affected files (modified in current session)
+        // 4. Affected files (modified in current task)
         List<String> affectedFiles = TransactionManager.getAffectedPaths();
         if (!affectedFiles.isEmpty()) {
             sb.append("[MODIFIED FILES: ").append(affectedFiles.size()).append("]\n");
@@ -136,7 +137,7 @@ public class WorkspaceStatusTool implements McpTool {
                 if (editsSinceVerify > 0) {
                     return "[NEXT ACTION: All TODO items done. Run nts_verify(action='syntax') before finishing.]";
                 }
-                return "[NEXT ACTION: All TODO items done. Ready to finish.]";
+                return "[NEXT ACTION: All TODO items done. Finish with nts_worker_finish(report='...')]";
             }
             if (hud.nextTask() != null) {
                 return "[NEXT ACTION: Work on TODO #" + hud.nextId() + ": " + hud.nextTask() + "]";

@@ -41,11 +41,11 @@ public class SmartUndoEngine {
     /**
      * Выполняет умный откат транзакции.
      *
-     * @param snapshots карта: оригинальный путь -> путь к бекапу (null если файл не существовал)
+     * @param snapshots карта: оригинальный путь -> содержимое бекапа (null если файл не существовал)
      * @param transactionDescription описание транзакции
      * @return детальный результат отката
      */
-    public UndoResult smartUndo(Map<Path, Path> snapshots, String transactionDescription) {
+    public UndoResult smartUndo(Map<Path, byte[]> snapshots, String transactionDescription) {
         if (snapshots.isEmpty()) {
             return UndoResult.nothingToUndo();
         }
@@ -63,9 +63,9 @@ public class SmartUndoEngine {
         boolean hasPartial = false;
         boolean hasRelocated = false;
 
-        for (Map.Entry<Path, Path> entry : snapshots.entrySet()) {
+        for (Map.Entry<Path, byte[]> entry : snapshots.entrySet()) {
             Path originalPath = entry.getKey();
-            Path backupPath = entry.getValue();
+            byte[] backupContent = entry.getValue();
             FileValidation fv = validation.files.get(originalPath);
 
             if (fv == null) {
@@ -74,7 +74,7 @@ public class SmartUndoEngine {
             }
 
             try {
-                UndoResult.FileDetail detail = restoreFile(originalPath, backupPath, fv);
+                UndoResult.FileDetail detail = restoreFile(originalPath, backupContent, fv);
                 fileDetails.add(detail);
 
                 if (detail.status() == UndoResult.FileStatus.SKIPPED) {
@@ -128,7 +128,7 @@ public class SmartUndoEngine {
     /**
      * Pre-validation: проверяет все файлы перед откатом.
      */
-    private ValidationResult preValidate(Map<Path, Path> snapshots) {
+    private ValidationResult preValidate(Map<Path, byte[]> snapshots) {
         Map<Path, FileValidation> files = new HashMap<>();
         int stuckCount = 0;
 
@@ -185,14 +185,14 @@ public class SmartUndoEngine {
     /**
      * Восстанавливает один файл.
      */
-    private UndoResult.FileDetail restoreFile(Path originalPath, Path backupPath,
+    private UndoResult.FileDetail restoreFile(Path originalPath, byte[] backupContent,
                                                FileValidation validation) throws IOException {
         Path targetPath = validation.currentPath != null ? validation.currentPath : originalPath;
 
-        // Случай 1: Восстановление удалённого файла (backupPath != null, файл не существует)
-        if (backupPath != null && !Files.exists(targetPath)) {
+        // Случай 1: Восстановление удалённого файла (backupContent != null, файл не существует)
+        if (backupContent != null && !Files.exists(targetPath)) {
             Files.createDirectories(targetPath.getParent());
-            FileUtils.safeCopy(backupPath, targetPath);
+            Files.write(targetPath, backupContent);
             return new UndoResult.FileDetail(
                     originalPath, targetPath, validation.fileId,
                     UndoResult.FileStatus.RESTORED,
@@ -200,8 +200,8 @@ public class SmartUndoEngine {
             );
         }
 
-        // Случай 2: Удаление созданного файла (backupPath == null, файл существует)
-        if (backupPath == null && Files.exists(targetPath)) {
+        // Случай 2: Удаление созданного файла (backupContent == null, файл существует)
+        if (backupContent == null && Files.exists(targetPath)) {
             // Проверяем на dirty directory
             if (Files.isDirectory(targetPath)) {
                 try (var stream = Files.list(targetPath)) {
@@ -224,9 +224,9 @@ public class SmartUndoEngine {
             );
         }
 
-        // Случай 3: Откат изменений (backupPath != null, файл существует)
-        if (backupPath != null && Files.exists(targetPath)) {
-            FileUtils.safeCopy(backupPath, targetPath);
+        // Случай 3: Откат изменений (backupContent != null, файл существует)
+        if (backupContent != null && Files.exists(targetPath)) {
+            Files.write(targetPath, backupContent);
 
             UndoResult.FileStatus status = validation.status == FileValidationStatus.RELOCATED
                     ? UndoResult.FileStatus.RELOCATED
@@ -243,9 +243,8 @@ public class SmartUndoEngine {
         }
 
         // Случай 4: Файл не требует изменений (backup == null и файл не существует)
-        // Это нормальная ситуация когда файл был только прочитан в транзакции, но не изменён
         String detailMessage;
-        if (backupPath == null && !Files.exists(targetPath)) {
+        if (backupContent == null && !Files.exists(targetPath)) {
             detailMessage = "File already absent (no backup needed)";
         } else {
             detailMessage = "Content already matches expected state";

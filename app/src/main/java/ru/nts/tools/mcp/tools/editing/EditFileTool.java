@@ -100,9 +100,9 @@ public class EditFileTool implements McpTool {
 
             RECOVERY TIP:
             If your edit causes problems or produces unexpected results,
-            use nts_session(action='undo') to INSTANTLY REVERT the change
+            use nts_task(action='undo') to INSTANTLY REVERT the change
             instead of making multiple incremental fix edits.
-            View all changes: nts_session(action='journal')
+            View all changes: nts_task(action='journal')
             """;
     }
 
@@ -188,7 +188,7 @@ public class EditFileTool implements McpTool {
                 "Example: pattern='public void foo', startLine=1, endLine=3 -> edits 3 lines AFTER the match.");
 
         props.putObject("instruction").put("type", "string").put("description",
-                "Human-readable change description for session journal. Shown in undo history.");
+                "Human-readable change description for task journal. Shown in undo history.");
 
         props.putObject("dryRun").put("type", "boolean").put("description",
                 "Preview mode: returns unified diff WITHOUT writing to disk. Test your edit first!");
@@ -277,12 +277,11 @@ public class EditFileTool implements McpTool {
             if (!dryRun) {
                 TransactionManager.commit();
 
-                // Auto-syntax check после коммита
+                // Авто-проверка синтаксиса каждого файла после commit
                 StringBuilder syntaxWarnings = new StringBuilder();
-                for (int i = 0; i < editsArray.size(); i++) {
-                    JsonNode editNode = editsArray.get(i);
+                for (JsonNode editNode : editsArray) {
                     String editPath = editNode.get("path").asText();
-                    Path filePath = PathSanitizer.sanitize(editPath, false);
+                    java.nio.file.Path filePath = PathSanitizer.sanitize(editPath, false);
                     var syntaxResult = ru.nts.tools.mcp.core.treesitter.SyntaxChecker.check(filePath);
                     if (syntaxResult.hasErrors()) {
                         syntaxWarnings.append("\n[SYNTAX WARNING: ").append(filePath.getFileName())
@@ -295,7 +294,11 @@ public class EditFileTool implements McpTool {
                 }
                 if (!syntaxWarnings.isEmpty()) {
                     statusMsg.append(syntaxWarnings);
-                    statusMsg.append("\n[ACTION: Review changes. Use nts_session(action='undo') to revert if needed.]");
+                    if (ru.nts.tools.mcp.core.TipFilter.canMention("nts_task")) {
+                        statusMsg.append("\n[ACTION: Review changes. Use nts_task(action='undo') to revert if needed.]");
+                    } else {
+                        statusMsg.append("\n[ACTION: Review changes carefully. Revert manually if needed.]");
+                    }
                 }
             } else {
                 statusMsg.append("[DRY RUN] No changes were applied.");
@@ -360,15 +363,7 @@ public class EditFileTool implements McpTool {
                 sb.append("\n\n[DRY RUN] No changes were applied.");
             }
 
-            // Добавляем tips если есть
-            if (!stats.tips.isEmpty()) {
-                sb.append("\n");
-                for (String tip : stats.tips) {
-                    sb.append("\n[TIP: ").append(tip).append("]");
-                }
-            }
-
-            // Auto-syntax check после коммита
+            // Авто-проверка синтаксиса после commit (не при dryRun)
             if (!dryRun) {
                 var syntaxResult = ru.nts.tools.mcp.core.treesitter.SyntaxChecker.check(stats.path);
                 if (syntaxResult.hasErrors()) {
@@ -378,10 +373,22 @@ public class EditFileTool implements McpTool {
                         sb.append("\n  Line ").append(error.line())
                                 .append(": ").append(error.message());
                         if (!error.context().isEmpty()) {
-                            sb.append(" \u2192 `").append(error.context()).append("`");
+                            sb.append(" → `").append(error.context()).append("`");
                         }
                     }
-                    sb.append("\n[ACTION: Review changes. Use nts_session(action='undo') to revert if needed.]");
+                    if (ru.nts.tools.mcp.core.TipFilter.canMention("nts_task")) {
+                        sb.append("\n[ACTION: Review changes. Use nts_task(action='undo') to revert if needed.]");
+                    } else {
+                        sb.append("\n[ACTION: Review changes carefully. Revert manually if needed.]");
+                    }
+                }
+            }
+
+            // Добавляем tips если есть
+            if (!stats.tips.isEmpty()) {
+                sb.append("\n");
+                for (String tip : stats.tips) {
+                    sb.append("\n[TIP: ").append(tip).append("]");
                 }
             }
 
@@ -483,7 +490,7 @@ public class EditFileTool implements McpTool {
         var validation = LineAccessTracker.validateToken(token, tokenRawContent, oldLineCount);
         if (!validation.valid()) {
             // Проверяем, является ли это внешним изменением
-            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            ExternalChangeTracker externalTracker = TaskContext.currentOrDefault().externalChanges();
             ExternalChangeTracker.ExternalChangeResult externalChange = externalTracker.checkForExternalChange(
                 path, currentCrc, content, charset, oldLineCount
             );
@@ -513,7 +520,7 @@ public class EditFileTool implements McpTool {
             }
 
             // Формируем информативное сообщение для LLM
-            String tokenStatus = SessionContext.currentOrDefault().tokens()
+            String tokenStatus = TaskContext.currentOrDefault().tokens()
                     .getTokenStatusForLLM(path, tokenStart, tokenEnd);
 
             throw new SecurityException(String.format(
@@ -531,13 +538,13 @@ public class EditFileTool implements McpTool {
         }
 
         // Проверяем, что токен покрывает диапазон редактирования
-        // InfinityRange: для файлов, созданных в текущей транзакции или сессии, проверка границ отключена
+        // InfinityRange: для файлов, созданных в текущей транзакции или таске, проверка границ отключена
         // Это решает проблему "статичных токенов в батчах" - когда файл создаётся через `create`,
         // а затем редактируется в последующих вызовах, токен автоматически покрывает весь файл
         boolean skipBoundaryCheck = TransactionManager.isFileCreatedInTransaction(path) ||
-                                    TransactionManager.isFileCreatedInSession(path);
+                                    TransactionManager.isFileCreatedInTask(path);
         if (!skipBoundaryCheck && !token.covers(editStart, editEnd)) {
-            String tokenStatus = SessionContext.currentOrDefault().tokens()
+            String tokenStatus = TaskContext.currentOrDefault().tokens()
                     .getTokenStatusForLLM(path, editStart, editEnd);
 
             throw new SecurityException(String.format(
@@ -551,7 +558,7 @@ public class EditFileTool implements McpTool {
             ));
         }
 
-        // Session Tokens: отмечаем файл как разблокированный в транзакции
+        // Task Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
 
         // Представление контента в виде списка строк для корректной манипуляции
@@ -628,11 +635,11 @@ public class EditFileTool implements McpTool {
             stats.newToken = newToken.encode();
 
             // Обновляем снапшот для отслеживания будущих внешних изменений
-            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            ExternalChangeTracker externalTracker = TaskContext.currentOrDefault().externalChanges();
             externalTracker.updateSnapshot(path, newContent, stats.crc32, charset, newLineCount);
 
             // Сохраняем виртуальный контент для batch-операций (refactor сможет использовать)
-            SessionContext.currentOrDefault().transactions().setVirtualContent(path, newContent);
+            TaskContext.currentOrDefault().transactions().setVirtualContent(path, newContent);
 
             // Добавляем полезные TIPs
             if (lineDelta != 0) {

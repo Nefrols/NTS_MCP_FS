@@ -22,16 +22,16 @@ import java.util.Set;
 
 /**
  * Фасад для управления транзакциями.
- * Делегирует все операции к session-scoped SessionTransactionManager.
+ * Делегирует все операции к task-scoped TaskTransactionManager.
  *
  * Обеспечивает обратную совместимость со старым статическим API,
- * при этом изолируя состояние между сессиями.
+ * при этом изолируя состояние между задачами.
  */
 public class TransactionManager {
 
-    // Делегирование к session-scoped менеджеру
-    private static SessionTransactionManager ctx() {
-        return SessionContext.currentOrDefault().transactions();
+    // Делегирование к task-scoped менеджеру
+    private static TaskTransactionManager ctx() {
+        return TaskContext.currentOrDefault().transactions();
     }
 
     public static void startTransaction(String description) {
@@ -62,10 +62,6 @@ public class TransactionManager {
         return ctx().rollbackToCheckpoint(name);
     }
 
-    public static String diffBetweenCheckpoints(String fromName, String toName) {
-        return ctx().diffBetweenCheckpoints(fromName, toName);
-    }
-
     public static String undo() throws IOException {
         return ctx().undo();
     }
@@ -86,8 +82,8 @@ public class TransactionManager {
         return ctx().getFileHistory(path);
     }
 
-    public static String getSessionStats() {
-        return ctx().getSessionStats();
+    public static String getTaskStats() {
+        return ctx().getTaskStats();
     }
 
     public static int getTotalEdits() {
@@ -98,19 +94,15 @@ public class TransactionManager {
         return ctx().getTotalUndos();
     }
 
-    public static List<String> getSessionInstructions() {
-        return ctx().getSessionInstructions();
-    }
-
-    public static List<String> getRecentJournal(int maxEntries) {
-        return ctx().getRecentJournal(maxEntries);
+    public static List<String> getTaskInstructions() {
+        return ctx().getTaskInstructions();
     }
 
     public static String getJournal() {
         return ctx().getJournal();
     }
 
-    // ==================== Session Tokens & InfinityRange API ====================
+    // ==================== Task Tokens & InfinityRange API ====================
 
     /**
      * Проверяет, выполняется ли сейчас транзакция.
@@ -134,15 +126,15 @@ public class TransactionManager {
     }
 
     /**
-     * Проверяет, был ли файл создан в текущей сессии (в любой транзакции).
+     * Проверяет, был ли файл создан в текущей задаче (в любой транзакции).
      * Используется для пропуска проверки границ токена между разными вызовами инструментов.
      */
-    public static boolean isFileCreatedInSession(Path path) {
-        return ctx().isFileCreatedInSession(path);
+    public static boolean isFileCreatedInTask(Path path) {
+        return ctx().isFileCreatedInTask(path);
     }
 
     /**
-     * Регистрирует файл как разблокированный в текущей транзакции (Session Tokens).
+     * Регистрирует файл как разблокированный в текущей транзакции (Task Tokens).
      */
     public static void markFileAccessedInTransaction(Path path) {
         ctx().markFileAccessedInTransaction(path);
@@ -208,37 +200,53 @@ public class TransactionManager {
     }
 
     /**
-     * Возвращает пути всех файлов, затронутых правками в текущей сессии.
+     * Returns paths of all files affected by edits in the current task.
+     * Uses journal to get all files edited across all transactions.
      */
     public static List<String> getAffectedPaths() {
         return ctx().getAffectedPaths();
     }
 
     /**
-     * Сбрасывает счетчик правок с последней верификации.
+     * Returns paths of all files affected by edits (for enriched reports).
+     */
+    public static List<String> getAllAffectedFiles() {
+        return getAffectedPaths();
+    }
+
+    /**
+     * Resets the verify counter (edits since last verification).
+     * Called after successful verification (syntax/compile/test).
      */
     public static void resetVerifyCounter() {
         ctx().resetVerifyCounter();
     }
 
     /**
-     * Возвращает количество правок с последней верификации.
+     * Returns number of edits since last verification.
      */
     public static int getEditsSinceLastVerify() {
         return ctx().getEditsSinceLastVerify();
     }
 
     /**
-     * Сбрасывает состояние текущей сессии.
+     * Returns recent journal entries (last N operations).
+     */
+    public static List<String> getRecentJournal(int limit) {
+        return ctx().getRecentJournal(limit);
+    }
+
+    /**
+     * Сбрасывает состояние текущей задачи.
      */
     public static void reset() {
-        SessionContext ctx = SessionContext.current();
+        TaskContext ctx = TaskContext.current();
         if (ctx != null) {
             ctx.transactions().reset();
             ctx.tokens().reset();
             ctx.search().clear();
         }
-        // Для обратной совместимости с тестами - сбрасываем default сессию
-        SessionContext.resetAll();
+        // Для обратной совместимости с тестами - сбрасываем default задачу
+        TaskContext.resetAll();
     }
 }

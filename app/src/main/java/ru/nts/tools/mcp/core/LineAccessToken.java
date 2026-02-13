@@ -67,7 +67,7 @@ public record LineAccessToken(Path path,          // Абсолютный нор
         /** Токен не найден в реестре */
         NOT_FOUND(
             "Token not registered or has expired",
-            "Possible causes: (1) Session was reset via nts_session reset, " +
+            "Possible causes: (1) Task was reset via nts_task reset, " +
             "(2) Token was never issued for this range, " +
             "(3) Token format is corrupted. " +
             "Solution: Read the file range first with nts_file_read to obtain a valid token."
@@ -162,7 +162,7 @@ public record LineAccessToken(Path path,          // Абсолютный нор
         String expectedHash = hashPath(normalizedPath);
         String tokenHash = parts[1];
 
-        // Session Tokens: пропускаем проверку пути если файл разблокирован в транзакции
+        // Task Tokens: пропускаем проверку пути если файл разблокирован в транзакции
         // Это позволяет использовать токен после rename/move в рамках батча
         boolean skipPathCheck = TransactionManager.isInTransaction() &&
                 TransactionManager.isFileAccessedInTransaction(normalizedPath);

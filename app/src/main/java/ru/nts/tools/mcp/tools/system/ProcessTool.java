@@ -22,37 +22,37 @@ import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.ProcessExecutor;
 
 /**
- * Инструмент для управления фоновыми задачами.
- * Поддерживает получение логов и завершение процессов по их taskId.
+ * Инструмент для управления фоновыми процессами.
+ * Поддерживает получение логов и завершение процессов по их processId.
  */
-public class TaskTool implements McpTool {
+public class ProcessTool implements McpTool {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
-    public String getName() { return "nts_task"; }
+    public String getName() { return "nts_process"; }
 
     @Override
     public String getDescription() {
         return """
-            Background task manager - monitor and control async processes.
+            Background process manager - monitor and control async processes.
 
             ACTIONS:
-            - log  - Get current output from running task
-            - kill - Terminate a running task
+            - log  - Get current output from running process
+            - kill - Terminate a running process
 
             WHEN TO USE:
             - Gradle build taking too long? Check progress with 'log'
-            - Task stuck or wrong command? Stop it with 'kill'
+            - Process stuck or wrong command? Stop it with 'kill'
             - Git command running async? Monitor with 'log'
 
             WORKFLOW:
-            1. Start long task (e.g., nts_gradle_task with large timeout)
-            2. Task returns taskId while running
-            3. Poll with log(taskId) to check progress
+            1. Start long process (e.g., nts_gradle_task with large timeout)
+            2. Tool returns processId while running
+            3. Poll with log(processId) to check progress
             4. Kill if needed, or wait for completion
 
-            NOTE: taskId is returned by tools that run async (Gradle, Git commands).
+            NOTE: processId is returned by tools that run async (Gradle, Git commands).
             """;
     }
 
@@ -70,34 +70,34 @@ public class TaskTool implements McpTool {
         props.putObject("action").put("type", "string").put("description",
                 "Operation: 'log' (get output), 'kill' (terminate). Required.");
 
-        props.putObject("taskId").put("type", "string").put("description",
-                "Task identifier from async tool response. Format: 'task-XXXX'. " +
+        props.putObject("processId").put("type", "string").put("description",
+                "Process identifier from async tool response. Format: 'task-XXXX'. " +
                 "Example: 'task-1234' returned by nts_gradle_task or nts_git.");
 
-        schema.putArray("required").add("action").add("taskId");
+        schema.putArray("required").add("action").add("processId");
         return schema;
     }
 
     @Override
     public JsonNode execute(JsonNode params) throws Exception {
         String action = params.get("action").asText().toLowerCase();
-        String taskId = params.get("taskId").asText();
+        String processId = params.get("processId").asText();
 
         return switch (action) {
-            case "kill" -> executeKill(taskId);
-            case "log" -> executeLog(taskId);
+            case "kill" -> executeKill(processId);
+            case "log" -> executeLog(processId);
             default -> throw new IllegalArgumentException("Unknown action: " + action);
         };
     }
 
-    private JsonNode executeKill(String taskId) {
-        boolean killed = ProcessExecutor.killTask(taskId);
-        return createResponse(killed ? "Task [" + taskId + "] killed." : "Task [" + taskId + "] not found or already finished.");
+    private JsonNode executeKill(String processId) {
+        boolean killed = ProcessExecutor.killTask(processId);
+        return createResponse(killed ? "Process [" + processId + "] killed." : "Process [" + processId + "] not found or already finished.");
     }
 
-    private JsonNode executeLog(String taskId) {
-        String log = ProcessExecutor.getTaskLog(taskId);
-        return createResponse("Log for task [" + taskId + "]:\n\n" + log);
+    private JsonNode executeLog(String processId) {
+        String log = ProcessExecutor.getTaskLog(processId);
+        return createResponse("Log for process [" + processId + "]:\n\n" + log);
     }
 
     private JsonNode createResponse(String msg) {

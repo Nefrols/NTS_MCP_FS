@@ -100,17 +100,19 @@ public class GradleTool implements McpTool {
 
         props.putObject("task").put("type", "string").put("description",
                 "Gradle task name: 'build', 'test', 'clean', 'check', 'assemble', 'init', etc. " +
-                "Can also use custom tasks defined in build.gradle. Required.");
+                "Can also use custom tasks defined in build.gradle. " +
+                "Special: 'init' — initializes a new Gradle project using system gradle (gradlew not required). Required.");
+
+        props.putObject("timeout").put("type", "integer").put("description",
+                "Max execution time in SECONDS. Required. " +
+                "Recommendations: clean=30, build=120, test=300, init=60. " +
+                "If exceeded, task continues async — use nts_task to monitor.");
 
         props.putObject("arguments").put("type", "string").put("description",
                 "Additional Gradle flags. Examples: " +
                 "'--info' (verbose), '--stacktrace' (errors), '-x test' (skip tests), " +
-                "'--tests MyTest' (specific test).");
-
-        props.putObject("timeout").put("type", "integer").put("description",
-                "Max execution time in SECONDS. Required. " +
-                "Recommendations: clean=30, build=120, test=300. " +
-                "If exceeded, task continues async - use nts_task to monitor.");
+                "'--tests MyTest' (specific test). " +
+                "For init: '--type java-application --dsl kotlin' (overrides initType/initDsl).");
 
         props.putObject("generateWrapper").put("type", "boolean").put("description",
                 "If true and gradlew is not found, automatically runs system 'gradle wrapper' " +
@@ -155,53 +157,49 @@ public class GradleTool implements McpTool {
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         File wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
 
-        // init всегда через системный gradle
+        // Специальная обработка: gradle init (всегда через системный gradle)
         if ("init".equalsIgnoreCase(task)) {
             return handleInit(initType, initDsl, extraArgs, timeout, isWindows, wrapperFile);
         }
 
         if (!wrapperFile.exists()) {
+            // Попытка сгенерировать wrapper если запрошено
             if (generateWrapper) {
                 String genResult = generateGradleWrapper(isWindows);
                 if (genResult != null) {
                     return createTextResponse("### Gradle Wrapper Generation Failed\n\n" + genResult +
-                            "\n\nAlternatives:\n- task='init' to create a new Gradle project\n" +
-                            "- Manually add gradlew to your project");
+                            "\n\nOptions:\n" +
+                            "1. Run with task='init' to initialize a new Gradle project\n" +
+                            "2. Install Gradle and ensure it's in PATH\n" +
+                            "3. Add gradlew/gradlew.bat to the project manually");
                 }
+                // Wrapper сгенерирован — обновляем ссылку
                 wrapperFile = PathSanitizer.getRoot().resolve(isWindows ? "gradlew.bat" : "gradlew").toFile();
                 if (!wrapperFile.exists()) {
                     return createTextResponse("### Gradle Wrapper Generation Failed\n\n" +
-                            "Wrapper files were not created. Check project directory permissions.");
+                            "gradle wrapper completed but " + wrapperFile.getName() + " was not created.\n" +
+                            "Check project directory permissions.");
                 }
             } else {
+                // Информативное сообщение вместо exception
                 String systemGradleHint = findSystemGradle(isWindows) != null
                         ? " (system gradle detected in PATH)"
                         : " (system gradle NOT found in PATH)";
-                return createTextResponse("### Gradle Wrapper Not Found\n\n" +
-                        "No " + wrapperFile.getName() + " in project root" + systemGradleHint + ".\n\n" +
+                return createTextResponse(
+                        "### Gradle Wrapper Not Found\n\n" +
+                        "No " + wrapperFile.getName() + " found in project root" + systemGradleHint + ".\n\n" +
                         "Options:\n" +
-                        "1. generateWrapper=true — auto-generate wrapper from system gradle\n" +
-                        "2. task='init' — initialize a new Gradle project\n" +
-                        "3. Manually add gradlew to your project");
+                        "1. Run with task='init', initType='java-application' to initialize a new Gradle project\n" +
+                        "2. Run with generateWrapper=true to generate wrapper from system Gradle\n" +
+                        "3. Add gradlew/gradlew.bat to the project manually");
             }
         }
 
-        List<String> command = new ArrayList<>();
-        command.add(wrapperFile.getAbsolutePath());
-        command.add(task);
-
-        if (!extraArgs.isEmpty()) {
-            for (String arg : extraArgs.split("\\s+")) {
-                if (!arg.isEmpty()) command.add(arg);
-            }
-        }
-
-        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
-        return formatResult(result, "Gradle task");
+        return executeGradleTask(wrapperFile.getAbsolutePath(), task, extraArgs, timeout);
     }
 
     private JsonNode handleInit(String initType, String initDsl, String extraArgs,
-                                long timeout, boolean isWindows, File wrapperFile) throws Exception {
+                                 long timeout, boolean isWindows, File wrapperFile) throws Exception {
         // init всегда через системный gradle (wrapper может не существовать)
         String systemGradle = findSystemGradle(isWindows);
 
@@ -229,6 +227,7 @@ public class GradleTool implements McpTool {
             command.add(initDsl);
         }
 
+        // Дополнительные аргументы
         if (!extraArgs.isEmpty()) {
             for (String arg : extraArgs.split("\\s+")) {
                 if (!arg.isEmpty()) command.add(arg);
@@ -239,6 +238,10 @@ public class GradleTool implements McpTool {
         return formatResult(result, "Gradle init");
     }
 
+    /**
+     * Генерирует Gradle wrapper через системный gradle.
+     * @return null если успех, строка с ошибкой если неудача
+     */
     private String generateGradleWrapper(boolean isWindows) throws Exception {
         String systemGradle = findSystemGradle(isWindows);
         if (systemGradle == null) {
@@ -254,6 +257,10 @@ public class GradleTool implements McpTool {
         return null; // success
     }
 
+    /**
+     * Ищет системный gradle в PATH.
+     * @return Имя команды gradle если найден, null если нет.
+     */
     private String findSystemGradle(boolean isWindows) {
         String gradleName = isWindows ? "gradle.bat" : "gradle";
         try {
@@ -262,6 +269,7 @@ public class GradleTool implements McpTool {
                     : new ProcessBuilder("which", gradleName);
             pb.redirectErrorStream(true);
             Process p = pb.start();
+            // Считываем вывод чтобы не заблокировать процесс
             try (var reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 while (reader.readLine() != null) { /* drain */ }
             }
@@ -271,6 +279,21 @@ public class GradleTool implements McpTool {
             }
         } catch (Exception ignored) {}
         return null;
+    }
+
+    private JsonNode executeGradleTask(String gradleExe, String task, String extraArgs, long timeout) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add(gradleExe);
+        command.add(task);
+
+        if (!extraArgs.isEmpty()) {
+            for (String arg : extraArgs.split("\\s+")) {
+                if (!arg.isEmpty()) command.add(arg);
+            }
+        }
+
+        ProcessExecutor.ExecutionResult result = ProcessExecutor.execute(command, timeout);
+        return formatResult(result, "Gradle task");
     }
 
     private JsonNode formatResult(ProcessExecutor.ExecutionResult result, String label) {
@@ -379,6 +402,9 @@ public class GradleTool implements McpTool {
         return summary.toString().trim();
     }
 
+    /**
+     * Extracts test method name from "ClassName > methodName FAILED" pattern.
+     */
     private String extractTestName(String testInfo) {
         int gt = testInfo.indexOf('>');
         int failed = testInfo.indexOf("FAILED");

@@ -120,10 +120,10 @@ public enum NtsErrorCode {
     CHANGE_CONFLICT("Edit conflict detected",
             "Content has changed since reading. expectedContent doesn't match current content."),
 
-    // ============ Session Errors ============
+    // ============ Task Errors ============
 
-    SESSION_NOT_FOUND("Session not found",
-            "Initialize session with nts_init first."),
+    TASK_NOT_FOUND("Task not found",
+            "Initialize task with nts_init first."),
 
     CHECKPOINT_NOT_FOUND("Checkpoint not found",
             "Check checkpoint name. Use action='journal' to list checkpoints."),

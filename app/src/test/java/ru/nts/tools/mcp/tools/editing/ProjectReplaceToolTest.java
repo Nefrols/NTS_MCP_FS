@@ -17,7 +17,7 @@ package ru.nts.tools.mcp.tools.editing;
 
 import ru.nts.tools.mcp.tools.fs.*;
 import ru.nts.tools.mcp.tools.editing.*;
-import ru.nts.tools.mcp.tools.session.*;
+import ru.nts.tools.mcp.tools.task.*;
 import ru.nts.tools.mcp.tools.external.*;
 import ru.nts.tools.mcp.tools.planning.*;
 import ru.nts.tools.mcp.tools.system.*;

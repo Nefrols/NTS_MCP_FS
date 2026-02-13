@@ -24,8 +24,8 @@ import java.util.Set;
  * недоступные текущей роли. Маленькая LLM попытается вызвать указанный
  * инструмент и получит ошибку — потеряет время и фокус.
  *
- * Список допустимых инструментов приходит динамически из конфигурации роли,
- * а не хардкодится.
+ * Список допустимых инструментов приходит динамически из конфигурации роли
+ * (default_allowed_nts_tools в таблице roles), а не хардкодится.
  *
  * Для external clients (VSCode, Claude Code) allowedTools = null → все tips разрешены.
  */
@@ -37,6 +37,7 @@ public final class TipFilter {
 
     /**
      * Устанавливает набор допустимых инструментов для текущего потока.
+     * Вызывается из McpTool.executeWithFeedback() при обработке ntsAllowedTools из params.
      *
      * @param tools набор имён инструментов, или null для external clients
      */
@@ -65,7 +66,7 @@ public final class TipFilter {
      * Если allowedTools == null (external client) → всегда true.
      * Иначе проверяет наличие в списке допустимых инструментов роли.
      *
-     * @param toolName имя инструмента (например "nts_session", "nts_verify")
+     * @param toolName имя инструмента (например "nts_task", "nts_verify")
      * @return true если инструмент можно упоминать в подсказках
      */
     public static boolean canMention(String toolName) {

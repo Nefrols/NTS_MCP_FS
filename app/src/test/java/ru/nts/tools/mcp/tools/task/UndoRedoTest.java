@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ru.nts.tools.mcp.tools.session;
+package ru.nts.tools.mcp.tools.task;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,12 +24,12 @@ import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.TransactionManager;
 import ru.nts.tools.mcp.tools.editing.EditFileTool;
 import ru.nts.tools.mcp.tools.fs.FileManageTool;
 import ru.nts.tools.mcp.tools.fs.FileReadTool;
-import ru.nts.tools.mcp.tools.session.SessionTool;
+import ru.nts.tools.mcp.tools.task.TaskTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,7 +44,7 @@ class UndoRedoTest {
     private final EditFileTool editTool = new EditFileTool();
     private final FileManageTool manageTool = new FileManageTool();
     private final FileReadTool readTool = new FileReadTool();
-    private final SessionTool sessionTool = new SessionTool();
+    private final TaskTool taskTool = new TaskTool();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @TempDir
@@ -53,12 +53,13 @@ class UndoRedoTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(sharedTempDir);
-        // Reset everything first (TransactionManager.reset calls SessionContext.resetAll)
+        // Reset everything first (TransactionManager.reset calls TaskContext.resetAll)
         TransactionManager.reset();
         LineAccessTracker.reset();
-        // Now create and set a stable session for the test
-        SessionContext ctx = SessionContext.getOrCreate("test-session");
-        SessionContext.setCurrent(ctx);
+        TaskContext.setForceInMemoryDb(true);
+        // Now create and set a stable task for the test
+        TaskContext ctx = TaskContext.getOrCreate("test-task");
+        TaskContext.setCurrent(ctx);
     }
 
     /**
@@ -116,9 +117,9 @@ class UndoRedoTest {
         manageTool.execute(params);
         assertFalse(Files.exists(file));
 
-        ObjectNode sessionParams = mapper.createObjectNode();
-        sessionParams.put("action", "undo");
-        sessionTool.execute(sessionParams);
+        ObjectNode taskParams = mapper.createObjectNode();
+        taskParams.put("action", "undo");
+        taskTool.execute(taskParams);
         assertTrue(Files.exists(file));
         assertEquals(content, Files.readString(file));
     }
@@ -138,9 +139,9 @@ class UndoRedoTest {
         assertFalse(Files.exists(source));
         assertTrue(Files.exists(target));
 
-        ObjectNode sessionParams = mapper.createObjectNode();
-        sessionParams.put("action", "undo");
-        sessionTool.execute(sessionParams);
+        ObjectNode taskParams = mapper.createObjectNode();
+        taskParams.put("action", "undo");
+        taskTool.execute(taskParams);
         assertTrue(Files.exists(source));
         assertFalse(Files.exists(target));
     }
@@ -160,7 +161,7 @@ class UndoRedoTest {
 
         ObjectNode undoP = mapper.createObjectNode();
         undoP.put("action", "undo");
-        sessionTool.execute(undoP);
+        taskTool.execute(undoP);
         assertEquals("init", Files.readString(file));
 
         // После undo нужно получить новый токен via FileReadTool
@@ -174,7 +175,7 @@ class UndoRedoTest {
 
         ObjectNode redoP = mapper.createObjectNode();
         redoP.put("action", "redo");
-        JsonNode redoResult = sessionTool.execute(redoP);
+        JsonNode redoResult = taskTool.execute(redoP);
         String msg = redoResult.get("content").get(0).get("text").asText();
         assertTrue(msg.contains("No operations to redo"));
         assertEquals("B", Files.readString(file));
@@ -198,15 +199,15 @@ class UndoRedoTest {
 
         ObjectNode undoP = mapper.createObjectNode();
         undoP.put("action", "undo");
-        sessionTool.execute(undoP);
-        sessionTool.execute(undoP);
-        sessionTool.execute(undoP);
+        taskTool.execute(undoP);
+        taskTool.execute(undoP);
+        taskTool.execute(undoP);
         assertEquals("0", Files.readString(file));
 
         ObjectNode redoP = mapper.createObjectNode();
         redoP.put("action", "redo");
-        sessionTool.execute(redoP);
-        sessionTool.execute(redoP);
+        taskTool.execute(redoP);
+        taskTool.execute(redoP);
         assertEquals("2", Files.readString(file));
     }
 
@@ -226,7 +227,7 @@ class UndoRedoTest {
 
         ObjectNode p = mapper.createObjectNode();
         p.put("action", "journal");
-        JsonNode result = sessionTool.execute(p);
+        JsonNode result = taskTool.execute(p);
         String text = result.get("content").get(0).get("text").asText();
 
         assertTrue(text.contains("=== TRANSACTION JOURNAL ==="));
@@ -242,7 +243,7 @@ class UndoRedoTest {
         ObjectNode cp1 = mapper.createObjectNode();
         cp1.put("action", "checkpoint");
         cp1.put("name", "PointA");
-        sessionTool.execute(cp1);
+        taskTool.execute(cp1);
 
         String token = registerFullAccess(file);
         ObjectNode edit = mapper.createObjectNode();
@@ -256,7 +257,7 @@ class UndoRedoTest {
         ObjectNode rb = mapper.createObjectNode();
         rb.put("action", "rollback");
         rb.put("name", "PointA");
-        sessionTool.execute(rb);
+        taskTool.execute(rb);
 
         assertEquals("initial", Files.readString(file));
     }

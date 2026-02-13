@@ -25,7 +25,7 @@ import ru.nts.tools.mcp.core.*;
 import ru.nts.tools.mcp.tools.editing.EditFileTool;
 import ru.nts.tools.mcp.tools.fs.FileManageTool;
 import ru.nts.tools.mcp.tools.fs.FileReadTool;
-import ru.nts.tools.mcp.tools.session.SessionTool;
+import ru.nts.tools.mcp.tools.task.TaskTool;
 
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
@@ -45,7 +45,7 @@ class ExternalChangeIntegrationTest {
     private FileReadTool readTool;
     private EditFileTool editTool;
     private FileManageTool manageTool;
-    private SessionTool sessionTool;
+    private TaskTool TaskTool;
     private ObjectMapper mapper;
 
     @TempDir
@@ -56,12 +56,12 @@ class ExternalChangeIntegrationTest {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
         LineAccessTracker.reset();
-        SessionContext.resetAll();
+        TaskContext.resetAll();
 
         readTool = new FileReadTool();
         editTool = new EditFileTool();
         manageTool = new FileManageTool();
-        sessionTool = new SessionTool();
+        TaskTool = new TaskTool();
         mapper = new ObjectMapper();
     }
 
@@ -99,7 +99,7 @@ class ExternalChangeIntegrationTest {
         readTool.execute(params);
 
         // Проверяем, что снапшот зарегистрирован
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         assertTrue(tracker.hasSnapshot(file));
 
         ExternalChangeTracker.FileSnapshot snapshot = tracker.getSnapshot(file);
@@ -167,7 +167,7 @@ class ExternalChangeIntegrationTest {
         // Проверяем журнал
         ObjectNode journalParams = mapper.createObjectNode();
         journalParams.put("action", "journal");
-        JsonNode journal = sessionTool.execute(journalParams);
+        JsonNode journal = TaskTool.execute(journalParams);
         String journalText = journal.get("content").get(0).get("text").asText();
 
         assertTrue(journalText.contains("[EXTERNAL]"));
@@ -191,7 +191,7 @@ class ExternalChangeIntegrationTest {
         // Undo внешнего изменения
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        TaskTool.execute(undoParams);
 
         assertEquals(originalContent, Files.readString(file));
     }
@@ -210,7 +210,7 @@ class ExternalChangeIntegrationTest {
         ranges.addObject().put("startLine", 4).put("endLine", 5);
         readTool.execute(params);
 
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         assertTrue(tracker.hasSnapshot(file));
     }
 
@@ -274,7 +274,7 @@ class ExternalChangeIntegrationTest {
         // Проверяем, что внешнее изменение записано в журнал
         ObjectNode journalParams = mapper.createObjectNode();
         journalParams.put("action", "journal");
-        JsonNode journal = sessionTool.execute(journalParams);
+        JsonNode journal = TaskTool.execute(journalParams);
         String journalText = journal.get("content").get(0).get("text").asText();
 
         assertTrue(journalText.contains("[EXTERNAL]"));
@@ -300,7 +300,7 @@ class ExternalChangeIntegrationTest {
         editTool.execute(editParams);
 
         // Проверяем, что снапшот обновлён
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         ExternalChangeTracker.FileSnapshot snapshot = tracker.getSnapshot(file);
         assertEquals("new content", snapshot.content());
     }
@@ -319,7 +319,7 @@ class ExternalChangeIntegrationTest {
         readParams.put("startLine", 1);
         readTool.execute(readParams);
 
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         assertTrue(tracker.hasSnapshot(source));
 
         // Перемещаем файл
@@ -346,7 +346,7 @@ class ExternalChangeIntegrationTest {
         readParams.put("startLine", 1);
         readTool.execute(readParams);
 
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         assertTrue(tracker.hasSnapshot(file));
 
         // Переименовываем
@@ -370,7 +370,7 @@ class ExternalChangeIntegrationTest {
         readParams.put("startLine", 1);
         readTool.execute(readParams);
 
-        ExternalChangeTracker tracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker tracker = TaskContext.currentOrDefault().externalChanges();
         assertTrue(tracker.hasSnapshot(file));
 
         // Удаляем
@@ -414,11 +414,11 @@ class ExternalChangeIntegrationTest {
         // Можем откатить внешнее изменение
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        TaskTool.execute(undoParams);
         assertEquals("v1", Files.readString(file));
 
         // Можем откатить наше редактирование
-        sessionTool.execute(undoParams);
+        TaskTool.execute(undoParams);
         assertEquals("v0", Files.readString(file));
     }
 
@@ -519,7 +519,7 @@ class ExternalChangeIntegrationTest {
         // В журнале должно быть два внешних изменения
         ObjectNode journalParams = mapper.createObjectNode();
         journalParams.put("action", "journal");
-        JsonNode journal = sessionTool.execute(journalParams);
+        JsonNode journal = TaskTool.execute(journalParams);
         String journalText = journal.get("content").get(0).get("text").asText();
 
         // Считаем количество вхождений [EXTERNAL]

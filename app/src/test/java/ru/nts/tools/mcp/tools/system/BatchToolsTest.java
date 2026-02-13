@@ -61,7 +61,8 @@ class BatchToolsTest {
         String content = Files.readString(file);
         int lineCount = content.split("\n", -1).length;
         String rangeContent = buildRangeContent(content, 1, lineCount);
-        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, rangeContent, lineCount);
+        long fileCrc = LineAccessToken.computeRangeCrc(content);
+        LineAccessToken token = LineAccessTracker.registerAccess(file, 1, lineCount, rangeContent, lineCount, fileCrc);
         return token.encode();
     }
 
@@ -426,10 +427,10 @@ class BatchToolsTest {
                 (ex.getCause() != null && ex.getCause().getMessage().contains("no previous operation")));
     }
 
-    // ============ Session References: {{id.path}} для rename/move ============
+    // ============ Task References: {{id.path}} для rename/move ============
 
     @Test
-    void testSessionReferencesPathInterpolation() throws Exception {
+    void testTaskReferencesPathInterpolation() throws Exception {
         // Тест базовой интерполяции {{id.path}}
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");
@@ -460,7 +461,7 @@ class BatchToolsTest {
     }
 
     @Test
-    void testSessionReferencesAfterRename() throws Exception {
+    void testTaskReferencesAfterRename() throws Exception {
         // Тест: create → rename → edit с использованием {{id.path}} который автоматически обновляется
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");
@@ -502,7 +503,7 @@ class BatchToolsTest {
     }
 
     @Test
-    void testSessionReferencesAfterMove() throws Exception {
+    void testTaskReferencesAfterMove() throws Exception {
         // Тест: create → move → edit с использованием {{id.path}}
         Files.createDirectories(tempDir.resolve("subdir"));
 
@@ -545,7 +546,7 @@ class BatchToolsTest {
     }
 
     @Test
-    void testMultipleFilesSessionReferences() throws Exception {
+    void testMultipleFilesTaskReferences() throws Exception {
         // Тест: работа с несколькими файлами через разные id
         ObjectNode params = mapper.createObjectNode();
         ArrayNode actions = params.putArray("actions");

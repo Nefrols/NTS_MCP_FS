@@ -21,7 +21,7 @@ import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.treesitter.LanguageDetector;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractorUtils;
 import ru.nts.tools.mcp.core.treesitter.SymbolInfo;
@@ -160,11 +160,11 @@ public class ExtractVariableOperation implements RefactoringOperation {
                 int lineCount = lines.size();
                 long crc32c = LineAccessToken.computeRangeCrc(newContent);
 
-                SessionContext.currentOrDefault().externalChanges()
+                TaskContext.currentOrDefault().externalChanges()
                         .updateSnapshot(path, newContent, crc32c, StandardCharsets.UTF_8, lineCount);
 
                 LineAccessToken token = LineAccessTracker.registerAccess(
-                        path, 1, lineCount, newContent, lineCount);
+                        path, 1, lineCount, newContent, lineCount, crc32c);
 
                 String txId = context.commitTransaction();
 
@@ -490,8 +490,6 @@ public class ExtractVariableOperation implements RefactoringOperation {
             if (occ.startColumn() > 0) {
                 int sc = occ.startColumn() - 1;
                 String before = firstLine.substring(0, sc);
-                // Для последней строки
-                String lastLine = lines.size() > lineIdx + 1 ? "" : firstLine;
                 lines.set(lineIdx, before + variableName + ";");
             } else {
                 lines.set(lineIdx, indent + variableName + ";");

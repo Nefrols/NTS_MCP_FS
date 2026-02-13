@@ -25,7 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.nio.file.Files;
@@ -48,9 +48,10 @@ class FileManageToolTest {
     @BeforeEach
     void setUp() {
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext ctx = SessionContext.getOrCreate("test");
-        SessionContext.setCurrent(ctx);
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test");
+        TaskContext.setCurrent(ctx);
         TransactionManager.reset();
         LineAccessTracker.reset();
     }
@@ -106,8 +107,9 @@ class FileManageToolTest {
             Files.writeString(original, content);
 
             // Register access token for the file
+            long fileCrc = LineAccessToken.computeRangeCrc(content);
             LineAccessToken originalToken = LineAccessTracker.registerAccess(
-                    original, 1, 3, content, 3);
+                    original, 1, 3, content, 3, fileCrc);
             assertNotNull(originalToken);
             String originalEncoded = originalToken.encode();
 
@@ -150,8 +152,9 @@ class FileManageToolTest {
             Files.writeString(original, content);
 
             // Register access token
+            long fileCrc = LineAccessToken.computeRangeCrc(content);
             LineAccessToken originalToken = LineAccessTracker.registerAccess(
-                    original, 1, 2, content, 2);
+                    original, 1, 2, content, 2, fileCrc);
             String originalEncoded = originalToken.encode();
 
             // Rename the file
@@ -199,10 +202,11 @@ class FileManageToolTest {
             Files.writeString(original, content);
 
             // Register multiple tokens for different ranges
+            long fileCrc = LineAccessToken.computeRangeCrc(content);
             LineAccessTracker.registerAccess(original, 1, 3,
-                    "package test;\n\npublic class Code {", 7);
+                    "package test;\n\npublic class Code {", 7, fileCrc);
             LineAccessTracker.registerAccess(original, 4, 6,
-                    "    void method1() {}\n    void method2() {}\n    void method3() {}", 7);
+                    "    void method1() {}\n    void method2() {}\n    void method3() {}", 7, fileCrc);
 
             List<LineAccessToken> originalTokens = LineAccessTracker.getTokensForFile(original);
             int originalTokenCount = originalTokens.size();
@@ -279,7 +283,7 @@ class FileManageToolTest {
             Files.writeString(file, "content");
 
             // Register a token
-            LineAccessTracker.registerAccess(file, 1, 1, "content", 1);
+            LineAccessTracker.registerAccess(file, 1, 1, "content", 1, LineAccessToken.computeRangeCrc("content"));
             List<LineAccessToken> beforeTokens = LineAccessTracker.getTokensForFile(file);
             assertFalse(beforeTokens.isEmpty(), "Token should exist before delete");
 

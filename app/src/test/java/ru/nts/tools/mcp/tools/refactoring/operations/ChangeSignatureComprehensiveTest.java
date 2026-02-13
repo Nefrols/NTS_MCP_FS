@@ -10,7 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.tools.refactoring.CodeRefactorTool;
 
 import java.nio.file.Files;
@@ -34,8 +34,9 @@ class ChangeSignatureComprehensiveTest {
         mapper = new ObjectMapper();
         tool = new CodeRefactorTool();
         PathSanitizer.setRoot(tempDir);
-        SessionContext.resetAll();
-        SessionContext.setCurrent(SessionContext.getOrCreate("test"));
+        TaskContext.resetAll();
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext.setCurrent(TaskContext.getOrCreate("test"));
     }
 
     // ==================== ADD PARAMETER ====================

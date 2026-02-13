@@ -115,9 +115,9 @@ NTS trades micro-efficiency for macro-reliability. The agent works slightly hard
 #### 1. 📟 Agent HUD (Heads-Up Display)
 The server injects a status header into *every* tool response. The Agent never loses context.
 ```text
-[HUD sid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Session: 5 edits | Unlocked: 3 files
+[HUD tid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Task: 5 edits | Unlocked: 3 files
 ```
-*   **Session Context:** Reminds the agent of the active Session ID.
+*   **Task Context:** Reminds the agent of the active Task ID.
 *   **Progress Tracking:** Shows current TODO status (Done/Pending) and the *next* active task.
 *   **Safety Stats:** Shows how many files are currently unlocked for editing.
 
@@ -148,15 +148,15 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 *   **Structured Error Codes:** All errors include machine-readable codes (`FILE_NOT_FOUND`, `TOKEN_EXPIRED`, etc.) with human-readable solutions. No more cryptic exceptions — every error tells you exactly what went wrong and how to fix it.
 
 #### 4. ⏪ State Management: Checkpoints & Deep Undo
-*   **Session Journal:** Logs every logical step (not just file IO).
-*   **Checkpoints:** Agent can run `nts_session checkpoint('pre-refactor')` and safely `rollback` if the approach fails.
+*   **Task Journal:** Logs every logical step (not just file IO).
+*   **Checkpoints:** Agent can run `nts_task checkpoint('pre-refactor')` and safely `rollback` if the approach fails.
 *   **Deep Undo:** The system tracks **File Lineage**. If you move `FileA -> FileB` and then hit Undo, NTS knows to restore content to `FileA`.
 *   **Git Integration:** Can create Git stashes as emergency fallbacks (`git_checkpoint`).
 
 #### 4.1. 👁️ External Change Tracking
 The server automatically detects when files are modified **outside of MCP** (by user, linter, IDE, or other tools).
 *   **CRC-based Detection:** Each file read creates a snapshot. On next access, if the CRC differs, the change is detected.
-*   **File History:** External changes are recorded in file history and can be reviewed via `nts_session journal`.
+*   **File History:** External changes are recorded in file history and can be reviewed via `nts_task journal`.
 *   **Smart Prompts:** When an external change is detected, the agent receives a TIP recommending to review changes before proceeding, as they may be intentional user edits.
 *   **Undo Support:** If needed, external changes can be undone through the standard undo mechanism.
 
@@ -233,7 +233,7 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 │                                                                             │
 │   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
 │   │  INIT    │────▶│  READ    │────▶│  EDIT    │────▶│  VERIFY  │          │
-│   │ Session  │     │ + Token  │     │ + Token  │     │  (Diff)  │          │
+│   │  Task    │     │ + Token  │     │ + Token  │     │  (Diff)  │          │
 │   └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │
 │        │                                                   │                │
 │        │              ┌──────────┐                         │                │
@@ -247,17 +247,17 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 
 #### 🔐 `nts_init` — The Accountability Boundary
 
-**Why it exists:** Creates an isolated session with its own undo history, checkpoints, and token registry.
+**Why it exists:** Creates an isolated task with its own undo history, checkpoints, and token registry.
 
-**Discipline role:** Everything the agent does is tracked. There's no "anonymous" editing. If something breaks, the session journal knows exactly what happened and when.
+**Discipline role:** Everything the agent does is tracked. There's no "anonymous" editing. If something breaks, the task journal knows exactly what happened and when.
 
-**Session Reactivation:** If the server restarts or connection drops, the session can be reactivated:
+**Task Reactivation:** If the server restarts or connection drops, the task can be reactivated:
 ```json
-{ "sessionId": "your-previous-uuid" }
+{ "taskId": "your-previous-uuid" }
 ```
-This restores the session directory with todos and file history. In-memory state (tokens, undo stack) starts fresh, but disk-persisted data is preserved.
+This restores the task directory with todos and file history. In-memory state (tokens, undo stack) starts fresh, but disk-persisted data is preserved.
 
-**Connection:** All other tools require `sessionId`. This isn't bureaucracy — it's **traceability**.
+**Connection:** All other tools require `taskId`. This isn't bureaucracy — it's **traceability**.
 
 ---
 
@@ -317,7 +317,7 @@ Each file is separated in output with its own TOKEN. Errors in one file don't af
 - `rename`/`move` **transfers tokens via path aliasing** — tokens remain valid even after the file is moved (transitive chains like `A → B → C` work)
 - `delete` **invalidates tokens** — no editing ghosts
 
-**Connection:** Works with `nts_batch_tools` for atomic multi-file restructuring. Path aliases persist across the session.
+**Connection:** Works with `nts_batch_tools` for atomic multi-file restructuring. Path aliases persist across the task.
 
 ---
 
@@ -338,9 +338,9 @@ grep("TODO") → finds line 47 → returns TOKEN for lines 45-50
 
 ---
 
-#### ⏪ `nts_session` — The Panic Button
+#### ⏪ `nts_task` — The Panic Button
 
-**Why it exists:** Undo, redo, checkpoints, rollback, and session journal.
+**Why it exists:** Undo, redo, checkpoints, rollback, and task journal.
 
 **Discipline role:** When the agent makes a mistake, it has **structured recovery** instead of uncontrolled fix-spiraling.
 
@@ -432,10 +432,10 @@ checkpoint("before-risky-refactor")
 
 **Discipline role:** 
 - `git_checkpoint` creates stash as emergency backup
-- `commit_session` auto-generates commit message from TODO progress
+- `commit_task` auto-generates commit message from TODO progress
 - Safe operations only (no push/force)
 
-**Connection:** Integrates with session journal. Commits can reference completed tasks.
+**Connection:** Integrates with task journal. Commits can reference completed tasks.
 
 ---
 
@@ -473,10 +473,10 @@ checkpoint("before-risky-refactor")
 
 These tools aren't independent utilities. They form a **closed discipline loop**:
 
-1. **Session** establishes accountability
+1. **Task** establishes accountability
 2. **Read** forces attention and issues tokens
 3. **Edit** requires tokens and shows results
-4. **Session** provides recovery when needed
+4. **Task** provides recovery when needed
 5. **Batch** enables complex operations atomically
 6. **HUD + TODO** maintains focus across long sessions
 
@@ -690,7 +690,7 @@ NTS меняет микро-эффективность на макро-надё�
 #### 1. 📟 HUD для Агента (Heads-Up Display)
 Сервер внедряет строку статуса в *каждый* ответ инструмента. Агент никогда не теряет контекст.
 ```text
-[HUD sid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Session: 5 edits | Unlocked: 3 files
+[HUD tid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Task: 5 edits | Unlocked: 3 files
 ```
 *   **Контекст сессии:** Напоминает агенту ID активной сессии.
 *   **Трекинг прогресса:** Показывает состояние TODO (Готово/В ожидании) и *следующую* задачу.
@@ -724,14 +724,14 @@ NTS меняет микро-эффективность на макро-надё�
 
 #### 4. ⏪ Управление состоянием: Чекпоинты и Deep Undo
 *   **Журнал сессии:** Логирует каждый логический шаг.
-*   **Чекпоинты:** Агент может создать `nts_session checkpoint('pre-refactor')` и безопасно сделать `rollback`, если гипотеза не сработала.
+*   **Чекпоинты:** Агент может создать `nts_task checkpoint('pre-refactor')` и безопасно сделать `rollback`, если гипотеза не сработала.
 *   **Deep Undo (Умный откат):** Система отслеживает **Родословную файлов (Lineage)**. Если переместить `FileA -> FileB` и нажать Undo, NTS поймет, что контент нужно вернуть в `FileA`.
 *   **Git интеграция:** Возможность создавать Git stashes как аварийные точки сохранения (`git_checkpoint`).
 
 #### 4.1. 👁️ Отслеживание внешних изменений
 Сервер автоматически определяет, когда файлы были изменены **вне MCP** (пользователем, линтером, IDE или другими инструментами).
 *   **Детекция по CRC:** При каждом чтении файла создаётся снапшот. При следующем доступе, если CRC отличается — изменение обнаруживается.
-*   **История файла:** Внешние изменения записываются в историю и доступны через `nts_session journal`.
+*   **История файла:** Внешние изменения записываются в историю и доступны через `nts_task journal`.
 *   **Умные подсказки:** При обнаружении внешнего изменения агент получает TIP с рекомендацией изучить изменения перед продолжением работы, т.к. они могут быть преднамеренной правкой пользователя.
 *   **Поддержка отката:** При необходимости внешние изменения можно откатить через стандартный механизм undo.
 
@@ -828,11 +828,11 @@ NTS меняет микро-эффективность на макро-надё�
 
 **Реактивация сессии:** Если сервер перезапустился или соединение прервалось, сессию можно реактивировать:
 ```json
-{ "sessionId": "ваш-предыдущий-uuid" }
+{ "taskId": "ваш-предыдущий-uuid" }
 ```
 Это восстанавливает директорию сессии с todos и историей файлов. Состояние в памяти (токены, стек undo) начинается с чистого листа, но данные на диске сохраняются.
 
-**Связь:** Все остальные инструменты требуют `sessionId`. Это не бюрократия — это **прослеживаемость**.
+**Связь:** Все остальные инструменты требуют `taskId`. Это не бюрократия — это **прослеживаемость**.
 
 ---
 
@@ -913,7 +913,7 @@ grep("TODO") → находит строку 47 → возвращает TOKEN �
 
 ---
 
-#### ⏪ `nts_session` — Кнопка паники
+#### ⏪ `nts_task` — Кнопка паники
 
 **Зачем:** Undo, redo, чекпоинты, откат и журнал сессии.
 
@@ -1007,7 +1007,7 @@ checkpoint("before-risky-refactor")
 
 **Роль в дисциплине:**
 - `git_checkpoint` создаёт stash как аварийный бэкап
-- `commit_session` автогенерирует сообщение коммита из прогресса TODO
+- `commit_task` автогенерирует сообщение коммита из прогресса TODO
 - Только безопасные операции (без push/force)
 
 **Связь:** Интегрируется с журналом сессии. Коммиты могут ссылаться на завершённые задачи.
@@ -1048,10 +1048,10 @@ checkpoint("before-risky-refactor")
 
 Эти инструменты — не независимые утилиты. Они образуют **замкнутый цикл дисциплины**:
 
-1. **Session** устанавливает ответственность
+1. **Task** устанавливает ответственность
 2. **Read** принуждает к вниманию и выдаёт токены
 3. **Edit** требует токены и показывает результаты
-4. **Session** обеспечивает восстановление при необходимости
+4. **Task** обеспечивает восстановление при необходимости
 5. **Batch** позволяет сложные операции атомарно
 6. **HUD + TODO** поддерживают фокус на протяжении длинных сессий
 

@@ -21,34 +21,20 @@ import java.util.Set;
 
 /**
  * Фасад для управления токенами доступа к строкам.
- * Делегирует все операции к session-scoped SessionLineAccessTracker.
+ * Делегирует все операции к task-scoped TaskLineAccessTracker.
  *
  * Обеспечивает обратную совместимость со старым статическим API,
- * при этом изолируя токены между сессиями.
+ * при этом изолируя токены между задачами.
  */
 public class LineAccessTracker {
 
-    // Делегирование к session-scoped трекеру
-    private static SessionLineAccessTracker ctx() {
-        return SessionContext.currentOrDefault().tokens();
+    // Делегирование к task-scoped трекеру
+    private static TaskLineAccessTracker ctx() {
+        return TaskContext.currentOrDefault().tokens();
     }
 
     /**
      * Регистрирует доступ к диапазону строк и возвращает токен.
-     *
-     * @param path Путь к файлу
-     * @param startLine Начало диапазона (1-based)
-     * @param endLine Конец диапазона (1-based)
-     * @param rangeContent Содержимое диапазона (для вычисления CRC)
-     * @param lineCount Общее количество строк в файле
-     * @return Токен доступа к диапазону
-     */
-    public static LineAccessToken registerAccess(Path path, int startLine, int endLine, String rangeContent, int lineCount) {
-        return ctx().registerAccess(path, startLine, endLine, rangeContent, lineCount);
-    }
-
-    /**
-     * Регистрирует доступ к диапазону строк с CRC всего файла.
      *
      * @param path Путь к файлу
      * @param startLine Начало диапазона (1-based)
@@ -196,7 +182,7 @@ public class LineAccessTracker {
     }
 
     /**
-     * Сбрасывает все токены текущей сессии.
+     * Сбрасывает все токены текущей задачи.
      */
     public static void reset() {
         ctx().reset();

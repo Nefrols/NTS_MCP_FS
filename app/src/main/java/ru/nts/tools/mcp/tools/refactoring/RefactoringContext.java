@@ -18,8 +18,8 @@ package ru.nts.tools.mcp.tools.refactoring;
 import ru.nts.tools.mcp.core.ExternalChangeTracker;
 import ru.nts.tools.mcp.core.FileUtils;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
-import ru.nts.tools.mcp.core.SessionTransactionManager;
+import ru.nts.tools.mcp.core.TaskContext;
+import ru.nts.tools.mcp.core.TaskTransactionManager;
 import ru.nts.tools.mcp.core.treesitter.SymbolExtractor;
 import ru.nts.tools.mcp.core.treesitter.SymbolResolver;
 import ru.nts.tools.mcp.core.treesitter.TreeSitterManager;
@@ -40,11 +40,11 @@ import java.util.zip.CRC32C;
  */
 public class RefactoringContext {
 
-    private final SessionContext sessionContext;
+    private final TaskContext taskContext;
     private final TreeSitterManager treeManager;
     private final SymbolExtractor symbolExtractor;
     private final SymbolResolver symbolResolver;
-    private final SessionTransactionManager transactionManager;
+    private final TaskTransactionManager transactionManager;
     private final Path projectRoot;
 
     // Кэш для промежуточных результатов
@@ -60,16 +60,16 @@ public class RefactoringContext {
     private final Map<Path, String> virtualContents = new HashMap<>();
 
     public RefactoringContext() {
-        this.sessionContext = SessionContext.current();
+        this.taskContext = TaskContext.current();
         this.treeManager = TreeSitterManager.getInstance();
         this.symbolExtractor = SymbolExtractor.getInstance();
         this.symbolResolver = SymbolResolver.getInstance();
-        this.transactionManager = sessionContext.transactions();
+        this.transactionManager = taskContext.transactions();
         this.projectRoot = PathSanitizer.getRoot();
     }
 
-    public SessionContext getSessionContext() {
-        return sessionContext;
+    public TaskContext getTaskContext() {
+        return taskContext;
     }
 
     public TreeSitterManager getTreeManager() {
@@ -84,7 +84,7 @@ public class RefactoringContext {
         return symbolResolver;
     }
 
-    public SessionTransactionManager getTransactionManager() {
+    public TaskTransactionManager getTransactionManager() {
         return transactionManager;
     }
 
@@ -233,7 +233,7 @@ public class RefactoringContext {
      * так и файлы, затронутые в текущей транзакции (через backup).
      */
     public void updateSnapshots() {
-        ExternalChangeTracker tracker = sessionContext.externalChanges();
+        ExternalChangeTracker tracker = taskContext.externalChanges();
 
         // Объединяем явно записанные файлы и файлы из транзакции
         Set<Path> allAffectedFiles = new HashSet<>(writtenFiles);
@@ -299,7 +299,7 @@ public class RefactoringContext {
         }
 
         // 5. Переносим снапшот для отслеживания внешних изменений
-        sessionContext.externalChanges().moveSnapshot(normalizedOld, normalizedNew);
+        taskContext.externalChanges().moveSnapshot(normalizedOld, normalizedNew);
 
         // 6. Записываем перемещение для Path Lineage (Deep Undo)
         transactionManager.recordFileMove(normalizedOld, normalizedNew);

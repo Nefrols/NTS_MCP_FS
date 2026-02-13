@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import ru.nts.tools.mcp.tools.session.SessionTool;
+import ru.nts.tools.mcp.tools.task.TaskTool;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,11 +30,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты для записи внешних изменений и их undo/redo.
- * Тестирует SessionTransactionManager.recordExternalChange() и связанную функциональность.
+ * Тестирует TaskTransactionManager.recordExternalChange() и связанную функциональность.
  */
 class ExternalChangeTransactionTest {
 
-    private SessionTool sessionTool;
+    private TaskTool taskTool;
     private ObjectMapper mapper;
 
     @TempDir
@@ -45,9 +45,9 @@ class ExternalChangeTransactionTest {
         PathSanitizer.setRoot(tempDir);
         TransactionManager.reset();
         LineAccessTracker.reset();
-        SessionContext.resetAll();
+        TaskContext.resetAll();
 
-        sessionTool = new SessionTool();
+        taskTool = new TaskTool();
         mapper = new ObjectMapper();
     }
 
@@ -69,7 +69,7 @@ class ExternalChangeTransactionTest {
         // Проверяем, что изменение отображается в журнале
         ObjectNode params = mapper.createObjectNode();
         params.put("action", "journal");
-        JsonNode result = sessionTool.execute(params);
+        JsonNode result = taskTool.execute(params);
         String journal = result.get("content").get(0).get("text").asText();
 
         assertTrue(journal.contains("[EXTERNAL]"));
@@ -91,7 +91,7 @@ class ExternalChangeTransactionTest {
 
         ObjectNode params = mapper.createObjectNode();
         params.put("action", "journal");
-        JsonNode result = sessionTool.execute(params);
+        JsonNode result = taskTool.execute(params);
         String journal = result.get("content").get(0).get("text").asText();
 
         assertTrue(journal.contains("12345678"));
@@ -121,7 +121,7 @@ class ExternalChangeTransactionTest {
         // Выполняем undo
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        JsonNode undoResult = sessionTool.execute(undoParams);
+        JsonNode undoResult = taskTool.execute(undoParams);
         String undoMsg = undoResult.get("content").get(0).get("text").asText();
 
         // Проверяем сообщение
@@ -150,13 +150,13 @@ class ExternalChangeTransactionTest {
         undoParams.put("action", "undo");
 
         // Откатываем все три изменения
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("v2", Files.readString(file));
 
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("v1", Files.readString(file));
 
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("v0", Files.readString(file));
     }
 
@@ -174,13 +174,13 @@ class ExternalChangeTransactionTest {
         // Undo
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals(originalContent, Files.readString(file));
 
         // Redo
         ObjectNode redoParams = mapper.createObjectNode();
         redoParams.put("action", "redo");
-        sessionTool.execute(redoParams);
+        taskTool.execute(redoParams);
 
         // После redo файл должен содержать то, что было после внешнего изменения
         // (т.е. то, что было на диске на момент undo)
@@ -226,7 +226,7 @@ class ExternalChangeTransactionTest {
         // Проверяем журнал - оба должны быть
         ObjectNode params = mapper.createObjectNode();
         params.put("action", "journal");
-        JsonNode result = sessionTool.execute(params);
+        JsonNode result = taskTool.execute(params);
         String journal = result.get("content").get(0).get("text").asText();
 
         assertTrue(journal.contains("Normal edit"));
@@ -235,11 +235,11 @@ class ExternalChangeTransactionTest {
         // Undo внешнего изменения
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("after edit", Files.readString(file));
 
         // Undo обычной транзакции
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("init", Files.readString(file));
     }
 
@@ -254,7 +254,7 @@ class ExternalChangeTransactionTest {
 
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
 
         assertEquals("", Files.readString(file));
     }
@@ -273,7 +273,7 @@ class ExternalChangeTransactionTest {
 
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
 
         assertEquals(largeContent, Files.readString(file));
     }
@@ -288,7 +288,7 @@ class ExternalChangeTransactionTest {
 
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
 
         assertEquals(unicodeContent, Files.readString(file));
     }
@@ -304,7 +304,7 @@ class ExternalChangeTransactionTest {
 
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
 
         assertEquals("old", Files.readString(file));
     }
@@ -322,7 +322,7 @@ class ExternalChangeTransactionTest {
         // Undo
         ObjectNode undoParams = mapper.createObjectNode();
         undoParams.put("action", "undo");
-        sessionTool.execute(undoParams);
+        taskTool.execute(undoParams);
         assertEquals("v0", Files.readString(file));
 
         // Второе внешнее изменение (должно очистить redo stack)
@@ -332,7 +332,7 @@ class ExternalChangeTransactionTest {
         // Попытка redo должна сообщить "нечего повторять"
         ObjectNode redoParams = mapper.createObjectNode();
         redoParams.put("action", "redo");
-        JsonNode result = sessionTool.execute(redoParams);
+        JsonNode result = taskTool.execute(redoParams);
         String msg = result.get("content").get(0).get("text").asText();
 
         assertTrue(msg.contains("No operations to redo"));

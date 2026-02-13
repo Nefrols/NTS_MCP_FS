@@ -19,16 +19,16 @@ import java.nio.file.Path;
 
 /**
  * Фасад для трекера результатов поиска.
- * Делегирует все операции к session-scoped SessionSearchTracker.
+ * Делегирует все операции к task-scoped TaskSearchTracker.
  *
  * Обеспечивает обратную совместимость со старым статическим API,
- * при этом изолируя кеш поиска между сессиями.
+ * при этом изолируя кеш поиска между задачами.
  */
 public class SearchTracker {
 
-    // Делегирование к session-scoped трекеру
-    private static SessionSearchTracker ctx() {
-        return SessionContext.currentOrDefault().search();
+    // Делегирование к task-scoped трекеру
+    private static TaskSearchTracker ctx() {
+        return TaskContext.currentOrDefault().search();
     }
 
     /**

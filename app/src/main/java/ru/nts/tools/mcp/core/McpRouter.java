@@ -62,15 +62,30 @@ public class McpRouter {
      * Формирует список всех доступных инструментов в формате, соответствующем протоколу MCP.
      * Используется для ответа на запрос 'tools/list'.
      *
-     * Для инструментов, требующих сессию (requiresSession=true), автоматически добавляется
-     * обязательный параметр sessionId в inputSchema. Это позволяет агентам передавать
-     * sessionId напрямую в аргументах вызова, а не только через _meta.
+     * Для инструментов, требующих задачу (requiresTask=true), автоматически добавляется
+     * обязательный параметр taskId в inputSchema. Это позволяет агентам передавать
+     * taskId напрямую в аргументах вызова, а не только через _meta.
      *
      * @return JsonNode, содержащий массив объектов с описанием имен, описаний и схем параметров инструментов.
      */
     public JsonNode listTools() {
+        return listTools(false);
+    }
+
+    /**
+     * Формирует список инструментов с возможностью включения внутренних.
+     * Оркестратор (доверенный клиент) передает includeInternal=true,
+     * чтобы получить finish-сигналы и другие внутренние инструменты.
+     *
+     * @param includeInternal если true, включает internal-инструменты в список
+     */
+    public JsonNode listTools(boolean includeInternal) {
         ArrayNode toolsArray = mapper.createArrayNode();
         for (McpTool tool : tools.values()) {
+            // Внутренние инструменты (finish-сигналы, вопросы архитектора, вызов скаута)
+            // не отдаются внешним MCP-клиентам, но доступны оркестратору
+            if (!includeInternal && tool.isInternal()) continue;
+
             ObjectNode toolNode = mapper.createObjectNode();
             toolNode.put("name", tool.getName());
             // Добавляем префикс категории в описание для лучшей визуализации в UI клиентов
@@ -81,29 +96,29 @@ public class McpRouter {
             // Получаем базовую схему инструмента
             JsonNode baseSchema = tool.getInputSchema();
 
-            // Для инструментов, требующих сессию, добавляем sessionId в схему
-            if (tool.requiresSession() && baseSchema instanceof ObjectNode schemaNode) {
+            // Для инструментов, требующих задачу, добавляем taskId в схему
+            if (tool.requiresTask() && baseSchema instanceof ObjectNode schemaNode) {
                 ObjectNode enrichedSchema = schemaNode.deepCopy();
 
-                // Добавляем sessionId в properties
+                // Добавляем taskId в properties
                 ObjectNode properties = (ObjectNode) enrichedSchema.get("properties");
                 if (properties == null) {
                     properties = mapper.createObjectNode();
                     enrichedSchema.set("properties", properties);
                 }
 
-                ObjectNode sessionIdProp = mapper.createObjectNode();
-                sessionIdProp.put("type", "string");
-                sessionIdProp.put("description", "Session UUID obtained from nts_init. Required for all tools except nts_init.");
-                properties.set("sessionId", sessionIdProp);
+                ObjectNode taskIdProp = mapper.createObjectNode();
+                taskIdProp.put("type", "string");
+                taskIdProp.put("description", "Task UUID obtained from nts_init. Required for all tools except nts_init.");
+                properties.set("taskId", taskIdProp);
 
-                // Добавляем sessionId в required
+                // Добавляем taskId в required
                 ArrayNode required = (ArrayNode) enrichedSchema.get("required");
                 if (required == null) {
                     required = mapper.createArrayNode();
                     enrichedSchema.set("required", required);
                 }
-                required.add("sessionId");
+                required.add("taskId");
 
                 toolNode.set("inputSchema", enrichedSchema);
             } else {
@@ -147,17 +162,17 @@ public class McpRouter {
     }
 
     /**
-     * Проверяет, требует ли инструмент валидную сессию.
+     * Проверяет, требует ли инструмент валидную задачу.
      *
      * @param name Имя инструмента.
-     * @return true если инструмент требует сессию, false если может работать без неё.
+     * @return true если инструмент требует задачу, false если может работать без неё.
      * @throws IllegalArgumentException если инструмент не найден.
      */
-    public boolean toolRequiresSession(String name) {
+    public boolean toolRequiresTask(String name) {
         McpTool tool = getTool(name);
         if (tool == null) {
             throw new IllegalArgumentException("Tool not found: " + name);
         }
-        return tool.requiresSession();
+        return tool.requiresTask();
     }
 }

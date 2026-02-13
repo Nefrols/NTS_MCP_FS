@@ -18,6 +18,7 @@ package ru.nts.tools.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.BufferedReader;
@@ -47,7 +48,8 @@ public class McpIntegrator {
     /**
      * Манипулятор JSON с поддержкой красивого форматирования.
      */
-    private static final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+    private static final ObjectMapper mapper = JsonMapper.builder()
+            .enable(SerializationFeature.INDENT_OUTPUT).build();
     
     /**
      * Имя сервера в конфигурации клиентов.

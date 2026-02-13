@@ -23,7 +23,7 @@ import ru.nts.tools.mcp.core.LineAccessTracker;
 import ru.nts.tools.mcp.core.LineAccessToken;
 import ru.nts.tools.mcp.core.McpTool;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 import ru.nts.tools.mcp.core.TransactionManager;
 
 import java.io.BufferedInputStream;
@@ -82,7 +82,7 @@ public class FileManageTool implements McpTool {
 
             SAFETY:
             - All operations are transactional (auto-rollback on error)
-            - Use nts_session(action='undo') to reverse any operation
+            - Use nts_task(action='undo') to reverse any operation
             - External changes (by other tools) cannot be undone
             """;
     }
@@ -171,7 +171,7 @@ public class FileManageTool implements McpTool {
         // Регистрируем токен доступа на весь созданный контент (rangeCrc)
         long crc = calculateCRC32(path);
         int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
-        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, content, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(path, 1, lineCount, content, lineCount, crc);
 
         return createResponse(String.format("File created: %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]\n\n%s",
                 pathStr, lineCount, crc, token.encode(), CREATE_WORKFLOW_TIP));
@@ -209,7 +209,7 @@ public class FileManageTool implements McpTool {
         String content = Files.readString(dest);
         long crc = calculateCRC32(dest);
         int lineCount = content.isEmpty() ? 1 : content.split("\n", -1).length;
-        LineAccessToken token = LineAccessTracker.registerAccess(dest, 1, lineCount, content, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(dest, 1, lineCount, content, lineCount, crc);
 
         return createResponse(String.format("Copied %s to %s\nLines: %d | CRC32C: %X\n[TOKEN: %s]\n\n%s",
                 srcStr, destStr, lineCount, crc, token.encode(), CREATE_WORKFLOW_TIP));
@@ -270,7 +270,7 @@ public class FileManageTool implements McpTool {
 
         TransactionManager.startTransaction("Delete: " + pathStr);
         try {
-            ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+            ExternalChangeTracker externalTracker = TaskContext.currentOrDefault().externalChanges();
             if (Files.isDirectory(path)) {
                 // For directory delete, we backup all files inside and invalidate tokens
                 try (var s = Files.walk(path)) {
@@ -326,10 +326,10 @@ public class FileManageTool implements McpTool {
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(src, dest);
             // Переносим снапшот для отслеживания внешних изменений
-            SessionContext.currentOrDefault().externalChanges().moveSnapshot(src, dest);
+            TaskContext.currentOrDefault().externalChanges().moveSnapshot(src, dest);
             // Path Lineage: записываем перемещение для Deep Undo
             TransactionManager.recordFileMove(src, dest);
-            // Session Tokens: отмечаем новый путь как разблокированный
+            // Task Tokens: отмечаем новый путь как разблокированный
             TransactionManager.markFileAccessedInTransaction(dest);
             TransactionManager.commit();
         } catch (Exception e) {
@@ -352,10 +352,10 @@ public class FileManageTool implements McpTool {
             // Переносим токены доступа на новый путь
             LineAccessTracker.moveTokens(path, newPath);
             // Переносим снапшот для отслеживания внешних изменений
-            SessionContext.currentOrDefault().externalChanges().moveSnapshot(path, newPath);
+            TaskContext.currentOrDefault().externalChanges().moveSnapshot(path, newPath);
             // Path Lineage: записываем перемещение для Deep Undo
             TransactionManager.recordFileMove(path, newPath);
-            // Session Tokens: отмечаем новый путь как разблокированный
+            // Task Tokens: отмечаем новый путь как разблокированный
             TransactionManager.markFileAccessedInTransaction(newPath);
             TransactionManager.commit();
         } catch (Exception e) {

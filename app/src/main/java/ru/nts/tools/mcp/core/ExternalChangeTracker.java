@@ -22,15 +22,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Per-session трекер внешних изменений файлов.
+ * Per-task трекер внешних изменений файлов.
  *
  * Хранит снапшоты содержимого файлов между вызовами инструментов.
  * При обнаружении CRC mismatch (внешнее изменение) позволяет:
  * 1. Сравнить текущее содержимое с последним известным
  * 2. Создать транзакцию "External Change" для undo/redo
- * 3. Отобразить изменение в журнале сессии
+ * 3. Отобразить изменение в журнале задачи
  *
- * Каждая сессия имеет собственный экземпляр этого класса.
+ * Каждая задача имеет собственный экземпляр этого класса.
  */
 public class ExternalChangeTracker {
 
@@ -90,7 +90,7 @@ public class ExternalChangeTracker {
         }
     }
 
-    // Per-session хранилище снапшотов (Path -> FileSnapshot)
+    // Per-task хранилище снапшотов (Path -> FileSnapshot)
     private final Map<Path, FileSnapshot> snapshots = new ConcurrentHashMap<>();
 
     // Синхронизация для атомарных операций

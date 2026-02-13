@@ -35,10 +35,10 @@ import ru.nts.tools.mcp.tools.fs.FileSearchTool;
 import ru.nts.tools.mcp.tools.navigation.CodeNavigateTool;
 import ru.nts.tools.mcp.tools.planning.TodoTool;
 import ru.nts.tools.mcp.tools.refactoring.CodeRefactorTool;
-import ru.nts.tools.mcp.tools.session.InitTool;
-import ru.nts.tools.mcp.tools.session.SessionTool;
+import ru.nts.tools.mcp.tools.task.InitTool;
+import ru.nts.tools.mcp.tools.task.TaskTool;
 import ru.nts.tools.mcp.tools.system.BatchToolsTool;
-import ru.nts.tools.mcp.tools.system.TaskTool;
+import ru.nts.tools.mcp.tools.system.ProcessTool;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -93,11 +93,11 @@ class ToolSchemaValidationTest {
         allTools.add(new FileSearchTool());
         allTools.add(new EditFileTool());
         allTools.add(new CompareFilesTool());
-        allTools.add(new SessionTool());
+        allTools.add(new TaskTool());
         allTools.add(new GradleTool());
         allTools.add(new GitCombinedTool());
         allTools.add(new BatchToolsTool(router));
-        allTools.add(new TaskTool());
+        allTools.add(new ProcessTool());
         allTools.add(new ProjectReplaceTool());
         allTools.add(new TodoTool());
         allTools.add(new CodeNavigateTool());
@@ -169,9 +169,7 @@ class ToolSchemaValidationTest {
         // Рекурсивно проверяем properties
         if (node.has("properties")) {
             JsonNode props = node.get("properties");
-            Iterator<String> fieldNames = props.fieldNames();
-            while (fieldNames.hasNext()) {
-                String fieldName = fieldNames.next();
+            for (String fieldName : (Iterable<String>) props::fieldNames) {
                 String newPath = path.isEmpty() ? fieldName : path + "." + fieldName;
                 validateArraysRecursively(props.get(fieldName), newPath, violations);
             }
@@ -219,9 +217,7 @@ class ToolSchemaValidationTest {
         // Рекурсивно проверяем properties
         if (node.has("properties")) {
             JsonNode props = node.get("properties");
-            Iterator<String> fieldNames = props.fieldNames();
-            while (fieldNames.hasNext()) {
-                String fieldName = fieldNames.next();
+            for (String fieldName : (Iterable<String>) props::fieldNames) {
                 String newPath = path.isEmpty() ? fieldName : path + "." + fieldName;
                 validateTypesRecursively(props.get(fieldName), newPath, validTypes, violations);
             }
@@ -276,8 +272,12 @@ class ToolSchemaValidationTest {
         JsonNode schema = tool.getInputSchema();
         JsonNode metaSchema = mapper.readTree(META_SCHEMA);
 
-        JsonSchema validator = schemaFactory.getSchema(metaSchema);
-        Set<ValidationMessage> errors = validator.validate(schema);
+        // json-schema-validator uses Jackson 2 JsonNode — convert via JSON string
+        var jackson2 = new com.fasterxml.jackson.databind.ObjectMapper();
+        var metaSchemaJ2 = jackson2.readTree(metaSchema.toString());
+        var schemaJ2 = jackson2.readTree(schema.toString());
+        JsonSchema validator = schemaFactory.getSchema(metaSchemaJ2);
+        Set<ValidationMessage> errors = validator.validate(schemaJ2);
 
         assertTrue(errors.isEmpty(),
                 "Tool '" + tool.getName() + "' schema validation errors:\n" +
@@ -345,9 +345,8 @@ class ToolSchemaValidationTest {
 
         if (node.has("properties")) {
             JsonNode props = node.get("properties");
-            Iterator<String> fieldNames = props.fieldNames();
-            while (fieldNames.hasNext()) {
-                count += countArrays(props.get(fieldNames.next()));
+            for (String fieldName : (Iterable<String>) props::fieldNames) {
+                count += countArrays(props.get(fieldName));
             }
         }
 

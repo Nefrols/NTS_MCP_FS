@@ -22,7 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nts.tools.mcp.core.PathSanitizer;
-import ru.nts.tools.mcp.core.SessionContext;
+import ru.nts.tools.mcp.core.TaskContext;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -43,9 +43,10 @@ class CodeNavigateToolTest {
         tool = new CodeNavigateTool();
         mapper = new ObjectMapper();
 
-        // Initialize session context
-        SessionContext ctx = SessionContext.getOrCreate("test-session");
-        SessionContext.setCurrent(ctx);
+        // Initialize task context
+        TaskContext.setForceInMemoryDb(true);
+        TaskContext ctx = TaskContext.getOrCreate("test-task");
+        TaskContext.setCurrent(ctx);
 
         // Set project root
         PathSanitizer.setRoot(tempDir);

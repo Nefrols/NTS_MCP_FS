@@ -117,7 +117,7 @@ public class FileReadTool implements McpTool {
 
         props.putObject("action").put("type", "string").put("description",
                 "Operation mode: 'read' (get content + token), 'info' (metadata + line count, START HERE), " +
-                "'exists' (check path), 'history' (session changes). Default: 'read'");
+                "'exists' (check path), 'history' (task changes). Default: 'read'");
 
         props.putObject("path").put("type", "string").put("description",
                 "File path (relative to project root or absolute).");
@@ -265,14 +265,14 @@ public class FileReadTool implements McpTool {
         } else {
             fileData = EncodingUtils.readTextFile(path);
         }
-        
+
         String content = fileData.content();
         String[] lines = content.split("\n", -1);
         int lineCount = lines.length;
         long crc32 = calculateCRC32(path);
 
         // Проверяем внешние изменения
-        ExternalChangeTracker externalTracker = SessionContext.currentOrDefault().externalChanges();
+        ExternalChangeTracker externalTracker = TaskContext.currentOrDefault().externalChanges();
         ExternalChangeTracker.ExternalChangeResult externalChange = externalTracker.checkForExternalChange(
             path, crc32, content, fileData.charset(), lineCount
         );
@@ -363,13 +363,13 @@ public class FileReadTool implements McpTool {
             }
         }
 
-        // Регистрируем доступ и получаем токен (с rangeCrc от чистого содержимого)
-        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rawContent, lineCount);
+        // Регистрируем доступ и получаем токен (с rangeCrc от чистого содержимого, fileCrc для инвалидации)
+        LineAccessToken newToken = LineAccessTracker.registerAccess(path, startLine, endLine, rawContent, lineCount, crc32);
 
         // Проверяем, был ли возвращён покрывающий токен (шире чем запрошено)
-        String coveringTokenTip = SessionLineAccessTracker.getCoveringTokenTip(newToken, startLine, endLine);
+        String coveringTokenTip = TaskLineAccessTracker.getCoveringTokenTip(newToken, startLine, endLine);
 
-        // Session Tokens: отмечаем файл как разблокированный в транзакции
+        // Task Tokens: отмечаем файл как разблокированный в транзакции
         TransactionManager.markFileAccessedInTransaction(path);
 
         // Регистрируем снапшот для отслеживания будущих внешних изменений
@@ -410,12 +410,12 @@ public class FileReadTool implements McpTool {
             // Чистое содержимое для CRC токена (без номеров строк)
             String rawContent = extractRawContent(lines, start, end);
 
-            // Регистрируем доступ с rangeCrc от чистого содержимого
-            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rawContent, lineCount);
+            // Регистрируем доступ с rangeCrc от чистого содержимого, fileCrc для инвалидации
+            LineAccessToken token = LineAccessTracker.registerAccess(path, start, end, rawContent, lineCount, crc32);
             tokens.add(token.encode());
 
             // Проверяем был ли возвращён покрывающий токен
-            String coveringTip = SessionLineAccessTracker.getCoveringTokenTip(token, start, end);
+            String coveringTip = TaskLineAccessTracker.getCoveringTokenTip(token, start, end);
 
             sb.append(String.format("\n--- Lines %d-%d ---\n", start, end));
             sb.append(String.format("[ACCESS: lines %d-%d | TOKEN: %s]\n",
@@ -569,10 +569,10 @@ public class FileReadTool implements McpTool {
     private JsonNode executeHistory(Path path, String pathStr) {
         List<String> history = TransactionManager.getFileHistory(path);
         if (history.isEmpty()) {
-            return createResponse("No session history for: " + pathStr);
+            return createResponse("No task history for: " + pathStr);
         }
 
-        StringBuilder sb = new StringBuilder("Session history for " + pathStr + ":\n");
+        StringBuilder sb = new StringBuilder("task history for " + pathStr + ":\n");
         history.forEach(entry -> sb.append("- ").append(entry).append("\n"));
         return createResponse(sb.toString().trim());
     }

@@ -69,7 +69,7 @@ public class BatchToolsTool implements McpTool {
 
             KEY FEATURES:
             - All-or-nothing: If ANY action fails -> ALL rolled back
-            - Session Tokens: CRC check skipped within batch (no re-read needed)
+            - Task Tokens: CRC check skipped within batch (no re-read needed)
             - InfinityRange: Files created in batch have no line boundary checks
             - Virtual FS Context: nts_code_refactor sees in-memory edits from previous steps
 
@@ -84,7 +84,7 @@ public class BatchToolsTool implements McpTool {
             - {{ref.affectedFiles[0].path}}        - Path of first affected file
             - {{ref.token}}                         - Shortcut when single file affected
 
-            SESSION REFERENCES (path tracking after rename/move):
+            Task References (path tracking after rename/move):
             Use {{id.path}} to reference a file that was renamed/moved:
             actions: [
               {id: 'f', tool: 'nts_file_manage', params: {action: 'create', path: 'Old.java', ...}},
@@ -140,7 +140,7 @@ public class BatchToolsTool implements McpTool {
                 "Tool parameters. Supports {{ref.token}} interpolation for values from previous steps.");
 
         props.putObject("instruction").put("type", "string").put("description",
-                "Descriptive label for session journal. Example: 'Rename User class to Account'. " +
+                "Descriptive label for task journal. Example: 'Rename User class to Account'. " +
                 "Helps identify batch in undo history.");
 
         schema.putArray("required").add("actions");
@@ -210,7 +210,7 @@ public class BatchToolsTool implements McpTool {
                         stepResults.put(actionId, stepResult);
                     }
 
-                    // Session References: обновляем path при rename/move
+                    // Task References: обновляем path при rename/move
                     updatePathAfterRenameMove(toolName, interpolatedParams, stepResults);
 
                     // Virtual FS Context: обновляем состояние файла после операции

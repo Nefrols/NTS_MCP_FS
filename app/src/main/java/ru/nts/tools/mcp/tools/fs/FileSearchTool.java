@@ -261,7 +261,7 @@ public class FileSearchTool implements McpTool {
         final int maxFiles = maxResults > 0 ? maxResults : Integer.MAX_VALUE;
 
         // Захватываем контекст сессии для проброса в worker threads
-        final SessionContext parentContext = SessionContext.current();
+        final TaskContext parentContext = TaskContext.current();
 
         // Создаём поток файлов: один файл или обход директории
         java.util.stream.Stream<Path> fileStream;
@@ -283,7 +283,7 @@ public class FileSearchTool implements McpTool {
                     executor.submit(() -> {
                         // Пробрасываем контекст сессии в worker thread
                         if (parentContext != null) {
-                            SessionContext.setCurrent(parentContext);
+                            TaskContext.setCurrent(parentContext);
                         }
                         try {
                             // Двойная проверка внутри потока
@@ -332,7 +332,7 @@ public class FileSearchTool implements McpTool {
                             // Игнорируем ошибки обработки отдельных файлов
                         } finally {
                             // Очищаем контекст потока
-                            SessionContext.clearCurrent();
+                            TaskContext.clearCurrent();
                         }
                     });
                 });
@@ -445,7 +445,7 @@ public class FileSearchTool implements McpTool {
             } else {
                 // Разрыв - регистрируем текущий диапазон
                 String rangeContent = buildRangeContent(lineTexts, rangeStart, rangeEnd);
-                LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount);
+                LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount, crc);
                 ranges.add(new LineRange(rangeStart, rangeEnd, token.encode()));
                 rangeStart = current;
                 rangeEnd = current;
@@ -454,7 +454,7 @@ public class FileSearchTool implements McpTool {
 
         // Регистрируем последний диапазон
         String rangeContent = buildRangeContent(lineTexts, rangeStart, rangeEnd);
-        LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount);
+        LineAccessToken token = LineAccessTracker.registerAccess(path, rangeStart, rangeEnd, rangeContent, lineCount, crc);
         ranges.add(new LineRange(rangeStart, rangeEnd, token.encode()));
 
         return ranges;

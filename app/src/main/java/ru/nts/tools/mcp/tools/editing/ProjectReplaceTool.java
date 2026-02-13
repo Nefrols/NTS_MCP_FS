@@ -63,11 +63,11 @@ public class ProjectReplaceTool implements McpTool {
             - Binary files automatically skipped
             - Report shows affected files with occurrence counts
             - DRY RUN MODE: Preview unified diff without modifying files
-            - AUTO-CHECKPOINT: Session checkpoint created before changes
+            - AUTO-CHECKPOINT: Task checkpoint created before changes
 
             SAFETY:
             - Use dryRun=true to preview changes first
-            - All changes undoable via nts_session undo
+            - All changes undoable via nts_task undo
 
             TOKEN OUTPUT:
             Returns affectedFiles with path, crc32c, lineCount, and accessToken for each modified file.
@@ -122,8 +122,8 @@ public class ProjectReplaceTool implements McpTool {
                 "Build dirs and .git always excluded.");
 
         props.putObject("instruction").put("type", "string").put("description",
-                "Description for session journal. Example: 'Rename UserService to AccountService'. " +
-                "Shown in nts_session journal output.");
+                "Description for task journal. Example: 'Rename UserService to AccountService'. " +
+                "Shown in nts_task journal output.");
                         props.putObject("encoding").put("type", "string").put("description",
                                 "Optional: Output encoding (e.g. 'UTF-8', 'windows-1251'). If specified, all modified files will be converted to this encoding.");
 
@@ -249,13 +249,13 @@ public class ProjectReplaceTool implements McpTool {
                 FileUtils.safeWrite(task.path, newContent, task.charset);
 
                 // Обновляем снапшот для отслеживания внешних изменений
-                SessionContext.currentOrDefault().externalChanges()
+                TaskContext.currentOrDefault().externalChanges()
                     .updateSnapshot(task.path, newContent, crc, task.charset, lineCount);
 
                 // Регистрируем токен доступа с rangeCrc (для всего файла)
-                LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, newContent, lineCount);
+                LineAccessToken token = LineAccessTracker.registerAccess(task.path, 1, lineCount, newContent, lineCount, crc);
 
-                // Session Tokens: отмечаем файл как разблокированный
+                // Task Tokens: отмечаем файл как разблокированный
                 TransactionManager.markFileAccessedInTransaction(task.path);
 
                 affectedFiles.add(new AffectedFile(task.path, crc, lineCount, token.encode(), task.count));

@@ -45,12 +45,22 @@ public interface McpTool {
     JsonNode execute(JsonNode params) throws Exception;
 
     /**
-     * Указывает, требует ли инструмент валидную сессию для работы.
-     * По умолчанию все инструменты требуют сессию.
+     * Указывает, требует ли инструмент валидную задачу для работы.
+     * По умолчанию все инструменты требуют задачу.
      * Только nts_init переопределяет это и возвращает false.
      */
-    default boolean requiresSession() {
+    default boolean requiresTask() {
         return true;
+    }
+
+    /**
+     * Указывает, является ли инструмент внутренним для оркестратора.
+     * Внутренние инструменты (finish-сигналы, вопросы архитектора, вызов скаута)
+     * не отдаются внешним MCP-клиентам через tools/list,
+     * но доступны агентам через оркестратор.
+     */
+    default boolean isInternal() {
+        return false;
     }
 
     /**
@@ -58,6 +68,20 @@ public interface McpTool {
      * глобального таймаута и внедрения HUD.
      */
     default JsonNode executeWithFeedback(JsonNode params) {
+        // Извлекаем ntsAllowedTools из params для role-aware tip фильтрации
+        // и удаляем из params перед передачей в execute()
+        if (params instanceof ObjectNode paramsObj && paramsObj.has("ntsAllowedTools")) {
+            JsonNode allowedNode = paramsObj.get("ntsAllowedTools");
+            if (allowedNode instanceof ArrayNode allowedArr) {
+                java.util.Set<String> allowed = new java.util.HashSet<>();
+                for (JsonNode item : allowedArr) {
+                    allowed.add(item.asText());
+                }
+                TipFilter.setCurrentAllowedTools(allowed);
+            }
+            paramsObj.remove("ntsAllowedTools");
+        }
+
         // Валидация обязательных параметров по схеме
         validateRequiredParams(params);
 
@@ -92,6 +116,8 @@ public interface McpTool {
             response = createErrorResponse("SYSTEM_ERROR", "System I/O error: " + e.getMessage());
         } catch (Exception e) {
             response = createErrorResponse("INTERNAL_BUG", "Internal server error: " + e.toString());
+        } finally {
+            TipFilter.clear();
         }
 
         // Внедрение AI-HUD как отдельного элемента контента (метаданные)
@@ -118,7 +144,7 @@ public interface McpTool {
 
     /**
      * Выполняет инструмент с ограничением по времени.
-     * Сохраняет контекст сессии при переключении потоков.
+     * Сохраняет контекст задачи при переключении потоков.
      *
      * @param params параметры вызова
      * @param timeoutSeconds таймаут в секундах
@@ -128,18 +154,18 @@ public interface McpTool {
      */
     private JsonNode executeWithTimeout(JsonNode params, int timeoutSeconds) throws Exception {
         // Захватываем контекст текущей сессии для передачи в worker thread
-        SessionContext parentContext = SessionContext.currentOrDefault();
+        TaskContext parentContext = TaskContext.currentOrDefault();
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<JsonNode> future = executor.submit(() -> {
                 // Устанавливаем контекст сессии в worker thread
-                SessionContext.setCurrent(parentContext);
+                TaskContext.setCurrent(parentContext);
                 try {
                     return execute(params);
                 } finally {
                     // Очищаем контекст в worker thread
-                    SessionContext.clearCurrent();
+                    TaskContext.clearCurrent();
                 }
             });
             return future.get(timeoutSeconds, TimeUnit.SECONDS);

@@ -43,10 +43,10 @@ public class TodoTool implements McpTool {
     private static final Pattern TODO_ITEM_PATTERN = Pattern.compile("^\\s*([-*]|\\d+\\.)\\s+\\[([ xX])]\\s+(.*)$");
 
     /**
-     * Возвращает путь к директории todos текущей сессии.
+     * Возвращает путь к директории todos текущей задачи.
      */
     private Path getTodosDir() {
-        return SessionContext.currentOrDefault().getTodosDir();
+        return TaskContext.currentOrDefault().getTodosDir();
     }
 
     @Override
@@ -65,8 +65,6 @@ public class TodoTool implements McpTool {
             - close   - Archive completed plan (removes from HUD)
             - list    - Show all plans (active and archived)
             - reopen  - Reactivate an archived plan
-            - items   - Get active TODO as structured JSON (for integrations)
-            - all_items - Get ALL active TODOs as structured JSON
 
             TASK FORMAT (Markdown checklist):
             - [ ] Pending task
@@ -89,14 +87,14 @@ public class TodoTool implements McpTool {
             If your client has a built-in TODO system (like Claude Code's TodoWrite),
             use BOTH systems together:
             - Native TODO: for client-side task tracking
-            - nts_todo: for persistent server-side plans with undo/session support
+            - nts_todo: for persistent server-side plans with undo/task support
             Keep both synchronized for best results.
 
             INTEGRATION:
             - HUD displays active plan progress (title + ✓done ○pending)
-            - nts_git commit_session includes completed tasks
-            - Plans persist across session reactivation
-            - Plans stored in .nts/sessions/{sessionId}/todos/
+            - nts_git commit_task includes completed tasks
+            - Plans persist across task reactivation
+            - Plans stored in .nts/tasks/{taskId}/todos/
 
             TIP: Use 'close' action when plan is complete to clear HUD.
             """;
@@ -114,7 +112,7 @@ public class TodoTool implements McpTool {
         var props = schema.putObject("properties");
 
         props.putObject("action").put("type", "string").put("description",
-                "Operation: 'create', 'read' (or 'status'), 'update', 'add', 'close', 'list', 'reopen', 'items', 'all_items'. Required.");
+                "Operation: 'create', 'read' (or 'status'), 'update', 'add', 'close', 'list', 'reopen'. Required.");
 
         props.putObject("title").put("type", "string").put("description",
                 "For 'create': plan name shown in HUD. Example: 'Refactor auth module'.");
@@ -184,7 +182,7 @@ public class TodoTool implements McpTool {
         String fullContent = "# TODO: " + title + "\n\n" + content;
         FileUtils.safeWrite(todoFile, fullContent, StandardCharsets.UTF_8);
 
-        TodoManager.setSessionTodo(fileName);
+        TodoManager.setTaskTodo(fileName);
 
         return createResponse("Plan created: " + fileName + "\nThis plan is now set as ACTIVE.");
     }
@@ -192,14 +190,14 @@ public class TodoTool implements McpTool {
     private JsonNode executeRead(JsonNode params) throws IOException {
         Path todoDir = getTodosDir();
 
-        // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
+        // Определяем целевой файл: явно указанный ИЛИ текущий для задачи
         String fileName = params.path("fileName").asText(null);
         if (fileName == null) {
-            fileName = TodoManager.getSessionTodo();
+            fileName = TodoManager.getTaskTodo();
         }
 
         if (fileName == null) {
-            return createResponse("No active TODO in current session. Use 'create' to start a new plan.");
+            return createResponse("No active TODO in current task. Use 'create' to start a new plan.");
         }
 
         Path targetFile = todoDir.resolve(fileName);
@@ -214,14 +212,14 @@ public class TodoTool implements McpTool {
     private JsonNode executeUpdate(JsonNode params) throws Exception {
         Path todoDir = getTodosDir();
 
-        // Определяем целевой файл: явно указанный ИЛИ текущий сессионный
+        // Определяем целевой файл: явно указанный ИЛИ текущий для задачи
         String fileName = params.path("fileName").asText(null);
         if (fileName == null) {
-            fileName = TodoManager.getSessionTodo();
+            fileName = TodoManager.getTaskTodo();
         }
 
         if (fileName == null) {
-            throw new IllegalStateException("No active TODO in current session. Use 'create' action first.");
+            throw new IllegalStateException("No active TODO in current task. Use 'create' action first.");
         }
 
         Path targetFile = todoDir.resolve(fileName);
@@ -304,11 +302,11 @@ public class TodoTool implements McpTool {
         Path todoDir = getTodosDir();
         String fileName = params.path("fileName").asText(null);
         if (fileName == null) {
-            fileName = TodoManager.getSessionTodo();
+            fileName = TodoManager.getTaskTodo();
         }
 
         if (fileName == null) {
-            throw new IllegalStateException("No active TODO in current session. Use 'create' action first.");
+            throw new IllegalStateException("No active TODO in current task. Use 'create' action first.");
         }
 
         Path targetFile = todoDir.resolve(fileName);
@@ -329,7 +327,7 @@ public class TodoTool implements McpTool {
         Path todoDir = getTodosDir();
         String fileName = params.path("fileName").asText(null);
         if (fileName == null) {
-            fileName = TodoManager.getSessionTodo();
+            fileName = TodoManager.getTaskTodo();
         }
 
         if (fileName == null) {
@@ -351,7 +349,7 @@ public class TodoTool implements McpTool {
         Files.move(sourceFile, targetFile);
 
         // Сбрасываем активный TODO
-        TodoManager.setSessionTodo(null);
+        TodoManager.setTaskTodo(null);
 
         StringBuilder msg = new StringBuilder();
         msg.append("Plan archived: ").append(fileName).append(" -> ").append(newFileName).append("\n");
@@ -385,7 +383,7 @@ public class TodoTool implements McpTool {
             return createResponse("No plans found. Use 'create' to start a new plan.");
         }
 
-        String activeTodo = TodoManager.getSessionTodo();
+        String activeTodo = TodoManager.getTaskTodo();
         StringBuilder sb = new StringBuilder("### All Plans\n\n");
 
         for (Path file : files) {
@@ -420,11 +418,11 @@ public class TodoTool implements McpTool {
     }
 
     /**
-     * Returns active TODO as structured JSON for integrations.
-     * Format: { todoId, title, items: [{ id, text, done, failed, completed }], fileName }
+     * Returns active TODO as structured JSON for the web interface.
+     * Format: { title, items: [{ id, text, done, failed, completed }], fileName }
      */
     private JsonNode executeItems() throws IOException {
-        String fileName = TodoManager.getSessionTodo();
+        String fileName = TodoManager.getTaskTodo();
         if (fileName == null) {
             return createResponse("{\"items\":[]}");
         }
@@ -536,7 +534,7 @@ public class TodoTool implements McpTool {
         }
 
         // Устанавливаем как активный TODO
-        TodoManager.setSessionTodo(newFileName);
+        TodoManager.setTaskTodo(newFileName);
 
         return createResponse("Plan reactivated: " + newFileName + "\nThis plan is now ACTIVE and visible in HUD.");
     }

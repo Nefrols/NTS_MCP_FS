@@ -27,32 +27,32 @@ import java.util.regex.Pattern;
  * Менеджер планов (Todo Manager).
  * Обеспечивает парсинг Markdown планов и формирование данных для AI-HUD.
  *
- * Делегирует хранение активного TODO к session-scoped SessionContext.
+ * Делегирует хранение активного TODO к task-scoped TaskContext.
  */
 public class TodoManager {
 
     private static final Pattern TODO_ITEM_PATTERN = Pattern.compile("(?m)^\\s*([-*]|\\d+\\.)\\s+\\[([ xX])]\\s+(.*)$");
 
     /**
-     * Устанавливает активный TODO для текущей сессии.
+     * Устанавливает активный TODO для текущей задачи.
      * Вызывается из TodoTool при создании плана.
      */
-    public static void setSessionTodo(String fileName) {
-        SessionContext.currentOrDefault().setActiveTodoFile(fileName);
+    public static void setTaskTodo(String fileName) {
+        TaskContext.currentOrDefault().setActiveTodoFile(fileName);
     }
 
     /**
-     * Возвращает имя файла активного TODO текущей сессии.
+     * Возвращает имя файла активного TODO текущей задачи.
      */
-    public static String getSessionTodo() {
-        return SessionContext.currentOrDefault().getActiveTodoFile();
+    public static String getTaskTodo() {
+        return TaskContext.currentOrDefault().getActiveTodoFile();
     }
 
     /**
-     * Сбрасывает состояние сессии (для тестов).
+     * Сбрасывает состояние задачи (для тестов).
      */
     public static void reset() {
-        SessionContext ctx = SessionContext.current();
+        TaskContext ctx = TaskContext.current();
         if (ctx != null) {
             ctx.setActiveTodoFile(null);
         }
@@ -61,16 +61,16 @@ public class TodoManager {
     public record HudInfo(String title, int done, int failed, int total, String nextTask, int nextId) {
         @Override
         public String toString() {
-            String stats = TransactionManager.getSessionStats();
+            String stats = TransactionManager.getTaskStats();
             int edits = TransactionManager.getTotalEdits();
             int undos = TransactionManager.getTotalUndos();
 
-            // Получаем sessionId для отображения (важно для LLM!)
-            SessionContext ctx = SessionContext.current();
-            String sessionId = ctx != null ? ctx.getSessionId() : "none";
+            // Получаем taskId для отображения
+            TaskContext ctx = TaskContext.current();
+            String taskId = ctx != null ? ctx.getTaskId() : "none";
 
             StringBuilder sb = new StringBuilder();
-            sb.append("[HUD sid:").append(sessionId).append("] ");
+            sb.append("[HUD tid:").append(taskId).append("] ");
 
             if (title == null) {
                 sb.append(stats);
@@ -130,14 +130,14 @@ public class TodoManager {
         /**
          * Добавляет напоминание об undo, если много правок без использования отмены.
          * Показывается когда edits >= 4 и undos == 0.
-         * Role-aware: показывает nts_session hint только если инструмент доступен.
+         * Role-aware: показывает nts_task hint только если инструмент доступен.
          */
         private void appendUndoReminder(StringBuilder sb, int edits, int undos) {
             if (edits >= 4 && undos == 0) {
-                if (TipFilter.canMention("nts_session")) {
+                if (TipFilter.canMention("nts_task")) {
                     sb.append("\n[TIP: ").append(edits).append(" edits without undo. ")
-                      .append("If something went wrong, use nts_session(action='undo') to rollback ")
-                      .append("instead of multiple fix edits. View history: nts_session(action='journal')]");
+                      .append("If something went wrong, use nts_task(action='undo') to rollback ")
+                      .append("instead of multiple fix edits. View history: nts_task(action='journal')]");
                 }
             }
         }
@@ -156,22 +156,22 @@ public class TodoManager {
     }
 
     /**
-     * Возвращает путь к директории todos текущей сессии.
+     * Возвращает путь к директории todos текущей задачи.
      */
     private static Path getTodosDir() {
-        // Используем currentOrDefault() для согласованности с getSessionTodo()
-        return SessionContext.currentOrDefault().getTodosDir();
+        // Используем currentOrDefault() для согласованности
+        return TaskContext.currentOrDefault().getTodosDir();
     }
 
     public static HudInfo getHudInfo() {
-        // Используем ТОЛЬКО TODO текущей сессии
-        String sessionTodoFile = getSessionTodo();
-        if (sessionTodoFile == null) {
+        // Используем ТОЛЬКО TODO текущей задачи
+        String taskTodoFile = getTaskTodo();
+        if (taskTodoFile == null) {
             return new HudInfo(null, 0, 0, 0, null, 0);
         }
 
         Path todoDir = getTodosDir();
-        Path activeFile = todoDir.resolve(sessionTodoFile);
+        Path activeFile = todoDir.resolve(taskTodoFile);
 
         if (!Files.exists(activeFile)) {
             return new HudInfo(null, 0, 0, 0, null, 0);
@@ -217,18 +217,18 @@ public class TodoManager {
 
     /**
      * Возвращает список выполненных задач для коммита.
-     * Использует только TODO текущей сессии.
+     * Использует только TODO текущей задачи.
      */
     public static List<String> getCompletedTasks() {
         List<String> completed = new ArrayList<>();
 
-        String sessionTodoFile = getSessionTodo();
-        if (sessionTodoFile == null) {
+        String taskTodoFile = getTaskTodo();
+        if (taskTodoFile == null) {
             return completed;
         }
 
         Path todoDir = getTodosDir();
-        Path activeFile = todoDir.resolve(sessionTodoFile);
+        Path activeFile = todoDir.resolve(taskTodoFile);
 
         if (!Files.exists(activeFile)) {
             return completed;
