@@ -20,7 +20,6 @@ import org.mozilla.universalchardet.UniversalDetector;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -52,7 +51,7 @@ public class EncodingUtils {
              return new TextFileContent(new String(allBytes, charset), charset);
          }
 
-         private static byte[] stripBom(byte[] allBytes, Charset charset) {
+         static byte[] stripBom(byte[] allBytes, Charset charset) {
              if (allBytes.length < 2) return allBytes;
 
              String name = charset.name().toUpperCase();
@@ -137,7 +136,7 @@ public class EncodingUtils {
     /**
      * Проверяет, является ли массив байтов валидной последовательностью UTF-8.
      */
-    private static boolean isValidUtf8(byte[] bytes) {
+    static boolean isValidUtf8(byte[] bytes) {
         int i = 0;
         while (i < bytes.length) {
             int b = bytes[i++] & 0xFF;
@@ -160,49 +159,52 @@ public class EncodingUtils {
     }
 
     /**
-     * Определяет кодировку файла по первым байтам.
+     * Определяет кодировку файла по его содержимому.
      *
      * @param path Путь к файлу.
      * @return Определенный Charset или UTF-8 по умолчанию.
      */
     public static Charset detectEncoding(Path path) {
         try {
-            byte[] buffer = new byte[4096];
-            UniversalDetector detector = new UniversalDetector(null);
-
-            int bytesRead = FileUtils.executeWithRetry(() -> {
-                try (var inputStream = Files.newInputStream(path)) {
-                    return inputStream.read(buffer);
-                }
-            });
-
-            if (bytesRead > 0) {
-                detector.handleData(buffer, 0, bytesRead);
-                detector.dataEnd();
-                
-                String encoding = detector.getDetectedCharset();
-                Charset charset = StandardCharsets.UTF_8;
-
-                if (encoding != null) {
-                    try {
-                        charset = Charset.forName(encoding);
-                    } catch (Exception ignored) {
-                    }
-                }
-
-                if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
-                    byte[] actualBytes = new byte[bytesRead];
-                    System.arraycopy(buffer, 0, actualBytes, 0, bytesRead);
-                    if (!isValidUtf8(actualBytes)) {
-                        return Charset.forName("windows-1251");
-                    }
-                }
-                
-                return charset;
-            }
-            return StandardCharsets.UTF_8;
+            byte[] bytes = FileUtils.safeReadAllBytes(path);
+            return detectEncoding(bytes);
         } catch (Exception e) {
             return StandardCharsets.UTF_8;
         }
+    }
+
+    /**
+     * Определяет кодировку по байтовому массиву.
+     * Стратегия: BOM → UniversalDetector → UTF-8 валидация → fallback windows-1251.
+     *
+     * @param bytes Байты файла.
+     * @return Определённый Charset.
+     */
+    public static Charset detectEncoding(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return StandardCharsets.UTF_8;
+        }
+
+        UniversalDetector detector = new UniversalDetector(null);
+        detector.handleData(bytes, 0, bytes.length);
+        detector.dataEnd();
+
+        String encoding = detector.getDetectedCharset();
+        Charset charset = StandardCharsets.UTF_8;
+
+        if (encoding != null) {
+            try {
+                charset = Charset.forName(encoding);
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (encoding == null || charset.equals(StandardCharsets.UTF_8)) {
+            if (!isValidUtf8(bytes)) {
+                return Charset.forName("windows-1251");
+            }
+        }
+
+        return charset;
     }
 }

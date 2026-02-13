@@ -16,7 +16,6 @@
 package ru.nts.tools.mcp.core;
 
 import java.io.*;
-import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
@@ -34,11 +33,14 @@ import java.util.zip.CRC32C;
  *
  * Оптимизации:
  * - Memory-mapped файлы для больших файлов (>10MB)
- * - Boyer-Moore-Horspool для литеральных паттернов
+ * - Boyer-Moore-Horspool для литеральных паттернов (int[256] для ASCII, HashMap для Unicode)
  * - Единый проход: CRC + поиск + подсчёт строк
  * - Предвычисленные смещения строк для O(log n) поиска номера
  * - Ранняя остановка с maxResults
  * - Потоковая обработка без загрузки всего файла в память
+ * - Нормализация line endings (\r\n, \r → \n) перед поиском
+ * - BOM stripping перед конвертацией в строку
+ * - Encoding-aware containsText() (ASCII fast path, full detection для non-ASCII)
  */
 public class FastSearch {
 
@@ -77,13 +79,10 @@ public class FastSearch {
                                        int maxResults, int contextBefore, int contextAfter) throws IOException {
         long fileSize = Files.size(path);
 
-        // Определяем кодировку по первым байтам
-        Charset charset = EncodingUtils.detectEncoding(path);
-
         if (fileSize > MMAP_THRESHOLD) {
-            return searchMapped(path, pattern, isRegex, maxResults, contextBefore, contextAfter, charset);
+            return searchMapped(path, pattern, isRegex, maxResults, contextBefore, contextAfter);
         } else {
-            return searchBuffered(path, pattern, isRegex, maxResults, contextBefore, contextAfter, charset);
+            return searchBuffered(path, pattern, isRegex, maxResults, contextBefore, contextAfter);
         }
     }
 
@@ -91,17 +90,15 @@ public class FastSearch {
      * Поиск с memory-mapped файлом для больших файлов.
      */
     private static SearchResult searchMapped(Path path, String pattern, boolean isRegex,
-                                              int maxResults, int ctxBefore, int ctxAfter,
-                                              Charset charset) throws IOException {
+                                              int maxResults, int ctxBefore, int ctxAfter) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             long size = channel.size();
             MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, size);
 
-            // Читаем весь контент (mmap не копирует в память, использует page cache OS)
             byte[] bytes = new byte[(int) size];
             buffer.get(bytes);
 
-            return searchInBytes(path, bytes, pattern, isRegex, maxResults, ctxBefore, ctxAfter, charset);
+            return searchInBytes(path, bytes, pattern, isRegex, maxResults, ctxBefore, ctxAfter);
         }
     }
 
@@ -109,33 +106,38 @@ public class FastSearch {
      * Буферизованный поиск для небольших файлов.
      */
     private static SearchResult searchBuffered(Path path, String pattern, boolean isRegex,
-                                                int maxResults, int ctxBefore, int ctxAfter,
-                                                Charset charset) throws IOException {
+                                                int maxResults, int ctxBefore, int ctxAfter) throws IOException {
         byte[] bytes = FileUtils.safeReadAllBytes(path);
-        return searchInBytes(path, bytes, pattern, isRegex, maxResults, ctxBefore, ctxAfter, charset);
+        return searchInBytes(path, bytes, pattern, isRegex, maxResults, ctxBefore, ctxAfter);
     }
 
     /**
      * Основной поиск по байтовому массиву.
      * Единый проход: CRC + индексация строк + поиск.
+     * Line endings нормализуются (\r\n, \r → \n) для консистентного поиска.
+     * BOM удаляется перед конвертацией в строку.
      */
     private static SearchResult searchInBytes(Path path, byte[] bytes, String pattern, boolean isRegex,
-                                               int maxResults, int ctxBefore, int ctxAfter,
-                                               Charset charset) throws IOException {
+                                               int maxResults, int ctxBefore, int ctxAfter) throws IOException {
         // Проверка на бинарный файл
         if (isBinary(bytes)) {
             return null;
         }
 
-        // Параллельно вычисляем CRC (очень быстро, hardware-accelerated)
+        // CRC32C от ОРИГИНАЛЬНЫХ байт (до BOM strip и нормализации)
         CRC32C crc = new CRC32C();
         crc.update(bytes);
         long crcValue = crc.getValue();
 
-        // Конвертируем в строку
-        String content = new String(bytes, charset);
+        // Определяем кодировку и удаляем BOM
+        Charset charset = EncodingUtils.detectEncoding(bytes);
+        byte[] cleanBytes = EncodingUtils.stripBom(bytes, charset);
+        String content = new String(cleanBytes, charset);
 
-        // Строим индекс строк: массив позиций начала каждой строки
+        // Нормализация line endings: \r\n → \n, standalone \r → \n
+        content = normalizeLineEndings(content);
+
+        // Строим индекс строк
         int[] lineOffsets = buildLineOffsets(content);
         int lineCount = lineOffsets.length;
 
@@ -159,11 +161,19 @@ public class FastSearch {
     }
 
     /**
+     * Нормализация line endings: \r\n → \n, standalone \r → \n.
+     * Быстрый выход если \r не найден.
+     */
+    private static String normalizeLineEndings(String content) {
+        if (content.indexOf('\r') < 0) return content;
+        return content.replace("\r\n", "\n").replace("\r", "\n");
+    }
+
+    /**
      * Строит массив смещений начала каждой строки.
      * lineOffsets[i] = позиция первого символа строки (i+1)
      */
     private static int[] buildLineOffsets(String content) {
-        // Считаем количество строк
         int count = 1;
         for (int i = 0; i < content.length(); i++) {
             if (content.charAt(i) == '\n') count++;
@@ -198,36 +208,19 @@ public class FastSearch {
     }
 
     /**
-     * Поиск литерала с использованием Boyer-Moore-Horspool для длинных паттернов.
+     * Поиск литерала с использованием Boyer-Moore-Horspool.
+     * ASCII-паттерны используют int[256] таблицу, Unicode — HashMap.
      */
     private static List<Integer> findLiteralMatches(String content, String pattern, int maxResults) {
-        List<Integer> positions = new ArrayList<>();
-
         if (pattern.length() >= BMH_MIN_PATTERN_LEN) {
-            // Boyer-Moore-Horspool для паттернов >= 4 символов
-            int[] badChar = buildBadCharTable(pattern);
-            int n = content.length();
-            int m = pattern.length();
-            int i = 0;
-
-            while (i <= n - m) {
-                int j = m - 1;
-                while (j >= 0 && pattern.charAt(j) == content.charAt(i + j)) {
-                    j--;
-                }
-                if (j < 0) {
-                    positions.add(i);
-                    if (maxResults > 0 && positions.size() >= maxResults) {
-                        return positions;
-                    }
-                    i += 1; // Можно оптимизировать: i += (m > 1 ? m - badChar[...] : 1)
-                } else {
-                    char c = content.charAt(i + m - 1);
-                    i += badChar[c & 0xFF];
-                }
+            if (isAscii(pattern)) {
+                return findLiteralMatchesBMH256(content, pattern, maxResults);
+            } else {
+                return findLiteralMatchesBMHUnicode(content, pattern, maxResults);
             }
         } else {
             // Стандартный indexOf для коротких паттернов
+            List<Integer> positions = new ArrayList<>();
             int idx = content.indexOf(pattern);
             while (idx >= 0) {
                 positions.add(idx);
@@ -236,22 +229,74 @@ public class FastSearch {
                 }
                 idx = content.indexOf(pattern, idx + 1);
             }
+            return positions;
+        }
+    }
+
+    /**
+     * BMH с int[256] таблицей для ASCII-only паттернов.
+     */
+    private static List<Integer> findLiteralMatchesBMH256(String content, String pattern, int maxResults) {
+        List<Integer> positions = new ArrayList<>();
+        int[] badChar = new int[256];
+        int m = pattern.length();
+        Arrays.fill(badChar, m);
+        for (int i = 0; i < m - 1; i++) {
+            badChar[pattern.charAt(i) & 0xFF] = m - 1 - i;
         }
 
+        int n = content.length();
+        int i = 0;
+        while (i <= n - m) {
+            int j = m - 1;
+            while (j >= 0 && pattern.charAt(j) == content.charAt(i + j)) {
+                j--;
+            }
+            if (j < 0) {
+                positions.add(i);
+                if (maxResults > 0 && positions.size() >= maxResults) {
+                    return positions;
+                }
+                i += 1;
+            } else {
+                char c = content.charAt(i + m - 1);
+                i += badChar[c & 0xFF];
+            }
+        }
         return positions;
     }
 
     /**
-     * Таблица сдвигов для Boyer-Moore-Horspool.
+     * BMH с HashMap для Unicode-паттернов (кириллица, CJK и т.д.).
+     * Избегает коллизий из-за усечения charAt() & 0xFF.
      */
-    private static int[] buildBadCharTable(String pattern) {
-        int[] table = new int[256];
+    private static List<Integer> findLiteralMatchesBMHUnicode(String content, String pattern, int maxResults) {
+        List<Integer> positions = new ArrayList<>();
+        Map<Character, Integer> badChar = new HashMap<>();
         int m = pattern.length();
-        Arrays.fill(table, m);
         for (int i = 0; i < m - 1; i++) {
-            table[pattern.charAt(i) & 0xFF] = m - 1 - i;
+            badChar.put(pattern.charAt(i), m - 1 - i);
         }
-        return table;
+
+        int n = content.length();
+        int i = 0;
+        while (i <= n - m) {
+            int j = m - 1;
+            while (j >= 0 && pattern.charAt(j) == content.charAt(i + j)) {
+                j--;
+            }
+            if (j < 0) {
+                positions.add(i);
+                if (maxResults > 0 && positions.size() >= maxResults) {
+                    return positions;
+                }
+                i += 1;
+            } else {
+                char c = content.charAt(i + m - 1);
+                i += badChar.getOrDefault(c, m);
+            }
+        }
+        return positions;
     }
 
     /**
@@ -280,14 +325,12 @@ public class FastSearch {
                                                                 int ctxBefore, int ctxAfter) {
         int lineCount = lineOffsets.length;
 
-        // Множество номеров строк с совпадениями
         Set<Integer> matchLineNumbers = new HashSet<>();
         for (int pos : matchPositions) {
             matchLineNumbers.add(positionToLineNumber(lineOffsets, pos));
         }
 
-        // Собираем все нужные строки (matches + context)
-        Set<Integer> neededLines = new TreeSet<>(); // TreeSet для автосортировки
+        Set<Integer> neededLines = new TreeSet<>();
         for (int lineNum : matchLineNumbers) {
             int start = Math.max(1, lineNum - ctxBefore);
             int end = Math.min(lineCount, lineNum + ctxAfter);
@@ -296,7 +339,6 @@ public class FastSearch {
             }
         }
 
-        // Извлекаем текст строк
         List<MatchedLine> result = new ArrayList<>();
         for (int lineNum : neededLines) {
             String lineText = extractLine(content, lineOffsets, lineNum);
@@ -309,6 +351,7 @@ public class FastSearch {
 
     /**
      * Извлекает текст строки по номеру.
+     * Контент уже нормализован (только \n), поэтому extractLine не нужно обрабатывать \r.
      */
     private static String extractLine(String content, int[] lineOffsets, int lineNum) {
         int idx = lineNum - 1;
@@ -322,10 +365,6 @@ public class FastSearch {
             end = lineOffsets[idx + 1] - 1; // До \n
         } else {
             end = content.length();
-        }
-
-        if (end > start && content.charAt(end - 1) == '\r') {
-            end--; // Удаляем \r
         }
 
         return content.substring(start, Math.max(start, end));
@@ -347,6 +386,7 @@ public class FastSearch {
     /**
      * Быстрая проверка, содержит ли файл текст, без полного чтения в память.
      * Использует Boyer-Moore-Horspool для больших паттернов.
+     * Encoding-aware: ASCII-паттерны → быстрый путь, non-ASCII → детекция кодировки.
      *
      * @param path путь к файлу
      * @param text искомый текст
@@ -358,16 +398,32 @@ public class FastSearch {
             return true;
         }
 
-        byte[] pattern = text.getBytes(StandardCharsets.UTF_8);
+        // ASCII-паттерны совпадают по байтам во всех однобайтовых кодировках и UTF-8
+        Charset charset;
+        if (isAscii(text)) {
+            charset = StandardCharsets.UTF_8;
+        } else {
+            charset = EncodingUtils.detectEncoding(path);
+        }
+
+        byte[] pattern = text.getBytes(charset);
         int patternLen = pattern.length;
 
-        // Для коротких паттернов используем простой поиск
         if (patternLen < BMH_MIN_PATTERN_LEN) {
             return containsTextSimple(path, pattern);
         }
 
-        // Для длинных паттернов используем Boyer-Moore-Horspool
         return containsTextBMH(path, pattern);
+    }
+
+    /**
+     * Проверяет, состоит ли строка только из ASCII-символов (0-127).
+     */
+    static boolean isAscii(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) > 127) return false;
+        }
+        return true;
     }
 
     /**
@@ -380,7 +436,6 @@ public class FastSearch {
             byte[] window = new byte[patternLen];
             int windowFill = 0;
 
-            // Заполняем начальное окно
             int b;
             while (windowFill < patternLen && (b = is.read()) != -1) {
                 window[windowFill++] = (byte) b;
@@ -389,7 +444,6 @@ public class FastSearch {
             if (windowFill < patternLen) return false;
             if (Arrays.equals(window, pattern)) return true;
 
-            // Скользящее окно
             while ((b = is.read()) != -1) {
                 System.arraycopy(window, 1, window, 0, patternLen - 1);
                 window[patternLen - 1] = (byte) b;
@@ -407,7 +461,6 @@ public class FastSearch {
     private static boolean containsTextBMH(Path path, byte[] pattern) throws IOException {
         int m = pattern.length;
 
-        // Строим таблицу сдвигов
         int[] badChar = new int[256];
         Arrays.fill(badChar, m);
         for (int i = 0; i < m - 1; i++) {
@@ -415,24 +468,20 @@ public class FastSearch {
         }
 
         try (InputStream is = new BufferedInputStream(Files.newInputStream(path), BUFFER_SIZE)) {
-            // Буфер с перекрытием для обработки границ блоков
             byte[] buffer = new byte[BUFFER_SIZE + m - 1];
             int overlap = 0;
 
             while (true) {
-                // Копируем перекрытие с предыдущего блока
                 if (overlap > 0) {
                     System.arraycopy(buffer, BUFFER_SIZE, buffer, 0, overlap);
                 }
 
-                // Читаем новый блок
                 int bytesRead = is.readNBytes(buffer, overlap, BUFFER_SIZE);
                 if (bytesRead == 0) break;
 
                 int totalLen = overlap + bytesRead;
                 int searchEnd = totalLen - m;
 
-                // Boyer-Moore-Horspool поиск в буфере
                 int i = 0;
                 while (i <= searchEnd) {
                     int j = m - 1;
@@ -440,12 +489,11 @@ public class FastSearch {
                         j--;
                     }
                     if (j < 0) {
-                        return true; // Найдено!
+                        return true;
                     }
                     i += badChar[buffer[i + m - 1] & 0xFF];
                 }
 
-                // Сохраняем перекрытие для следующего блока
                 overlap = Math.min(m - 1, totalLen);
                 if (overlap > 0 && totalLen > overlap) {
                     System.arraycopy(buffer, totalLen - overlap, buffer, BUFFER_SIZE, overlap);
