@@ -712,6 +712,28 @@ public class SessionTransactionManager {
         return instructions;
     }
 
+    /**
+     * Возвращает последние N операций из undo стека в компактном виде.
+     */
+    public List<String> getRecentJournal(int maxEntries) {
+        List<String> result = new ArrayList<>();
+        synchronized (undoStack) {
+            int start = Math.max(0, undoStack.size() - maxEntries);
+            for (int i = undoStack.size() - 1; i >= start; i--) {
+                TransactionEntry entry = undoStack.get(i);
+                if (entry instanceof Checkpoint cp) {
+                    result.add("[CHECKPOINT] " + cp.name());
+                } else if (entry instanceof ExternalChangeTransaction ext) {
+                    result.add("[EXTERNAL] " + ext.getDescription());
+                } else if (entry instanceof Transaction tx) {
+                    String label = tx.instruction != null ? tx.instruction : tx.description;
+                    result.add("[EDIT] " + label + " (" + tx.snapshots.size() + " files)");
+                }
+            }
+        }
+        return result;
+    }
+
     public String getJournal() {
         StringBuilder sb = new StringBuilder();
         sb.append("=== TRANSACTION JOURNAL ===\n");

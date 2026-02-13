@@ -155,6 +155,7 @@ public class McpServer {
         router.registerTool(new CompareFilesTool());
 
         router.registerTool(new SessionTool());
+        router.registerTool(new WorkspaceStatusTool());
 
         router.registerTool(new GradleTool());
         router.registerTool(new GitCombinedTool());

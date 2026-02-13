@@ -102,6 +102,10 @@ public class TransactionManager {
         return ctx().getSessionInstructions();
     }
 
+    public static List<String> getRecentJournal(int maxEntries) {
+        return ctx().getRecentJournal(maxEntries);
+    }
+
     public static String getJournal() {
         return ctx().getJournal();
     }
