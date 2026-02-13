@@ -237,6 +237,11 @@ public class FileReadTool implements McpTool {
         if (!Files.exists(path)) {
             throw NtsFileException.notFound(path);
         }
+        if (Files.isDirectory(path)) {
+            throw new IllegalArgumentException(
+                    "Path is a directory, not a file: " + path +
+                    ". Use nts_file_search(action='list') to browse directory contents.");
+        }
         PathSanitizer.checkFileSize(path);
 
         // Определяем режим чтения
@@ -489,6 +494,14 @@ public class FileReadTool implements McpTool {
     }
 
     private JsonNode executeInfo(Path path) throws IOException {
+        if (!Files.exists(path)) {
+            throw NtsFileException.notFound(path);
+        }
+        if (Files.isDirectory(path)) {
+            throw new IllegalArgumentException(
+                    "Path is a directory, not a file: " + path +
+                    ". Use nts_file_search(action='list') to browse directory contents.");
+        }
         BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
         Charset charset = EncodingUtils.detectEncoding(path);
         long crc32 = calculateCRC32(path);
