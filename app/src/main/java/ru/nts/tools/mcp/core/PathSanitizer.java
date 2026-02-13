@@ -66,6 +66,30 @@ public class PathSanitizer {
     private static final Set<String> PROTECTED_NAMES = Set.of(".git", ".gradle", "gradle", "gradlew", "gradlew.bat", "build.gradle.kts", "settings.gradle.kts", "app/build.gradle.kts");
 
     /**
+     * Callback для ленивого обновления roots при отказе в доступе.
+     * Вызывается когда запрошенный путь не попадает ни в один из текущих roots.
+     * Позволяет перезапросить roots у MCP-клиента без зависимости core → McpServer.
+     *
+     * Контракт: callback вызывается синхронно и должен обновить roots через setRoots()
+     * до возврата. Возвращает true если roots были обновлены.
+     */
+    private static volatile java.util.function.BooleanSupplier rootRefreshCallback;
+
+    /**
+     * Cooldown между попытками обновления roots (предотвращает спам запросов).
+     */
+    private static volatile long lastRootRefreshAttempt = 0;
+    private static final long ROOT_REFRESH_COOLDOWN_MS = 5_000;
+
+    /**
+     * Устанавливает callback для ленивого обновления roots.
+     * Вызывается из McpServer при инициализации.
+     */
+    public static void setRootRefreshCallback(java.util.function.BooleanSupplier callback) {
+        rootRefreshCallback = callback;
+    }
+
+    /**
      * Корневая директория для хранения сессий (~/.nts/).
      * Находится в домашней директории пользователя, аналогично ~/.claude/ или ~/.gemini/.
      */
@@ -148,6 +172,30 @@ public class PathSanitizer {
             if (target.startsWith(root)) {
                 isWithinRoot = true;
                 break;
+            }
+        }
+
+        if (!isWithinRoot) {
+            // Ленивое обновление roots: перезапрашиваем у клиента перед отказом.
+            // Покрывает случай когда клиент не отправляет notifications/roots/list_changed
+            // (например, Claude Code при /add-dir).
+            long now = System.currentTimeMillis();
+            if (rootRefreshCallback != null && (now - lastRootRefreshAttempt) > ROOT_REFRESH_COOLDOWN_MS) {
+                lastRootRefreshAttempt = now;
+                try {
+                    boolean updated = rootRefreshCallback.getAsBoolean();
+                    if (updated) {
+                        // Roots обновились — проверяем заново
+                        for (Path root : roots) {
+                            if (target.startsWith(root)) {
+                                isWithinRoot = true;
+                                break;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // Callback не сработал — продолжаем с исходной ошибкой
+                }
             }
         }
 
