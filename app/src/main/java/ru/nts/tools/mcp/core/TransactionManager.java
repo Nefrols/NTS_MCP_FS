@@ -204,6 +204,27 @@ public class TransactionManager {
     }
 
     /**
+     * Возвращает пути всех файлов, затронутых правками в текущей сессии.
+     */
+    public static List<String> getAffectedPaths() {
+        return ctx().getAffectedPaths();
+    }
+
+    /**
+     * Сбрасывает счетчик правок с последней верификации.
+     */
+    public static void resetVerifyCounter() {
+        ctx().resetVerifyCounter();
+    }
+
+    /**
+     * Возвращает количество правок с последней верификации.
+     */
+    public static int getEditsSinceLastVerify() {
+        return ctx().getEditsSinceLastVerify();
+    }
+
+    /**
      * Сбрасывает состояние текущей сессии.
      */
     public static void reset() {

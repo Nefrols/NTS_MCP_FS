@@ -158,6 +158,7 @@ public class McpServer {
 
         router.registerTool(new GradleTool());
         router.registerTool(new GitCombinedTool());
+        router.registerTool(new VerifyTool());
 
         router.registerTool(new BatchToolsTool(router));
         router.registerTool(new TaskTool());

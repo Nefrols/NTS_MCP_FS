@@ -152,6 +152,7 @@ public class SessionTransactionManager {
                     redoStack.clear();
                 }
                 totalEdits.incrementAndGet();
+                editsSinceLastVerify.incrementAndGet();
                 // Сохраняем журнал асинхронно
                 saveJournal();
             }
@@ -656,6 +657,47 @@ public class SessionTransactionManager {
      */
     public int getTotalUndos() {
         return totalUndos.get();
+    }
+
+    // ==================== Verify Counter ====================
+
+    private final AtomicInteger editsSinceLastVerify = new AtomicInteger(0);
+
+    /**
+     * Сбрасывает счетчик правок с последней верификации.
+     * Вызывается после успешной проверки (syntax/compile/test).
+     */
+    public void resetVerifyCounter() {
+        editsSinceLastVerify.set(0);
+    }
+
+    /**
+     * Возвращает количество правок с последней верификации.
+     */
+    public int getEditsSinceLastVerify() {
+        return editsSinceLastVerify.get();
+    }
+
+    // ==================== Affected Paths ====================
+
+    /**
+     * Возвращает все пути файлов, затронутых правками в текущей сессии.
+     * Собирает данные из undo-стека (транзакции + внешние изменения).
+     */
+    public List<String> getAffectedPaths() {
+        Set<String> paths = new LinkedHashSet<>();
+        synchronized (undoStack) {
+            for (TransactionEntry entry : undoStack) {
+                if (entry instanceof Transaction tx) {
+                    for (Path p : tx.getAffectedPaths()) {
+                        paths.add(p.toString());
+                    }
+                } else if (entry instanceof ExternalChangeTransaction extTx) {
+                    paths.add(extTx.getAffectedPath().toString());
+                }
+            }
+        }
+        return new ArrayList<>(paths);
     }
 
     public List<String> getSessionInstructions() {
