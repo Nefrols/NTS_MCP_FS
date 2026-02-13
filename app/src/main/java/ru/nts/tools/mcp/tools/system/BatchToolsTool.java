@@ -191,6 +191,20 @@ public class BatchToolsTool implements McpTool {
 
                     // Сохраняем результат для интерполяции в следующих шагах
                     StepResult stepResult = parseStepResult(result, interpolatedParams);
+
+                    // Fix: для copy операций {{step.path}} должен указывать на КОПИЮ (targetPath),
+                    // а не на исходный файл (path). Без этого {{copyStep.path}} разрешается
+                    // в source-файл, и последующие edit/rename работают с оригиналом вместо копии.
+                    if ("nts_file_manage".equals(toolName)) {
+                        String fmAction = interpolatedParams.path("action").asText("");
+                        if ("copy".equals(fmAction)) {
+                            String targetPath = interpolatedParams.path("targetPath").asText(null);
+                            if (targetPath != null) {
+                                stepResult.path = targetPath;
+                            }
+                        }
+                    }
+
                     stepResults.put(stepKey, stepResult);
                     if (actionId != null && !actionId.isEmpty()) {
                         stepResults.put(actionId, stepResult);
