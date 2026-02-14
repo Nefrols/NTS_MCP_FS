@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)]()
-[![Tools](https://img.shields.io/badge/MCP%20Tools-15-purple?style=for-the-badge)]()
+[![Tools](https://img.shields.io/badge/MCP%20Tools-17-purple?style=for-the-badge)]()
 [![Languages](https://img.shields.io/badge/Languages-12-blue?style=for-the-badge)]()
 
 > **[English](#-english)** | **[Русский](#-russian)**
@@ -28,6 +28,8 @@ It transforms standard file operations into a **Transactional OS for AI Agents**
 | **Context** | Stateless (Agent forgets plan) | **AI-HUD & Built-in TODOs** (Persistent Context) |
 | **Safety** | Basic Ctrl+Z (if any) | **Deep Undo & Checkpoints** (Tracks file moves) |
 | **Code Intelligence** | None | **LSP Navigation & Semantic Refactoring** (12 languages) |
+| **Verification** | Manual testing | **Syntax Check (Tree-sitter)**, Compilation & Test validation |
+| **Persistence** | Stateless (in-memory only) | **H2 Database** (Transaction journal survives restarts) |
 | **Performance** | Blocking I/O | **Java Virtual Threads** & Memory-Mapped I/O |
 
 ---
@@ -148,7 +150,8 @@ The `nts_batch_tools` is not just a list of commands; it's a scripting engine fo
 *   **Structured Error Codes:** All errors include machine-readable codes (`FILE_NOT_FOUND`, `TOKEN_EXPIRED`, etc.) with human-readable solutions. No more cryptic exceptions — every error tells you exactly what went wrong and how to fix it.
 
 #### 4. ⏪ State Management: Checkpoints & Deep Undo
-*   **Task Journal:** Logs every logical step (not just file IO).
+*   **Task Journal (H2 Database):** Logs every logical step (not just file IO). Persisted in embedded H2 database — survives server restarts.
+*   **In-Memory Snapshots:** Undo engine uses in-memory `byte[]` snapshots instead of file-based backups for faster recovery.
 *   **Checkpoints:** Agent can run `nts_task checkpoint('pre-refactor')` and safely `rollback` if the approach fails.
 *   **Deep Undo:** The system tracks **File Lineage**. If you move `FileA -> FileB` and then hit Undo, NTS knows to restore content to `FileA`.
 *   **Git Integration:** Can create Git stashes as emergency fallbacks (`git_checkpoint`).
@@ -191,13 +194,18 @@ The `nts_code_navigate` tool provides IDE-like code intelligence powered by Tree
 *   **List Symbols:** File outline with all definitions.
 *   **12 Languages:** Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML.
 
-#### 7. 🔄 Semantic Refactoring
+#### 7. 🔄 Semantic Refactoring (10 Operations)
 The `nts_code_refactor` tool performs intelligent code transformations.
 *   **Rename:** Updates ALL references across the entire project automatically.
 *   **Change Signature:** Add, remove, rename, retype, or reorder method parameters with automatic call site updates.
-*   **Generate:** Create getters, setters, constructors, builders, toString, equals/hashCode.
 *   **Extract Method:** Pull code into a new method with proper parameters.
+*   **Extract Variable:** Extract repeated expressions into named variables.
 *   **Inline:** Replace method/variable with its body/value.
+*   **Move:** Relocate class to a different package with import updates.
+*   **Wrap:** Wrap code in try-catch, if-block, or loop.
+*   **Delete:** Safe symbol deletion with reference checking.
+*   **Generate:** Create getters, setters, constructors, builders, toString, equals/hashCode.
+*   **Batch:** Combine multiple refactoring operations atomically.
 *   **Preview Mode:** Review diff before applying (`preview: true`).
 *   **Parallel Reference Search:** Both `nts_code_navigate` and `nts_code_refactor` use parallel file scanning with pre-filtering, searching up to 15 levels deep for maximum coverage.
 *   **Batch Integration:** Returns `affectedFiles` array with tokens for each modified file — enables chaining like `refactor → edit` in `nts_batch_tools`.
@@ -233,7 +241,7 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 │                                                                             │
 │   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
 │   │  INIT    │────▶│  READ    │────▶│  EDIT    │────▶│  VERIFY  │          │
-│   │  Task    │     │ + Token  │     │ + Token  │     │  (Diff)  │          │
+│   │  Task    │     │ + Token  │     │ + Token  │     │(Diff/AST)│          │
 │   └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │
 │        │                                                   │                │
 │        │              ┌──────────┐                         │                │
@@ -255,7 +263,7 @@ Each tool in NTS is designed as part of an **interconnected discipline system**.
 ```json
 { "taskId": "your-previous-uuid" }
 ```
-This restores the task directory with todos and file history. In-memory state (tokens, undo stack) starts fresh, but disk-persisted data is preserved.
+This restores the task directory with todos and file history. In-memory state (tokens, undo stack) starts fresh, but disk-persisted data (H2 journal) is preserved.
 
 **Connection:** All other tools require `taskId`. This isn't bureaucracy — it's **traceability**.
 
@@ -459,13 +467,41 @@ checkpoint("before-risky-refactor")
 
 ---
 
-#### 🖥️ `nts_task` — Background Awareness
+#### ✅ `nts_verify` — Multi-Level Validation
 
-**Why it exists:** Monitor and control long-running background tasks.
+**Why it exists:** Verify code correctness at three levels: syntax, compilation, and tests.
 
-**Discipline role:** Agent can check progress of slow operations without blocking.
+**Discipline role:**
+- `syntax` — Fast tree-sitter AST check (no build needed). Catches errors instantly after edits.
+- `compile` — Runs `gradlew build -x test` for compilation verification.
+- `test` — Runs `gradlew test` for full test validation.
 
-**Connection:** Works with `nts_gradle_task` for long builds.
+**Connection:** Bridges editing and building. Agent verifies syntax without a full build cycle, escalating to compilation/tests only when needed.
+
+---
+
+#### 🔍 `nts_workspace_status` — Context Recovery
+
+**Why it exists:** Provides compact workspace summary for re-orientation after context compression.
+
+**Discipline role:** When the agent loses context due to prompt summarization, this tool returns:
+- Current task ID and stats
+- TODO progress (if active)
+- Recently modified files
+- Recent journal entries (last 5 operations)
+- Suggested next action
+
+**Connection:** Acts as an emergency compass. The agent can always ask "where am I?" and get a precise answer.
+
+---
+
+#### 🖥️ `nts_process` — Background Process Management
+
+**Why it exists:** Monitor and control long-running background processes (Gradle builds, Git operations).
+
+**Discipline role:** Agent can retrieve logs or kill async processes without blocking the main workflow.
+
+**Connection:** Works with `nts_gradle_task` and `nts_git` for async operations.
 
 ---
 
@@ -476,9 +512,11 @@ These tools aren't independent utilities. They form a **closed discipline loop**
 1. **Task** establishes accountability
 2. **Read** forces attention and issues tokens
 3. **Edit** requires tokens and shows results
-4. **Task** provides recovery when needed
-5. **Batch** enables complex operations atomically
-6. **HUD + TODO** maintains focus across long sessions
+4. **Verify** validates changes (syntax → compile → test)
+5. **Task** provides recovery when needed
+6. **Batch** enables complex operations atomically
+7. **HUD + TODO** maintains focus across long sessions
+8. **Workspace Status** recovers context after compression
 
 **Every tool reinforces the others.** There's no escape hatch to "just edit blindly." The discipline is architectural.
 
@@ -489,7 +527,7 @@ These tools aren't independent utilities. They form a **closed discipline loop**
 **Prerequisites:** Java 25+ (Virtual Threads, enhanced performance).
 
 #### 1. Quick Start (Auto-Integration)
-Build and run the integrator to automatically configure Claude Desktop, Cursor, or other clients.
+Build and run the integrator to automatically configure supported clients (Gemini CLI, Claude Code, Qwen CLI, Cursor, LM Studio, Antigravity, Copilot VS Code).
 
 ```bash
 ./gradlew shadowJar
@@ -501,7 +539,7 @@ Add to your `mcp-config.json`:
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "java",
       "args": [
         "-jar",
@@ -530,7 +568,7 @@ docker pull ghcr.io/nefrols/nts-mcp-fs:latest
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -547,7 +585,7 @@ docker pull ghcr.io/nefrols/nts-mcp-fs:latest
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -576,6 +614,7 @@ docker run -i --rm \
 | `NTS_DOCKER_ROOTS` | **Required.** Colon-separated list of root paths inside the container. Must match your `-v` mount points. Overrides client roots. |
 | `JAVA_OPTS` | JVM options (default: `-XX:+UseZGC -Xmx512m`) |
 | `MCP_DEBUG` | Set to `true` for debug logging |
+| `MCP_LOG_FILE` | Path to log file (for clients that merge stderr/stdout) |
 
 **Available image tags:**
 | Tag | Description |
@@ -603,6 +642,8 @@ docker run -i --rm \
 | **Контекст** | Нет памяти (Агент забывает план) | **AI-HUD и Встроенный TODO** (Постоянный контекст) |
 | **Безопасность** | Ctrl+Z (если повезет) | **Deep Undo и Чекпоинты** (Учет перемещений файлов) |
 | **Интеллект кода** | Отсутствует | **LSP-навигация и Семантический рефакторинг** (12 языков) |
+| **Верификация** | Ручное тестирование | **Проверка синтаксиса (Tree-sitter)**, компиляция и тесты |
+| **Персистентность** | Без состояния (только в памяти) | **H2 Database** (журнал транзакций переживает перезапуски) |
 | **Скорость** | Блокирующий I/O | **Java Virtual Threads** и Memory-Mapped I/O |
 
 ---
@@ -692,7 +733,7 @@ NTS меняет микро-эффективность на макро-надё�
 ```text
 [HUD tid:a1b2] Plan: Refactor Auth [✓2 ○1] → #3: Update Login | Task: 5 edits | Unlocked: 3 files
 ```
-*   **Контекст сессии:** Напоминает агенту ID активной сессии.
+*   **Контекст задачи:** Напоминает агенту ID активной задачи.
 *   **Трекинг прогресса:** Показывает состояние TODO (Готово/В ожидании) и *следующую* задачу.
 *   **Статус безопасности:** Показывает, сколько файлов открыто для редактирования.
 
@@ -723,7 +764,8 @@ NTS меняет микро-эффективность на макро-надё�
 *   **Структурированные коды ошибок:** Все ошибки содержат машиночитаемые коды (`FILE_NOT_FOUND`, `TOKEN_EXPIRED` и др.) с понятными решениями. Никаких загадочных исключений — каждая ошибка объясняет, что пошло не так и как это исправить.
 
 #### 4. ⏪ Управление состоянием: Чекпоинты и Deep Undo
-*   **Журнал сессии:** Логирует каждый логический шаг.
+*   **Журнал задачи (H2 Database):** Логирует каждый логический шаг. Хранится во встроенной H2 базе данных — переживает перезапуски сервера.
+*   **In-Memory снапшоты:** Движок отката использует `byte[]` снапшоты в памяти вместо файловых бэкапов для быстрого восстановления.
 *   **Чекпоинты:** Агент может создать `nts_task checkpoint('pre-refactor')` и безопасно сделать `rollback`, если гипотеза не сработала.
 *   **Deep Undo (Умный откат):** Система отслеживает **Родословную файлов (Lineage)**. Если переместить `FileA -> FileB` и нажать Undo, NTS поймет, что контент нужно вернуть в `FileA`.
 *   **Git интеграция:** Возможность создавать Git stashes как аварийные точки сохранения (`git_checkpoint`).
@@ -766,13 +808,18 @@ NTS меняет микро-эффективность на макро-надё�
 *   **List Symbols:** Структура файла со всеми определениями.
 *   **12 языков:** Java, Kotlin, JS/TS/TSX, Python, Go, Rust, C/C++, C#, PHP, HTML.
 
-#### 7. 🔄 Семантический рефакторинг
+#### 7. 🔄 Семантический рефакторинг (10 операций)
 Инструмент `nts_code_refactor` выполняет интеллектуальные преобразования кода.
 *   **Rename:** Переименование с автоматическим обновлением ВСЕХ ссылок по проекту.
 *   **Change Signature:** Добавление, удаление, переименование, изменение типа и порядка параметров с автообновлением вызовов.
-*   **Generate:** Генерация getters, setters, конструкторов, builder, toString, equals/hashCode.
 *   **Extract Method:** Извлечение кода в метод с правильными параметрами.
+*   **Extract Variable:** Извлечение повторяющихся выражений в именованные переменные.
 *   **Inline:** Встраивание метода/переменной.
+*   **Move:** Перемещение класса в другой пакет с обновлением импортов.
+*   **Wrap:** Оборачивание кода в try-catch, if-блок или цикл.
+*   **Delete:** Безопасное удаление символа с проверкой ссылок.
+*   **Generate:** Генерация getters, setters, конструкторов, builder, toString, equals/hashCode.
+*   **Batch:** Объединение нескольких операций рефакторинга атомарно.
 *   **Preview Mode:** Просмотр изменений перед применением (`preview: true`).
 *   **Параллельный поиск ссылок:** И `nts_code_navigate`, и `nts_code_refactor` используют параллельное сканирование файлов с предварительной фильтрацией, ищут на глубину до 15 уровней для максимального покрытия.
 *   **Интеграция с Batch:** Возвращает массив `affectedFiles` с токенами для каждого изменённого файла — позволяет строить цепочки `refactor → edit` в `nts_batch_tools`.
@@ -808,7 +855,7 @@ NTS меняет микро-эффективность на макро-надё�
 │                                                                             │
 │   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
 │   │  INIT    │────▶│  READ    │────▶│  EDIT    │────▶│ ПРОВЕРКА │          │
-│   │ Сессия   │     │ + Токен  │     │ + Токен  │     │  (Diff)  │          │
+│   │ Задача   │     │ + Токен  │     │ + Токен  │     │(Diff/AST)│          │
 │   └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │
 │        │                                                   │                │
 │        │              ┌──────────┐                         │                │
@@ -822,15 +869,15 @@ NTS меняет микро-эффективность на макро-надё�
 
 #### 🔐 `nts_init` — Граница ответственности
 
-**Зачем:** Создаёт изолированную сессию с собственной историей undo, чекпоинтами и реестром токенов.
+**Зачем:** Создаёт изолированную задачу с собственной историей undo, чекпоинтами и реестром токенов.
 
-**Роль в дисциплине:** Всё, что делает агент, отслеживается. Нет «анонимного» редактирования. Если что-то сломается — журнал сессии знает, что именно произошло и когда.
+**Роль в дисциплине:** Всё, что делает агент, отслеживается. Нет «анонимного» редактирования. Если что-то сломается — журнал задачи знает, что именно произошло и когда.
 
-**Реактивация сессии:** Если сервер перезапустился или соединение прервалось, сессию можно реактивировать:
+**Реактивация задачи:** Если сервер перезапустился или соединение прервалось, задачу можно реактивировать:
 ```json
 { "taskId": "ваш-предыдущий-uuid" }
 ```
-Это восстанавливает директорию сессии с todos и историей файлов. Состояние в памяти (токены, стек undo) начинается с чистого листа, но данные на диске сохраняются.
+Это восстанавливает директорию задачи с todos и историей файлов. Состояние в памяти (токены, стек undo) начинается с чистого листа, но данные на диске (H2 журнал) сохраняются.
 
 **Связь:** Все остальные инструменты требуют `taskId`. Это не бюрократия — это **прослеживаемость**.
 
@@ -892,7 +939,7 @@ NTS меняет микро-эффективность на макро-надё�
 - `rename`/`move` **переносят токены через path aliasing** — токены остаются валидными даже после перемещения файла (транзитивные цепочки `A → B → C` работают)
 - `delete` **инвалидирует токены** — нельзя редактировать «призраков»
 
-**Связь:** Работает с `nts_batch_tools` для атомарной реструктуризации. Алиасы путей сохраняются на протяжении сессии.
+**Связь:** Работает с `nts_batch_tools` для атомарной реструктуризации. Алиасы путей сохраняются на протяжении задачи.
 
 ---
 
@@ -915,7 +962,7 @@ grep("TODO") → находит строку 47 → возвращает TOKEN �
 
 #### ⏪ `nts_task` — Кнопка паники
 
-**Зачем:** Undo, redo, чекпоинты, откат и журнал сессии.
+**Зачем:** Undo, redo, чекпоинты, откат и журнал задачи.
 
 **Роль в дисциплине:** Когда агент ошибается, у него есть **структурированное восстановление** вместо неконтролируемой спирали исправлений.
 
@@ -1010,7 +1057,7 @@ checkpoint("before-risky-refactor")
 - `commit_task` автогенерирует сообщение коммита из прогресса TODO
 - Только безопасные операции (без push/force)
 
-**Связь:** Интегрируется с журналом сессии. Коммиты могут ссылаться на завершённые задачи.
+**Связь:** Интегрируется с журналом задачи. Коммиты могут ссылаться на завершённые задачи.
 
 ---
 
@@ -1034,13 +1081,41 @@ checkpoint("before-risky-refactor")
 
 ---
 
-#### 🖥️ `nts_task` — Осведомлённость о фоне
+#### ✅ `nts_verify` — Многоуровневая валидация
 
-**Зачем:** Мониторинг и управление долгими фоновыми задачами.
+**Зачем:** Проверка корректности кода на трёх уровнях: синтаксис, компиляция, тесты.
 
-**Роль в дисциплине:** Агент может проверять прогресс медленных операций без блокировки.
+**Роль в дисциплине:**
+- `syntax` — Быстрая проверка AST через tree-sitter (без сборки). Ловит ошибки мгновенно после правок.
+- `compile` — Запускает `gradlew build -x test` для проверки компиляции.
+- `test` — Запускает `gradlew test` для полной проверки тестами.
 
-**Связь:** Работает с `nts_gradle_task` для долгих сборок.
+**Связь:** Мост между редактированием и сборкой. Агент проверяет синтаксис без полного цикла сборки, переходя к компиляции/тестам только при необходимости.
+
+---
+
+#### 🔍 `nts_workspace_status` — Восстановление контекста
+
+**Зачем:** Компактная сводка рабочего пространства для переориентации после сжатия контекста.
+
+**Роль в дисциплине:** Когда агент теряет контекст из-за суммаризации промпта, этот инструмент возвращает:
+- ID текущей задачи и статистику
+- Прогресс TODO (если активен)
+- Недавно изменённые файлы
+- Последние записи журнала (5 операций)
+- Предложение следующего действия
+
+**Связь:** Действует как аварийный компас. Агент всегда может спросить «где я?» и получить точный ответ.
+
+---
+
+#### 🖥️ `nts_process` — Управление фоновыми процессами
+
+**Зачем:** Мониторинг и управление долгими фоновыми процессами (сборки Gradle, операции Git).
+
+**Роль в дисциплине:** Агент может получить логи или остановить асинхронные процессы без блокировки основного workflow.
+
+**Связь:** Работает с `nts_gradle_task` и `nts_git` для асинхронных операций.
 
 ---
 
@@ -1051,9 +1126,11 @@ checkpoint("before-risky-refactor")
 1. **Task** устанавливает ответственность
 2. **Read** принуждает к вниманию и выдаёт токены
 3. **Edit** требует токены и показывает результаты
-4. **Task** обеспечивает восстановление при необходимости
-5. **Batch** позволяет сложные операции атомарно
-6. **HUD + TODO** поддерживают фокус на протяжении длинных сессий
+4. **Verify** валидирует изменения (синтаксис → компиляция → тесты)
+5. **Task** обеспечивает восстановление при необходимости
+6. **Batch** позволяет сложные операции атомарно
+7. **HUD + TODO** поддерживают фокус на протяжении длинных сессий
+8. **Workspace Status** восстанавливает контекст после сжатия
 
 **Каждый инструмент усиливает остальные.** Нет лазейки, чтобы «просто редактировать вслепую». Дисциплина — архитектурная.
 
@@ -1064,7 +1141,7 @@ checkpoint("before-risky-refactor")
 **Требования:** Java 25+ (Virtual Threads, улучшенная производительность).
 
 #### 1. Быстрый старт (Авто-интеграция)
-Соберите проект и запустите интегратор для автоматической настройки клиентов (Claude Desktop, Cursor и др.).
+Соберите проект и запустите интегратор для автоматической настройки поддерживаемых клиентов (Gemini CLI, Claude Code, Qwen CLI, Cursor, LM Studio, Antigravity, Copilot VS Code).
 
 ```bash
 ./gradlew shadowJar
@@ -1076,7 +1153,7 @@ java -jar app/build/libs/app-all.jar --integrate
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "java",
       "args": [
         "-jar",
@@ -1105,7 +1182,7 @@ docker pull ghcr.io/nefrols/nts-mcp-fs:latest
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -1122,7 +1199,7 @@ docker pull ghcr.io/nefrols/nts-mcp-fs:latest
 ```json
 {
   "mcpServers": {
-    "NTS-FileSystem": {
+    "NTS-FileSystem-MCP": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -1151,6 +1228,7 @@ docker run -i --rm \
 | `NTS_DOCKER_ROOTS` | **Обязательна.** Список путей внутри контейнера через двоеточие. Должны соответствовать точкам монтирования `-v`. Переопределяет roots от клиента. |
 | `JAVA_OPTS` | Опции JVM (по умолчанию: `-XX:+UseZGC -Xmx512m`) |
 | `MCP_DEBUG` | Установите `true` для отладочного логирования |
+| `MCP_LOG_FILE` | Путь к лог-файлу (для клиентов, объединяющих stderr/stdout) |
 
 **Доступные теги образа:**
 | Тег | Описание |
